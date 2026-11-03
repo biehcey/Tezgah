@@ -1,0 +1,358 @@
+<!doctype html>
+<!--
+  PROTOTİP — atılabilir. Ticket: .scratch/ilk-dilim/issues/26-ice-aktarma-diyalogu.md
+  İçe aktarma diyaloğunun üç yerleşim varyantı (?variant=A|B|C), ticket 18'in davranışlarıyla.
+    A  Sihirbaz: Kaynaklar → Önizleme → Sonuç (sonuçta isteğe bağlı toplu test)
+    B  Tek ekran iki bölme: solda canlı kaynaklar, sağda filtreli yoğun tablo + toplu atama; satırdan "Düzenle…" formu
+    C  Sonuç ağacı önizlemesi: adaylar, Tezgah'ın bağlantı listesinde düşecekleri yerde; sağda ayrıntı paneli
+  Senaryo ?senaryo=normal|bos|keychain   (bos: Tezgah'ta hiç bağlantı yok; keychain: şifre yazımı iki bağlantıda reddedilir)
+  Hiçbir dosya okunmaz, hiçbir şey bağlanmaz; kaynaklar ve adaylar sabit, durum yalnızca bellekte.
+  Alttaki çubuk: ← → varyant, senaryo, "durum" modeli JSON olarak gösterir.
+  Arka planda ticket 25 (varyant C) bağlantı listesinin sadeleştirilmiş hâli: içe aktarılanlar oraya düşer.
+-->
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>İçe aktarma prototipi</title>
+<style>
+  :root {
+    --bg:#1e1f22; --panel:#2b2d30; --panel2:#25272a; --line:#393b40; --fg:#dfe1e5; --dim:#8c8f94;
+    --ok:#5fb865; --err:#f75464; --warn:#e5a33a; --run:#4a9eff; --prod:#e5484d; --sel:#2e436e; --hov:#33363a; --new:#2d4a2f;
+    font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); height:100vh; overflow:hidden; }
+  button { font:inherit; color:var(--fg); background:#3c3f44; border:1px solid #4e5157; border-radius:4px; padding:3px 10px; cursor:pointer; }
+  button.primary { background:#3574f0; border-color:#3574f0; }
+  button.ghost { background:none; border-color:transparent; color:var(--dim); padding:1px 5px; }
+  button.ghost:hover { color:var(--fg); background:#3c3f44; }
+  button:disabled { opacity:.4; cursor:not-allowed; }
+  input[type=text], select { font:inherit; background:#1e1f22; color:var(--fg); border:1px solid #4e5157; border-radius:4px; padding:3px 6px; }
+  select { padding:2px 4px; }
+  .mono { font-family:"JetBrains Mono", Consolas, monospace; font-size:12px; }
+  .dim { color:var(--dim); } .small { font-size:11.5px; } .w { color:var(--warn); } .e { color:var(--err); } .o { color:var(--ok); }
+  .badge { display:inline-block; padding:0 7px; border-radius:9px; font-size:11px; font-weight:600; color:#fff; line-height:17px; }
+  .tag { display:inline-block; padding:0 6px; border-radius:3px; font-size:11px; border:1px solid #4e5157; color:var(--dim); line-height:16px; }
+  .dot { display:inline-block; width:9px; height:9px; border-radius:50%; flex:none; }
+  .app { height:100vh; display:flex; }
+  .side { width:300px; flex:none; background:var(--panel); border-right:1px solid var(--line); display:flex; flex-direction:column; }
+  .sidehead { display:flex; align-items:center; gap:4px; padding:6px 8px; border-bottom:1px solid var(--line); }
+  .sidehead .t { font-weight:600; flex:1; }
+  .list { flex:1; overflow:auto; }
+  .fh { padding:6px 10px 2px; font-size:11px; color:var(--dim); text-transform:uppercase; letter-spacing:.05em; }
+  .cr { padding:4px 10px 4px 12px; border-left:3px solid transparent; }
+  .cr.prod { border-left-color:var(--prod); }
+  .cr.isnew { background:#24331f; }
+  .cr .l1 { display:flex; gap:6px; align-items:center; }
+  .cr .l2 { color:var(--dim); font-size:11.5px; padding-left:15px; }
+  .main { flex:1; display:flex; align-items:center; justify-content:center; color:var(--dim); }
+  .modalbg { position:fixed; inset:0; background:#000a; display:flex; align-items:center; justify-content:center; z-index:60; }
+  .modal { background:#2b2d30; border:1px solid #4e5157; border-radius:8px; box-shadow:0 12px 40px #000a; display:flex; flex-direction:column; max-height:90vh; }
+  .modal .mh { padding:12px 16px; font-weight:600; border-bottom:1px solid var(--line); display:flex; gap:10px; align-items:center; }
+  .modal .mb { padding:12px 16px; overflow:auto; flex:1; min-height:0; }
+  .modal .mf { padding:10px 16px; border-top:1px solid var(--line); display:flex; gap:8px; align-items:center; }
+  .modal .mf .sp { flex:1; }
+  .steps { display:flex; gap:0; font-weight:400; font-size:12px; margin-left:auto; }
+  .steps span { padding:2px 10px; color:var(--dim); border-bottom:2px solid transparent; }
+  .steps span.on { color:var(--fg); border-bottom-color:#3574f0; }
+  .src { display:flex; gap:8px; align-items:flex-start; padding:6px 8px; border-radius:4px; }
+  .src:hover { background:var(--hov); }
+  .src .p { font-size:11.5px; color:var(--dim); word-break:break-all; }
+  .sec { margin:12px 0 4px; font-size:11px; color:var(--dim); text-transform:uppercase; letter-spacing:.05em; display:flex; gap:8px; align-items:center; }
+  table { border-collapse:collapse; width:100%; }
+  th { text-align:left; font-weight:500; font-size:11.5px; color:var(--dim); padding:4px 6px; border-bottom:1px solid var(--line); position:sticky; top:0; background:#2b2d30; z-index:1; }
+  td { padding:4px 6px; border-bottom:1px solid #313337; vertical-align:top; }
+  tr.off td { opacity:.5; }
+  tr.prodrow td:first-child { box-shadow: inset 3px 0 0 var(--prod); }
+  tr.cur td { background:var(--sel); }
+  td input[type=text] { width:100%; }
+  .warns div { font-size:11.5px; }
+  .chips { display:flex; flex-wrap:wrap; gap:6px; }
+  .chip { display:inline-flex; gap:6px; align-items:center; border:1px solid #4e5157; border-radius:14px; padding:2px 10px; font-size:12px; cursor:pointer; }
+  .chip.on { border-color:#3574f0; background:#24324d; }
+  .chip.bad { border-color:#7a3036; color:#ffb3b8; cursor:default; }
+  .tabs { display:flex; gap:2px; }
+  .tabs button { background:none; border-color:transparent; color:var(--dim); }
+  .tabs button.on { color:var(--fg); border-color:#4e5157; background:#3c3f44; }
+  .two { display:flex; min-height:0; flex:1; }
+  .two .l { width:290px; flex:none; border-right:1px solid var(--line); padding:10px; overflow:auto; }
+  .two .r { flex:1; overflow:auto; min-width:0; display:flex; flex-direction:column; }
+  .bulk { display:flex; gap:8px; align-items:center; padding:6px 10px; background:#24324d; border-bottom:1px solid var(--line); }
+  .kv { display:grid; grid-template-columns:120px 1fr; gap:4px 10px; font-size:12.5px; }
+  .kv .k { color:var(--dim); }
+  .tr { padding:4px 8px; border-left:3px solid transparent; display:flex; gap:6px; align-items:center; cursor:default; }
+  .tr.exist { color:#9a9da2; }
+  .tr.inc { background:#24331f; cursor:pointer; }
+  .tr.inc.off { background:none; color:#8c8f94; }
+  .tr.inc.cur { outline:1px solid #6ea8fe; outline-offset:-1px; }
+  .tr.prod { border-left-color:var(--prod); }
+  .tr .rt { margin-left:auto; display:flex; gap:6px; align-items:center; }
+  .bar { position:fixed; bottom:12px; left:50%; transform:translateX(-50%); background:#f5f5f5; color:#111; border-radius:22px; padding:5px 10px; display:flex; gap:8px; align-items:center; box-shadow:0 6px 20px #000c; z-index:100; font-size:12.5px; }
+  .bar button { background:#fff; color:#111; border-color:#bbb; border-radius:14px; }
+  .bar select { background:#fff; color:#111; border-color:#bbb; }
+  .statebox { position:fixed; right:12px; bottom:60px; width:420px; max-height:60vh; overflow:auto; background:#111; border:1px solid #444; border-radius:6px; padding:8px; font:11px/1.4 Consolas, monospace; white-space:pre; z-index:99; }
+  .toast { position:fixed; top:14px; left:50%; transform:translateX(-50%); background:#3c3f44; border:1px solid #5a5d63; padding:6px 14px; border-radius:6px; z-index:120; }
+  .ctr { text-align:center; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+// ───────── sabit veri ─────────
+const ENVS = { '':['—','#6b6e73'], local:['local','#5fb865'], dev:['dev','#4a9eff'], test:['test','#b07cf0'], staging:['staging','#e5a33a'], prod:['prod','#e5484d'] };
+const SOURCES0 = [
+  { id:'jb1', kind:'jetbrains', label:'IntelliJ IDEA 2025.2', path:'~/Library/Application Support/JetBrains/IntelliJIdea2025.2/options/dataSources.xml', on:true },
+  { id:'jb2', kind:'jetbrains', label:'DataGrip 2025.1', path:'~/Library/Application Support/JetBrains/DataGrip2025.1/options/dataSources.xml', on:true },
+  { id:'jb3', kind:'jetbrains', label:'DataGrip 2024.3', path:'~/Library/Application Support/JetBrains/DataGrip2024.3/options/dataSources.xml', on:true, err:'XML okunamadı: satır 41, kapanmamış <data-source>' },
+  { id:'pg',  kind:'pgpass', label:'.pgpass', path:'~/.pgpass  (PGPASSFILE tanımlı değil)', on:true },
+];
+const PROJ = { id:'proj', kind:'project', label:'Proje: billing-service', path:'~/work/billing-service/.idea/dataSources.xml', on:true };
+const PGPASS = ['*:*:*:postgres:●●●● (joker)', 'prod-db.internal:5432:*:app:●●●●', '10.0.4.12:5432:warehouse:etl:●●●●', 'staging-db.internal:5432:*:app:●●●●', 'localhost:*:*:postgres:●●●● (joker)'];
+const CANDS0 = [
+  { id:'c1', name:'billing-prod', host:'prod-db.internal', port:5432, user:'app', ssh:'deploy@bastion.example.com · key (~/.ssh/id_ed25519)', ssl:'verify-full (ssl-config)', dbs:['billing','billing_archive'], startDb:'billing', env:'prod', envWhy:'read-only="true"', group:'Billing/Prod', from:['jb1','proj'], pw:2, warns:['IntelliJ grubu "Billing/Prod" iç içe; tek düzey klasöre "Billing/Prod" adıyla'] },
+  { id:'c2', name:'billing-staging', host:'staging-db.internal', port:5432, user:'app', ssh:null, ssl:'require (JDBC URL)', dbs:['billing'], startDb:'billing', env:'', group:'Billing', from:['jb1','pg'], pw:4, warns:[], dupOf:'billing-staging' },
+  { id:'c3', name:'analytics', host:'analytics.internal', port:6432, user:'analyst', ssh:null, ssl:'require (JDBC URL)', dbs:['analytics'], startDb:'analytics', env:'', group:null, from:['jb2'], pw:null, warns:["JDBC URL'deki düz şifre atıldı"] },
+  { id:'c4', name:'local', host:'localhost', port:5432, user:'postgres', ssh:null, ssl:'prefer', dbs:['postgres','scratch'], startDb:'postgres', env:'', group:null, from:['jb2'], pw:5, warns:[], dupOf:'local' },
+  { id:'c5', name:'legacy-reports', host:'reports.old.internal', port:5432, user:'reporter', ssh:null, ssl:'prefer', dbs:['reports'], startDb:'reports', env:'', group:null, from:['proj'], pw:null, warns:['tünel eşlenemedi: ProxyJump (2 atlama) desteklenmiyor; tünel boş'], unmapped:true },
+  { id:'c6', name:'ci-db', host:'ci-pg.internal', port:5432, user:'ci', ssh:null, ssl:'verify-ca, CA $PROJECT_DIR$/certs/ca.pem', dbs:['ci'], startDb:'ci', env:'', group:null, from:['proj'], pw:null, warns:['CA dosyası yok: ~/work/billing-service/certs/ca.pem'] },
+  { id:'c7', name:'10.0.4.12', host:'10.0.4.12', port:5432, user:'etl', ssh:null, ssl:'prefer', dbs:['warehouse'], startDb:'warehouse', env:'', group:null, from:['pg'], pw:3, warns:[] },
+  { id:'c8', name:'prod-db.internal', host:'prod-db.internal', port:5432, user:'app', ssh:null, ssl:'prefer', dbs:['postgres'], startDb:'postgres', env:'', group:null, from:['pg'], pw:2, warns:['aynı sunucuya tünelli aday da var: billing-prod'] },
+];
+const SKIPPED0 = [ { name:'orders', driver:'MySQL', from:'proj' }, { name:'cache', driver:'Redis', from:'jb1' } ];
+const TESTS = { c1:['w','SSH: bilinmeyen host anahtarı, onay gerekli'], c2:['o','PG 16.4 · 4 veritabanı'], c3:['w','şifre yok, test atlandı (ilk bağlanmada sorulur)'], c4:['o','PG 17.2 · 2 veritabanı'], c5:['e','sunucuya ulaşılamadı (tünel yok)'], c6:['e','TLS: CA dosyası bulunamadı'], c7:['o','PG 15.8 · 3 veritabanı'], c8:['e','zaman aşımı: 5432 (yalnızca tünelden erişilebilir)'] };
+
+// ───────── durum ─────────
+const P = new URLSearchParams(location.search);
+const S = { variant: P.get('variant')||'A', senaryo: P.get('senaryo')||'normal', ui:{ state:false, toast:null } };
+function reset(){
+  const bos = S.senaryo==='bos';
+  S.folders = bos ? [] : ['Billing'];
+  S.conns = bos ? [] : [ { name:'local', host:'localhost', port:5432, user:'postgres', env:'local', folder:null }, { name:'billing-staging', host:'staging-db.internal', port:5432, user:'app', env:'staging', folder:'Billing' } ];
+  S.sources = SOURCES0.map(s=>({...s}));
+  S.projPath = '';
+  S.cands = CANDS0.map(c=>({ ...c, folder: c.group ?? (c.from.length===1&&c.from[0]==='proj' ? 'billing-service' : null) }));
+  S.dlg = null; // {step, filter, cur, form, result, testAfter}
+}
+reset();
+const src = id => S.sources.find(s=>s.id===id);
+const srcOn = c => c.from.some(f=>src(f)&&src(f).on&&!src(f).err);
+const dupOf = c => c.dupOf && S.conns.find(x=>x.name===c.dupOf && !x.isNew) ? c.dupOf : null;
+const visC = () => S.cands.filter(srcOn).map(c=>{ if(c.sel===undefined) c.sel = !dupOf(c) && !c.unmapped; return c; });
+const visSkipped = () => SKIPPED0.filter(k=>src(k.from)&&src(k.from).on);
+const chosen = () => visC().filter(c=>c.sel);
+const esc = s => String(s).replace(/[&<>"]/g, m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
+const envDot = e => `<span class="dot" style="background:${ENVS[e||''][1]}"></span>`;
+const envSel = c => `<select data-env="${c.id}">${Object.keys(ENVS).map(k=>`<option value="${k}" ${c.env===k?'selected':''}>${ENVS[k][0]}</option>`).join('')}</select>`;
+const allFolders = () => [...new Set([...S.folders, ...S.cands.map(c=>c.folder).filter(Boolean)])];
+const folderSel = c => `<select data-folder="${c.id}"><option value="">(klasörsüz)</option>${allFolders().map(f=>`<option ${c.folder===f?'selected':''}>${esc(f)}</option>`).join('')}<option value="__new">yeni klasör…</option></select>`;
+const pwText = c => c.pw ? `<span class="o">🔑</span> .pgpass satır ${c.pw}${PGPASS[c.pw-1].includes('joker')?' <span class="dim">(joker)</span>':''}` : `<span class="dim">yok · ilk bağlanmada sorulur</span>`;
+const fromText = c => c.from.length>1 ? `<span class="tag" title="${c.from.map(f=>src(f)?.label).join(' + ')}">${c.from.length} kaynaktan birleştirildi</span>` : `<span class="dim small">${esc(src(c.from[0])?.label||'')}</span>`;
+const warnList = c => { const w=[...c.warns]; const d=dupOf(c); if(d) w.unshift(`zaten var: ${d} (işaretlersen yinelenir)`); return w; };
+function toast(t){ S.ui.toast=t; render(); setTimeout(()=>{ if(S.ui.toast===t){ S.ui.toast=null; render(); } }, 2600); }
+
+function scanProject(){
+  const p = S.projPath.trim();
+  S.sources = S.sources.filter(s=>s.id!=='proj');
+  if (!p) return;
+  if (/yok|nope/.test(p)) S.sources.push({ ...PROJ, label:'Proje: '+p, path:p, err:'klasörde .idea/dataSources.xml bulunamadı' });
+  else S.sources.push({ ...PROJ });
+}
+function doImport(){
+  const sel = chosen(); let kfail = [];
+  sel.forEach((c,i)=>{
+    if (c.folder && !S.folders.includes(c.folder)) S.folders.push(c.folder);
+    S.conns.push({ name: dupOf(c) ? c.name+' (2)' : c.name, host:c.host, port:c.port, user:c.user, env:c.env, folder:c.folder, isNew:true, cid:c.id });
+    if (S.senaryo==='keychain' && c.pw && kfail.length<2) kfail.push(c.name);
+  });
+  const skipped = visC().length - sel.length + visSkipped().length;
+  S.dlg.result = { added:sel.length, skipped, kfail, ids:sel.map(c=>c.id), tests:null };
+}
+function runTests(after){
+  const r = S.dlg ? S.dlg.result : S.lastResult;
+  r.tests = {}; r.ids.forEach(id=>r.tests[id]=['r','test ediliyor…']); render();
+  r.ids.forEach((id,i)=>setTimeout(()=>{ r.tests[id] = TESTS[id]; const cn=S.conns.find(x=>x.cid===id); if(cn) cn.test=TESTS[id]; render(); }, 400+i*350));
+}
+
+// ───────── arka plan: bağlantı listesi (ticket 25 C sadeleştirilmiş) ─────────
+function sidebar(){
+  const groups = [...S.folders.map(f=>[f, S.conns.filter(c=>c.folder===f)]), ['Klasörsüz', S.conns.filter(c=>!c.folder)]];
+  const ic = t => t ? ({o:'<span class="o">●</span>',w:'<span class="w">⚠</span>',e:'<span class="e">⚠</span>',r:'<span class="dim">◌</span>'})[t[0]] : '';
+  return `<div class="side"><div class="sidehead"><span class="t">Bağlantılar</span><button class="ghost" title="Cmd/Ctrl+K">⌘K</button><button class="ghost">＋</button><button class="ghost" data-open title="İçe aktar">⇩ İçe aktar</button></div>
+  <div class="list">${S.conns.length? groups.filter(g=>g[1].length||g[0]!=='Klasörsüz').map(([f,cs])=>`<div class="fh">${esc(f)} · ${cs.length}</div>${cs.map(c=>`
+    <div class="cr ${c.env==='prod'?'prod':''} ${c.isNew?'isnew':''}" title="${c.test?esc(c.test[1]):''}"><div class="l1">${envDot(c.env)}<b>${esc(c.name)}</b>${c.isNew?'<span class="badge" style="background:#3d7a40">yeni</span>':''}<span style="margin-left:auto">${ic(c.test)}</span></div>
+    <div class="l2">${esc(c.user)}@${esc(c.host)}${c.port!==5432?':'+c.port:''}</div></div>`).join('')}`).join('')
+    : `<div class="dim ctr" style="padding:30px 16px">Henüz bağlantı yok.<br><br><button data-open>⇩ İçe aktar…</button><br><br><button>＋ Yeni bağlantı</button></div>`}</div></div>`;
+}
+
+// ───────── ortak parçalar ─────────
+function sourcesBlock(compact){
+  const jb = S.sources.filter(s=>s.kind==='jetbrains'), pg = S.sources.filter(s=>s.kind==='pgpass'), pj = S.sources.find(s=>s.kind==='project');
+  const cnt = s => s.err ? `<span class="e small">⚠ ${esc(s.err)}</span>` : `<span class="dim small">${S.cands.filter(c=>c.from.includes(s.id)).length} aday${s.id==='proj'?' · 1 atlandı (MySQL)':s.id==='jb1'?' · 1 atlandı (Redis)':''}</span>`;
+  const row = s => `<label class="src"><input type="checkbox" data-src="${s.id}" ${s.on&&!s.err?'checked':''} ${s.err?'disabled':''}><div><div>${esc(s.label)}</div><div class="p mono">${esc(s.path)}</div>${cnt(s)}</div></label>`;
+  return `<div class="sec">JetBrains (otomatik bulundu)</div>${jb.map(row).join('')}
+    <div class="sec">Proje klasörü</div>
+    <div style="display:flex;gap:6px;padding:0 8px"><input type="text" class="mono" style="flex:1" placeholder="~/work/proje veya …/.idea" value="${esc(S.projPath)}" data-projpath><button data-scan>Tara</button></div>
+    <div class="dim small" style="padding:2px 8px 4px">Proje kökü ya da .idea yolu. (Prototip: "yok" içeren yol hata verir.)</div>
+    ${pj?row(pj):''}
+    <div class="sec">.pgpass</div>${pg.map(row).join('')}
+    ${compact?'':`<div class="dim small" style="padding:4px 8px">Şifreler yalnızca .pgpass'tan gelir; IntelliJ şifreleri okunmaz.</div>`}`;
+}
+function skippedBlock(){ const k=visSkipped(); return k.length?`<div class="sec">Atlandı (Postgres değil)</div>${k.map(x=>`<div class="dim small" style="padding:1px 6px">${esc(x.name)} · ${x.driver} · ${esc(src(x.from).label)}</div>`).join('')}`:''; }
+function summaryBlock(r, withTest){
+  const t = id => r.tests&&r.tests[id] ? `<span class="${r.tests[id][0]==='r'?'dim':r.tests[id][0]}">${r.tests[id][0]==='o'?'✓':r.tests[id][0]==='r'?'◌':'⚠'} ${esc(r.tests[id][1])}</span>` : '<span class="dim">test edilmedi</span>';
+  return `<div style="font-size:15px;margin-bottom:8px"><span class="o">✓</span> ${r.added} eklendi, ${r.skipped} atlandı</div>
+    ${r.kfail.length?`<div class="w" style="margin-bottom:8px">⚠ şifre kaydedilemedi (keychain reddetti): ${r.kfail.map(esc).join(', ')}. Bu bağlantılar şifresiz; ilk bağlanmada sorulur.</div>`:''}
+    <table><tr><th>Bağlantı</th><th>Klasör</th><th>${withTest?'Test':''}</th><th></th></tr>
+    ${r.ids.map(id=>{ const c=S.cands.find(x=>x.id===id); return `<tr><td>${envDot(c.env)} ${esc(c.name)}</td><td class="dim">${esc(c.folder||'—')}</td><td>${withTest?t(id):''}</td><td><button class="ghost" data-form="${id}">Formda aç</button></td></tr>`; }).join('')}</table>`;
+}
+
+// ───────── A: sihirbaz ─────────
+function variantA(){
+  const d=S.dlg, st=d.step||1, v=visC();
+  const head = `<div class="mh">İçe aktar <div class="steps">${['Kaynaklar','Önizleme','Sonuç'].map((s,i)=>`<span class="${st===i+1?'on':''}">${i+1}. ${s}</span>`).join('')}</div></div>`;
+  let body='', foot='';
+  if (st===1){
+    body = sourcesBlock();
+    foot = `<span class="dim">${v.length} aday bulundu</span><span class="sp"></span><button data-close>İptal</button><button class="primary" data-step="2" ${v.length?'':'disabled'}>Önizleme →</button>`;
+  } else if (st===2){
+    const grp = (title, list) => list.length?`<tr><td colspan="7" class="sec" style="border:none">${title} · ${list.length}</td></tr>${list.map(c=>`
+      <tr class="${c.sel?'':'off'} ${c.env==='prod'?'prodrow':''}"><td><input type="checkbox" data-sel="${c.id}" ${c.sel?'checked':''}></td>
+      <td><input type="text" value="${esc(c.name)}" data-name="${c.id}"><div>${fromText(c)}</div></td>
+      <td class="mono">${esc(c.user)}@${esc(c.host)}:${c.port}${c.ssh?`<div class="dim small">⇄ ${esc(c.ssh)}</div>`:''}<div class="dim small">ssl ${esc(c.ssl)}</div></td>
+      <td>${folderSel(c)}</td><td>${envSel(c)}${c.envWhy&&c.env==='prod'?`<div class="dim small">öneri: ${esc(c.envWhy)}</div>`:''}</td>
+      <td class="small">${pwText(c)}</td><td class="warns">${warnList(c).map(w=>`<div class="w">⚠ ${esc(w)}</div>`).join('')}</td></tr>`).join('')}`:'';
+    body = `<table><tr><th></th><th>Ad</th><th>Sunucu</th><th>Klasör</th><th>Ortam</th><th>Şifre</th><th>Uyarılar</th></tr>
+      ${grp('Yeni', v.filter(c=>!dupOf(c)&&!c.unmapped))}${grp('Eşlenemeyen alanlar var', v.filter(c=>c.unmapped))}${grp('Zaten var', v.filter(c=>dupOf(c)))}</table>${skippedBlock()}`;
+    foot = `<button data-step="1">← Kaynaklar</button><span class="sp"></span><span class="dim">${chosen().length} seçili</span><button data-close>İptal</button><button class="primary" data-import ${chosen().length?'':'disabled'}>${chosen().length} bağlantıyı içe aktar</button>`;
+  } else {
+    body = summaryBlock(d.result, true);
+    foot = `${d.result.tests?'':`<button data-test>İçe aktarılanları test et</button><span class="dim small">sırayla, ilk hatada o bağlantı durur; host anahtarı ve şifre istemez</span>`}<span class="sp"></span><button class="primary" data-close>Kapat</button>`;
+  }
+  return `<div class="modalbg"><div class="modal" style="width:${st===2?1080:640}px;height:${st===2?'80vh':'auto'}">${head}<div class="mb">${body}</div><div class="mf">${foot}</div></div></div>`;
+}
+
+// ───────── B: tek ekran iki bölme ─────────
+function variantB(){
+  const d=S.dlg, f=d.filter||'all', v=visC();
+  const F = { all:['Tümü',()=>true], new:['Yeni',c=>!dupOf(c)], dup:['Zaten var',c=>dupOf(c)], warn:['Uyarılı',c=>warnList(c).length], sel:['Seçili',c=>c.sel] };
+  const rows = v.filter(F[f][1]); const nsel = chosen().length;
+  const body = `<div class="two"><div class="l">${sourcesBlock(true)}${skippedBlock()}</div><div class="r">
+    <div style="display:flex;gap:8px;align-items:center;padding:8px 10px;border-bottom:1px solid var(--line)"><div class="tabs">${Object.entries(F).map(([k,[l,fn]])=>`<button class="${f===k?'on':''}" data-filter="${k}">${l} ${v.filter(fn).length}</button>`).join('')}</div></div>
+    ${nsel?`<div class="bulk"><b>${nsel} seçili</b><span class="dim">→</span> Klasör <select data-bulkfolder><option value="-">ata…</option><option value="">(klasörsüz)</option>${allFolders().map(x=>`<option>${esc(x)}</option>`).join('')}</select> Ortam <select data-bulkenv><option value="-">ata…</option>${Object.keys(ENVS).map(k=>`<option value="${k}">${ENVS[k][0]}</option>`).join('')}</select><button class="ghost" data-selnone>seçimi kaldır</button></div>`:''}
+    <table><tr><th><input type="checkbox" data-selall ${rows.length&&rows.every(c=>c.sel)?'checked':''}></th><th>Ad</th><th>Sunucu</th><th>Tünel</th><th>Klasör</th><th>Ortam</th><th>Şifre</th><th>Durum</th><th></th></tr>
+    ${rows.map(c=>`<tr class="${c.sel?'':'off'} ${c.env==='prod'?'prodrow':''}"><td><input type="checkbox" data-sel="${c.id}" ${c.sel?'checked':''}></td>
+      <td><b>${esc(c.name)}</b><div>${fromText(c)}</div></td><td class="mono small">${esc(c.user)}@${esc(c.host)}:${c.port}</td>
+      <td class="small">${c.ssh?'⇄ '+esc(c.ssh.split(' · ')[0]):c.unmapped?'<span class="w">eşlenemedi</span>':'<span class="dim">—</span>'}</td>
+      <td class="small">${esc(c.folder||'—')}</td><td class="small">${envDot(c.env)} ${ENVS[c.env||''][0]}${c.envWhy&&c.env==='prod'?' <span class="dim" title="'+esc(c.envWhy)+'">(öneri)</span>':''}</td>
+      <td class="small">${pwText(c)}</td><td class="warns">${warnList(c).map(w=>`<div class="w" title="${esc(w)}">⚠ ${esc(w.length>38?w.slice(0,38)+'…':w)}</div>`).join('')||'<span class="o small">hazır</span>'}</td>
+      <td><button class="ghost" data-form="${c.id}">Düzenle…</button></td></tr>`).join('')||`<tr><td colspan="9" class="dim ctr" style="padding:20px">Bu filtrede aday yok</td></tr>`}</table></div></div>`;
+  const foot = `<span class="dim">${v.length} aday · ${visSkipped().length} atlandı</span><span class="sp"></span><button data-close>İptal</button><button class="primary" data-import ${nsel?'':'disabled'}>${nsel} bağlantıyı içe aktar</button>`;
+  return `<div class="modalbg"><div class="modal" style="width:94vw;height:86vh"><div class="mh">İçe aktar <span class="dim" style="font-weight:400">· IntelliJ dataSources.xml ve .pgpass</span><span class="sp" style="flex:1"></span><button class="ghost" data-close>✕</button></div><div class="mb" style="padding:0;display:flex">${body}</div><div class="mf">${foot}</div></div></div>${d.form?formModal():''}`;
+}
+function formModal(){
+  const c=S.cands.find(x=>x.id===S.dlg.form), after = !!S.dlg.result || S.dlg.formAfter;
+  return `<div class="modalbg" style="z-index:70"><div class="modal" style="width:480px;${c.env==='prod'?'box-shadow:0 0 0 2px var(--prod)':''}"><div class="mh">${envDot(c.env)} ${esc(c.name)} <span class="dim" style="font-weight:400">${after?'· Bağlantı formu':'· içe aktarılacak aday (henüz kaydedilmedi)'}</span></div>
+    <div class="mb"><div class="kv"><span class="k">Ad</span><input type="text" value="${esc(c.name)}" data-name="${c.id}"><span class="k">Klasör</span>${folderSel(c)}<span class="k">Host / port</span><span class="mono">${esc(c.host)} : ${c.port}</span><span class="k">Kullanıcı</span><span class="mono">${esc(c.user)}</span>
+    <span class="k">Şifre</span><span>${pwText(c)}</span><span class="k">Başlangıç vt</span><span class="mono">${esc(c.startDb)}</span><span class="k">Ortam</span>${envSel(c)}
+    <span class="k">▸ SSL/TLS</span><span class="small">${esc(c.ssl)}</span><span class="k">▸ SSH tüneli</span><span class="small">${c.ssh?esc(c.ssh):c.unmapped?'<span class="w">eşlenemedi, kapalı</span>':'kapalı'}</span>
+    <span class="k">Veritabanı seçimi</span><span class="small">${c.dbs.map(esc).join(', ')}</span></div>
+    <div class="dim small" style="margin-top:10px">Ticket 24 formunun kısaltılmış hâli. ${after?'':'Kaydet → adaya yazılır, önizlemeye dönülür; "Bağlantıyı test et" kaydedilmemiş değerlerle burada da çalışır.'}</div></div>
+    <div class="mf"><button data-fakeTest="${c.id}">Bağlantıyı test et</button><span class="sp"></span><button class="primary" data-formclose>${after?'Kaydet':'Önizlemeye dön'}</button></div></div></div>`;
+}
+
+// ───────── C: sonuç ağacı önizlemesi ─────────
+function variantC(){
+  const d=S.dlg, v=visC(), cur=v.find(c=>c.id===d.cur)||null;
+  const folders = [...new Set([...S.folders, ...v.map(c=>c.folder).filter(Boolean)])];
+  const inc = c => `<div class="tr inc ${c.sel?'':'off'} ${c.env==='prod'?'prod':''} ${cur&&cur.id===c.id?'cur':''}" data-cur="${c.id}"><input type="checkbox" data-sel="${c.id}" ${c.sel?'checked':''}>${envDot(c.env)}<b>${esc(c.name)}</b><span class="dim small mono">${esc(c.user)}@${esc(c.host)}</span>${c.ssh?'<span class="dim">⇄</span>':''}<span class="rt">${warnList(c).length?`<span class="w" title="${esc(warnList(c).join('\n'))}">⚠ ${warnList(c).length}</span>`:''}${c.pw?'<span title="şifre .pgpass\'tan">🔑</span>':''}<span class="badge" style="background:${c.sel?'#3d7a40':'#555'}">${c.sel?'yeni':'atlanacak'}</span></span></div>`;
+  const ex = (x, dups) => `<div class="tr exist ${x.env==='prod'?'prod':''}">${envDot(x.env)}${esc(x.name)}<span class="dim small mono">${esc(x.user)}@${esc(x.host)}</span><span class="rt"><span class="tag">mevcut</span></span></div>${dups.map(inc).join('')}`;
+  const sect = (name, f) => { const ex0=S.conns.filter(x=>(x.folder||null)===f), incs=v.filter(c=>(c.folder||null)===f && !dupOf(c));
+    if(!ex0.length&&!incs.length) return '';
+    const isNewF = f && !S.folders.includes(f);
+    return `<div class="fh" style="padding-top:10px">${esc(name)} ${isNewF?'<span class="badge" style="background:#3d7a40">yeni klasör</span>':''}</div>${ex0.map(x=>ex(x, v.filter(c=>dupOf(c)===x.name))).join('')}${incs.map(inc).join('')}`; };
+  const tree = folders.map(f=>sect(f,f)).join('') + sect('Klasörsüz', null);
+  const detail = cur ? `<div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">${envDot(cur.env)}<input type="text" value="${esc(cur.name)}" data-name="${cur.id}" style="flex:1;font-weight:600"></div>
+    <div class="kv"><span class="k">İçe aktar</span><label><input type="checkbox" data-sel="${cur.id}" ${cur.sel?'checked':''}> ${dupOf(cur)?'yinele (zaten var: '+esc(dupOf(cur))+')':'evet'}</label>
+    <span class="k">Klasör</span>${folderSel(cur)}<span class="k">Ortam</span><span>${envSel(cur)} ${cur.envWhy?`<span class="dim small">öneri: ${esc(cur.envWhy)}</span>`:''}</span>
+    <span class="k">Sunucu</span><span class="mono">${esc(cur.user)}@${esc(cur.host)}:${cur.port}</span><span class="k">Şifre</span><span>${pwText(cur)}</span>
+    <span class="k">SSL</span><span>${esc(cur.ssl)}</span><span class="k">SSH</span><span>${cur.ssh?esc(cur.ssh):cur.unmapped?'<span class="w">eşlenemedi</span>':'—'}</span>
+    <span class="k">Veritabanları</span><span>${cur.dbs.map(x=>esc(x)+(x===cur.startDb?' <span class="dim">(başlangıç)</span>':'')).join(', ')}</span>
+    <span class="k">Kaynak</span><span>${cur.from.map(f=>esc(src(f).label)).join('<br>')}</span></div>
+    ${warnList(cur).length?`<div style="margin-top:10px">${warnList(cur).map(w=>`<div class="w">⚠ ${esc(w)}</div>`).join('')}</div>`:''}
+    <div class="dim small" style="margin-top:12px">Diğer alanlar (SSL ayrıntısı, SSH kimliği) içe aktardıktan sonra bağlantı formunda.</div>`
+    : `<div class="dim ctr" style="padding-top:40px">Ayrıntı için soldan yeni bir bağlantı seç.</div>`;
+  const chips = S.sources.map(s=>`<span class="chip ${s.err?'bad':s.on?'on':''}" ${s.err?`title="${esc(s.err)}"`:`data-chip="${s.id}"`} >${s.err?'⚠':s.on?'✓':'○'} ${esc(s.label)}${s.err?'':` <span class="dim">${S.cands.filter(c=>c.from.includes(s.id)).length}</span>`}</span>`).join('');
+  const nsel=chosen().length;
+  if (d.result) return `<div class="modalbg"><div class="modal" style="width:620px"><div class="mh">İçe aktarıldı</div><div class="mb">${summaryBlock(d.result, !!d.result.tests)}</div><div class="mf"><span class="sp"></span><button class="primary" data-close>Kapat</button></div></div></div>`;
+  return `<div class="modalbg"><div class="modal" style="width:1000px;height:84vh"><div class="mh">İçe aktar</div>
+    <div style="padding:8px 16px;border-bottom:1px solid var(--line)"><div class="chips">${chips}<span class="chip" data-addproj>＋ Proje klasörü…</span></div>
+    ${d.projOpen?`<div style="display:flex;gap:6px;margin-top:8px"><input type="text" class="mono" style="flex:1" placeholder="~/work/proje veya …/.idea" value="${esc(S.projPath)}" data-projpath><button data-scan>Tara</button></div>`:''}</div>
+    <div class="two"><div class="r" style="border-right:1px solid var(--line);padding:4px 0"><div class="dim small" style="padding:4px 10px">Bağlantı listesi içe aktarmadan sonra böyle görünecek:</div>${tree}<div style="padding:0 10px">${skippedBlock()}</div></div>
+    <div class="l" style="width:380px;border:none">${detail}</div></div>
+    <div class="mf"><label><input type="checkbox" data-testafter ${d.testAfter?'checked':''}> İçe aktardıktan sonra test et</label><span class="sp"></span><span class="dim">${nsel} yeni bağlantı</span><button data-close>İptal</button><button class="primary" data-import ${nsel?'':'disabled'}>İçe aktar</button></div></div></div>`;
+}
+
+// ───────── render ─────────
+function render(){
+  const V = {A:'Sihirbaz', B:'Tek ekran, iki bölme', C:'Sonuç ağacı önizlemesi'};
+  const dlg = S.dlg ? ({A:variantA,B:variantB,C:variantC})[S.variant]() : '';
+  const state = { variant:S.variant, senaryo:S.senaryo, kaynaklar:S.sources.map(s=>({id:s.id,on:s.on,err:s.err||null})), adaylar:visC().map(c=>({id:c.id,ad:c.name,sec:c.sel,klasor:c.folder,ortam:c.env||null,sifre:c.pw?'.pgpass:'+c.pw:null,zatenVar:dupOf(c),uyari:warnList(c).length})), diyalog:S.dlg&&{...S.dlg, result:S.dlg.result&&{...S.dlg.result}}, baglantilar:S.conns.map(c=>c.name+(c.isNew?' (yeni)':'')), klasorler:S.folders };
+  document.getElementById('root').innerHTML = `<div class="app">${sidebar()}<div class="main">${S.dlg?'':`<div class="ctr">Kenar çubuğundaki <b>⇩ İçe aktar</b> ile diyaloğu aç.<br><span class="small">(Ctrl+K → "İçe aktar" komutu da aynı diyaloğu açar.)</span><br><br><button class="primary" data-open>İçe aktar…</button></div>`}</div></div>${dlg}
+  ${S.ui.toast?`<div class="toast">${esc(S.ui.toast)}</div>`:''}${S.ui.state?`<div class="statebox">${esc(JSON.stringify(state,null,2))}</div>`:''}
+  <div class="bar"><button data-vprev>←</button><b>${S.variant}</b> ${V[S.variant]}<button data-vnext>→</button>
+  <select data-senaryo>${['normal','bos','keychain'].map(x=>`<option ${S.senaryo===x?'selected':''}>${x}</option>`).join('')}</select><button data-reset>sıfırla</button><button data-state>durum</button></div>`;
+}
+function setParam(k,v){ const u=new URL(location); u.searchParams.set(k,v); history.replaceState(null,'',u); }
+function setVariant(v){ S.variant=v; setParam('variant',v); if(S.dlg&&!S.dlg.result) S.dlg={step:1}; render(); }
+
+// ───────── olaylar ─────────
+const $=(e,a)=>e.target.closest(`[${a}]`);
+document.addEventListener('click', e=>{
+  let x;
+  if ((x=$(e,'data-vprev'))) return setVariant({A:'C',B:'A',C:'B'}[S.variant]);
+  if ((x=$(e,'data-vnext'))) return setVariant({A:'B',B:'C',C:'A'}[S.variant]);
+  if ((x=$(e,'data-state'))) { S.ui.state=!S.ui.state; return render(); }
+  if ((x=$(e,'data-reset'))) { reset(); return render(); }
+  if ((x=$(e,'data-open'))) { S.conns.forEach(c=>{c.isNew=false;}); S.cands.forEach(c=>delete c.sel); S.dlg={step:1}; return render(); }
+  if ((x=$(e,'data-close'))) { const r=S.dlg&&S.dlg.result; S.dlg=null; if(r&&S.variant==='B') toast(`${r.added} eklendi, ${r.skipped} atlandı`+(r.kfail.length?` · şifre kaydedilemedi: ${r.kfail.join(', ')}`:'')); return render(); }
+  if ((x=$(e,'data-step'))) { S.dlg.step=+x.dataset.step; return render(); }
+  if ((x=$(e,'data-scan'))) { scanProject(); return render(); }
+  if ((x=$(e,'data-addproj'))) { S.dlg.projOpen=!S.dlg.projOpen; return render(); }
+  if ((x=$(e,'data-chip'))) { const s=src(x.dataset.chip); s.on=!s.on; return render(); }
+  if ((x=$(e,'data-filter'))) { S.dlg.filter=x.dataset.filter; return render(); }
+  if ((x=$(e,'data-selnone'))) { visC().forEach(c=>c.sel=false); return render(); }
+  if ((x=$(e,'data-form'))) { S.dlg.form=x.dataset.form; S.dlg.formAfter=!!S.dlg.result; if(S.variant!=='B'&&!S.dlg.result) return; if(S.dlg.result&&S.variant!=='B'){ toast('Bağlantı formu açılır (ticket 24), diyalog kapanır'); S.dlg=null; } else if(S.dlg.result){ toast('Bağlantı formu açılır (ticket 24)'); S.dlg.form=null; } return render(); }
+  if ((x=$(e,'data-formclose'))) { S.dlg.form=null; return render(); }
+  if ((x=$(e,'data-faketest'))) { const t=TESTS[x.dataset.faketest]; return toast((t[0]==='o'?'✓ ':'⚠ ')+t[1]); }
+  if ((x=$(e,'data-test'))) { runTests(); return; }
+  if ((x=$(e,'data-import'))) { doImport(); const r=S.dlg.result;
+    if (S.variant==='A') { S.dlg.step=3; return render(); }
+    if (S.variant==='B') { S.dlg=null; S.lastResult=r; toast(`${r.added} eklendi, ${r.skipped} atlandı`+(r.kfail.length?` · ⚠ şifre kaydedilemedi: ${r.kfail.join(', ')}`:'')+' · yeni bağlantılar "yeni" rozetli, test edilmedi'); return render(); }
+    if (S.dlg.testAfter) runTests(); return render(); }
+  if ((x=$(e,'data-cur')) && !e.target.matches('input')) { S.dlg.cur=x.dataset.cur; return render(); }
+});
+document.addEventListener('change', e=>{
+  const t=e.target, d=t.dataset, c=id=>S.cands.find(x=>x.id===id);
+  if (d.src) { src(d.src).on=t.checked; return render(); }
+  if (d.sel) { c(d.sel).sel=t.checked; return render(); }
+  if (d.selall!==undefined) { const f=S.dlg.filter||'all'; visC().filter(z=>({all:1,new:!dupOf(z),dup:dupOf(z),warn:warnList(z).length,sel:z.sel})[f]).forEach(z=>z.sel=t.checked); return render(); }
+  if (d.env) { c(d.env).env=t.value; return render(); }
+  if (d.folder) { let v=t.value; if(v==='__new'){ v=prompt('Klasör adı (tek düzey)')||c(d.folder).folder||''; } c(d.folder).folder=v||null; return render(); }
+  if (d.name) { c(d.name).name=t.value; return render(); }
+  if (d.projpath!==undefined) { S.projPath=t.value; return; }
+  if (d.bulkfolder!==undefined && t.value!=='-') { chosen().forEach(z=>z.folder=t.value||null); return render(); }
+  if (d.bulkenv!==undefined && t.value!=='-') { chosen().forEach(z=>z.env=t.value); return render(); }
+  if (d.testafter!==undefined) { S.dlg.testAfter=t.checked; return; }
+  if (d.senaryo!==undefined) { S.senaryo=t.value; setParam('senaryo',t.value); reset(); return render(); }
+});
+document.addEventListener('keydown', e=>{
+  if (e.target.closest('input,textarea,select,[contenteditable]')) { if(e.key==='Enter'&&e.target.dataset.projpath!==undefined){ S.projPath=e.target.value; scanProject(); render(); } return; }
+  if (e.key==='ArrowLeft') setVariant({A:'C',B:'A',C:'B'}[S.variant]);
+  if (e.key==='ArrowRight') setVariant({A:'B',B:'C',C:'A'}[S.variant]);
+});
+S.dlg={step:1};
+render();
+</script>
+</body>
+</html>
