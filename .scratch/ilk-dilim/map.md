@@ -41,10 +41,11 @@ Tezgah'ın ilk dilimi (bağlantı yönetimi + script çalıştırma akışı) i�
 - [Çalıştırma geçmişi ve denetim kaydı](issues/22-calistirma-gecmisi.md): her çalıştırma için Çalıştırma kaydı (deneme/hata dahil); `history/` altında aylık JSONL, başladı/bitti satırları; script metni + hedef anlık kopyası + sonuç + ifade özeti, satır verisi asla; süresiz, maskeleme yok; prod için ayrı denetim yok; ilk dilimde yalnızca "klasörü aç" bağlantısı.
 - [Script çalıştırma ekranının yerleşimi](issues/23-script-ekrani-yerlesimi.md): varyant B, yani üstte hedef başlığı, solda editör, sağ sütunda karar kartı ve ifade zaman çizelgesi; Değişiklikler sekmesi yalnızca denemede; hata sonrası yalnızca rollback; prod yazma kilidi tek tıkla, çalıştırma öncesi hiçbir onay yok.
 - [Bağlantı formu ve "bağlantıyı test et" akışı](issues/24-baglanti-formu.md): varyant C, yani kısa form, katlanır SSL/SSH, URL'den doldurma (URL saklanmaz); test kaydedilmemiş değerlerle 6 adım (sırlar → SSH → ulaşma → TLS → kimlik doğrulama → `pg_database`), sonuç ait olduğu bölümde, ilk hatada durur; testsiz kaydetme serbest.
+- [Bağlantı ağacı, klasör etkileşimleri ve Cmd/Ctrl+K hızlı geçiş](issues/25-baglanti-agaci-hizli-gecis.md): varyant C, yani üstte klasörlü bağlantı listesi, altta veritabanı paneli (⭐ görünürlük, şema çipleri, tıkla = hedef); tek düzey klasör, sürükle-bırak; oturumluk şifre Tezgah kapanana kadar bellekte (yalnızca `28P01`'de yeniden); Ctrl+K ↵ mevcut editörün hedefini değiştirir, `postgres://` yapıştırınca mevcut eşleşme + "URL'den yeni bağlantı".
 
 ## Not yet specified
 
-_(şu an boş: kalan sis [Bağlantı ağacı, klasör etkileşimleri ve Cmd/Ctrl+K hızlı geçiş](issues/25-baglanti-agaci-hizli-gecis.md) ve [İçe aktarma diyaloğunun yerleşimi](issues/26-ice-aktarma-diyalogu.md) ticket'larına dönüştü)_
+_(şu an boş: kalan son ticket [İçe aktarma diyaloğunun yerleşimi](issues/26-ice-aktarma-diyalogu.md))_
 
 ## Out of scope
 
