@@ -37,16 +37,14 @@ Tezgah'ın ilk dilimi (bağlantı yönetimi + script çalıştırma akışı) i�
 - [İçe aktarma akışı: dataSources.xml ve .pgpass](issues/18-ice-aktarma-akisi.md): önizlemeli tek diyalog; sunucu-düzeyi anahtarla aday birleştirme, mevcutta varsayılan atla; `.pgpass` somut satırları aday + şifreler keychain'e kopya; `read-only` → `prod` önerisi; IntelliJ şifreleri okunmaz; saf ayrıştırıcılar `src/core/import`.
 - [npx kurulumunda ssh2 native derleme davranışı](issues/19-npx-ssh2-kurulum.md): kurulum her durumda sessiz başarılı, binding yalnızca performans; `ssh2` tsup ile `dist/server`'a gömülür (native external), `overrides` tüketici tarafında işlemez.
 - [prod hedefinde deneme modu](issues/20-prod-deneme-modu.md): yazma modu kapalıyken de `BEGIN READ WRITE` + otomatik rollback; ad onayı yok, sabit yan etki uyarı şeridi; prod'da `lock_timeout = '3s'`.
+- [Commit/rollback beklerken zaman aşımı](issues/21-commit-bekleme-zaman-asimi.md): Karar süresi `prod` 5 dk / diğerleri 30 dk; dolunca otomatik rollback; son 1 dk geri sayım + sınırsız "Uzat"; Tezgah zamanlayıcısı + `idle_in_transaction_session_timeout` yedeği.
+- [Çalıştırma geçmişi ve denetim kaydı](issues/22-calistirma-gecmisi.md): her çalıştırma için Çalıştırma kaydı (deneme/hata dahil); `history/` altında aylık JSONL, başladı/bitti satırları; script metni + hedef anlık kopyası + sonuç + ifade özeti, satır verisi asla; süresiz, maskeleme yok; prod için ayrı denetim yok; ilk dilimde yalnızca "klasörü aç" bağlantısı.
 
 ## Not yet specified
 
 - Cmd/Ctrl+K hızlı geçiş UI'ı.
 - Klasör ağacı etkileşimleri (sürükle-bırak, yeniden adlandırma, silme).
-- Bağlantı formu ve "bağlantıyı test et" akışı (SSH alanları, "Keychain'e kaydet" kutusu, oturumluk şifre istemi ve host anahtarı onay diyaloğu dahil).
-- Script çalıştırma ekranının yerleşimi (editör, log, commit/rollback çubuğu, prod çerçevesi, çalıştırma modu rozeti, autocommit onayı); deneme modunun sonuç alanı Değişiklikler/Log sekmeleri olarak belirlendi, aynı sekmelerin normal çalıştırmada da kullanılıp kullanılmayacağı açık.
 - İçe aktarma diyaloğunun yerleşimi (kaynak listesi, proje yolu girişi, önizleme tablosu); sütunlar ve davranış [İçe aktarma akışı](issues/18-ice-aktarma-akisi.md)'nda belirlendi.
-- Commit/rollback beklerken zaman aşımı (açık transaction ne kadar bekleyebilir?).
-- Çalıştırma geçmişi/denetim kaydı ilk dilime girer mi?
 
 ## Out of scope
 
@@ -55,3 +53,4 @@ Tezgah'ın ilk dilimi (bağlantı yönetimi + script çalıştırma akışı) i�
 
 - Sekmeli/geçmişli konsol, şema bilen otomatik tamamlama, tablo görünümü, düzenlenebilir grid, ALTER TABLE önizlemesi: sonraki dilimler (CLAUDE.md sırası).
 - Tam sonuç grid'i: konsol dilimi.
+- Çalıştırma kayıtlarına göz atma arayüzü ve saklama süresi ayarı: konsol dilimi / sonraki iyileştirme ([Çalıştırma geçmişi ve denetim kaydı](issues/22-calistirma-gecmisi.md)).

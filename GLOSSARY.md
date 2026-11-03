@@ -41,3 +41,11 @@ _Avoid_: Transaction modu anahtarı, execution mode
 **Deneme modu**:
 Bir script'i Transaction modunda çalıştırıp sonunda her zaman geri alan, ne değişeceğini gösteren çalıştırma biçimi. Hiçbir şeyi kalıcı yazmaz; bu yüzden `prod` hedefinde yazma modu kapalıyken de kullanılabilir. Geri alınamayan yan etkileri (ilerleyen sequence'ler, dış sistemlere giden etkiler) vardır.
 _Avoid_: Dry run, simülasyon, test çalıştırma
+
+**Karar süresi**:
+Transaction modunda script bittikten sonra commit veya rollback kararı için tanınan süre; dolunca transaction geri alınır.
+_Avoid_: Zaman aşımı, timeout
+
+**Çalıştırma kaydı**:
+Bir script çalıştırmasının sonradan değiştirilmeyen kaydı: ne çalıştırıldı, hangi hedefte, nasıl sonuçlandı. Deneme modu ve hatalı çalıştırmalar da kaydedilir; çalıştırmanın döndürdüğü veriyi içermez.
+_Avoid_: Geçmiş, log, audit log, denetim kaydı

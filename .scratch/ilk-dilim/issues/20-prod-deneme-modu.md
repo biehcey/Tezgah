@@ -1,4 +1,4 @@
-        # prod hedefinde deneme modu
+# prod hedefinde deneme modu
 
 Type: grilling
 Status: resolved
