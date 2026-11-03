@@ -26,6 +26,10 @@ Kapsam dışı (şimdilik): şema tasarımı, ER diyagramı, Postgres dışında
 - Önce bağlantı yönetimi ve script çalıştırma akışı; ardından konsol, tablo görünümü, grid.
 - Her adım küçük ve tek başına test edilebilir olmalı. Saf mantık (ifade bölme, transaction dışı komut tanıma, SQL üretimi, içe aktarma ayrıştırıcıları) UI ve veritabanından bağımsız modüllerde tutulup birim testleriyle doğrulanır.
 
+## Git
+
+- Commit mesajlarına `Co-Authored-By: Claude ...` satırı, PR açıklamalarına "Generated with Claude Code" satırı eklenmez; Claude katkıcı olarak kaydedilmez.
+
 ## Agent skills
 
 ### Issue tracker

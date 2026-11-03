@@ -31,19 +31,23 @@ Tezgah'ın ilk dilimi (bağlantı yönetimi + script çalıştırma akışı) i�
 - [Keychain kütüphanesi seçimi](issues/11-keychain-kutuphanesi.md): `@napi-rs/keyring`; service `tezgah`, account `connectionId`; keychain'de yalnızca şifre/passphrase (Windows 2560 bayt sınırı).
 - [IntelliJ dataSources.xml formatı](issues/13-datasources-xml-formati.md): belgesiz format; proje `.idea/` + global `JetBrains/*/options/`, `uuid` ile birleştirme; SSH `sshConfigs.xml`'de; renk/ortam etiketi eşlenemez; IntelliJ şifreleri okunmaz (öneri).
 - [SSH: kütüphane, kimlik doğrulama ve agent desteği](issues/12-ssh-kutuphanesi.md): `ssh2@~1.17.0`; yerel port yok (Duplex sarmalayıcı + `stream` factory); Pageant yalnızca named pipe; known_hosts için kendi saf modülümüz; ProxyJump `sock` zinciri.
+- [Transaction dışı komutlar ve karışık script](issues/15-transaction-disi-komutlar.md): çalıştırma modu içerikten çıkar (Transaction / Autocommit / karışık → reddedilir); ilk anahtar kelime deseni + `25001` yedeği; deneme modunda reddedilir; kopmada iptal.
+- [Deneme modunda ne gösterilir](issues/16-deneme-modu.md): tablo bazlı önce/sonra farkı (PG18+ `RETURNING old.*, new.*`); PG18 öncesi veya PK'sız tabloda ifade başına `RETURNING *` önizleme; DDL için katalog şema farkı.
+- [SSH tüneli yaşam döngüsü](issues/17-ssh-tunel-yasam-dongusu.md): tek atlama, `password|key|agent`; tembel aç/son pool'la kapat; kopmada pool'lar atılır, otomatik yeniden bağlanma yok; host anahtarı `~/.ssh/known_hosts` (salt okunur) + Tezgah `known_hosts`, bilinmeyende parmak izi onayı, uyuşmazlıkta sert ret; SSH sırrı `<connectionId>:ssh`, kaydetmeme seçeneği DB şifresine de.
 
 ## Not yet specified
 
 - Cmd/Ctrl+K hızlı geçiş UI'ı.
 - Klasör ağacı etkileşimleri (sürükle-bırak, yeniden adlandırma, silme).
-- Bağlantı formu ve "bağlantıyı test et" akışı (keychain ve SSL kararları netleşince).
-- Script çalıştırma ekranının yerleşimi (editör, log, commit/rollback çubuğu, prod çerçevesi) — deneme modu prototipi büyük ölçüde belirleyecek.
+- Bağlantı formu ve "bağlantıyı test et" akışı (SSH alanları, "Keychain'e kaydet" kutusu, oturumluk şifre istemi ve host anahtarı onay diyaloğu dahil).
+- Script çalıştırma ekranının yerleşimi (editör, log, commit/rollback çubuğu, prod çerçevesi, çalıştırma modu rozeti, autocommit onayı); deneme modunun sonuç alanı Değişiklikler/Log sekmeleri olarak belirlendi, aynı sekmelerin normal çalıştırmada da kullanılıp kullanılmayacağı açık.
 - Commit/rollback beklerken zaman aşımı (açık transaction ne kadar bekleyebilir?).
 - Çalıştırma geçmişi/denetim kaydı ilk dilime girer mi?
 
 ## Out of scope
 
 - `~/.ssh/config`'ten SSH ayarı içe aktarma (`ssh-config`, `matchExec: false`): ilk dilimde gerekmiyor; sonraki bir içe aktarma iyileştirmesi.
+- SSH ProxyJump / çok atlamalı tünel: ilk dilim tek atlama; model `jumps[]` eklemeye açık ([SSH tüneli yaşam döngüsü](issues/17-ssh-tunel-yasam-dongusu.md)).
 
 - Sekmeli/geçmişli konsol, şema bilen otomatik tamamlama, tablo görünümü, düzenlenebilir grid, ALTER TABLE önizlemesi: sonraki dilimler (CLAUDE.md sırası).
 - Tam sonuç grid'i: konsol dilimi.
