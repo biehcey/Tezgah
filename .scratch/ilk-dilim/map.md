@@ -40,12 +40,11 @@ Tezgah'ın ilk dilimi (bağlantı yönetimi + script çalıştırma akışı) i�
 - [Commit/rollback beklerken zaman aşımı](issues/21-commit-bekleme-zaman-asimi.md): Karar süresi `prod` 5 dk / diğerleri 30 dk; dolunca otomatik rollback; son 1 dk geri sayım + sınırsız "Uzat"; Tezgah zamanlayıcısı + `idle_in_transaction_session_timeout` yedeği.
 - [Çalıştırma geçmişi ve denetim kaydı](issues/22-calistirma-gecmisi.md): her çalıştırma için Çalıştırma kaydı (deneme/hata dahil); `history/` altında aylık JSONL, başladı/bitti satırları; script metni + hedef anlık kopyası + sonuç + ifade özeti, satır verisi asla; süresiz, maskeleme yok; prod için ayrı denetim yok; ilk dilimde yalnızca "klasörü aç" bağlantısı.
 - [Script çalıştırma ekranının yerleşimi](issues/23-script-ekrani-yerlesimi.md): varyant B, yani üstte hedef başlığı, solda editör, sağ sütunda karar kartı ve ifade zaman çizelgesi; Değişiklikler sekmesi yalnızca denemede; hata sonrası yalnızca rollback; prod yazma kilidi tek tıkla, çalıştırma öncesi hiçbir onay yok.
+- [Bağlantı formu ve "bağlantıyı test et" akışı](issues/24-baglanti-formu.md): varyant C, yani kısa form, katlanır SSL/SSH, URL'den doldurma (URL saklanmaz); test kaydedilmemiş değerlerle 6 adım (sırlar → SSH → ulaşma → TLS → kimlik doğrulama → `pg_database`), sonuç ait olduğu bölümde, ilk hatada durur; testsiz kaydetme serbest.
 
 ## Not yet specified
 
-- Cmd/Ctrl+K hızlı geçiş UI'ı.
-- Klasör ağacı etkileşimleri (sürükle-bırak, yeniden adlandırma, silme).
-- İçe aktarma diyaloğunun yerleşimi (kaynak listesi, proje yolu girişi, önizleme tablosu); sütunlar ve davranış [İçe aktarma akışı](issues/18-ice-aktarma-akisi.md)'nda belirlendi.
+_(şu an boş: kalan sis [Bağlantı ağacı, klasör etkileşimleri ve Cmd/Ctrl+K hızlı geçiş](issues/25-baglanti-agaci-hizli-gecis.md) ve [İçe aktarma diyaloğunun yerleşimi](issues/26-ice-aktarma-diyalogu.md) ticket'larına dönüştü)_
 
 ## Out of scope
 
@@ -54,4 +53,5 @@ Tezgah'ın ilk dilimi (bağlantı yönetimi + script çalıştırma akışı) i�
 
 - Sekmeli/geçmişli konsol, şema bilen otomatik tamamlama, tablo görünümü, düzenlenebilir grid, ALTER TABLE önizlemesi: sonraki dilimler (CLAUDE.md sırası).
 - Tam sonuç grid'i: konsol dilimi.
+- Bağlantı formunda libpq `anahtar=değer` dizisinden doldurma: ilk dilimde yalnızca URL ([Bağlantı formu ve "bağlantıyı test et" akışı](issues/24-baglanti-formu.md)).
 - Çalıştırma kayıtlarına göz atma arayüzü ve saklama süresi ayarı: konsol dilimi / sonraki iyileştirme ([Çalıştırma geçmişi ve denetim kaydı](issues/22-calistirma-gecmisi.md)).
