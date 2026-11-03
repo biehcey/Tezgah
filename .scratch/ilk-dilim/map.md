@@ -46,7 +46,7 @@ Tezgah'ın ilk dilimi (bağlantı yönetimi + script çalıştırma akışı) i�
 
 ## Not yet specified
 
-_(boş: tüm ticket'lar çözüldü; harita `/to-spec`'e hazır)_
+_(boş: tüm ticket'lar çözüldü; spec: [spec.md](spec.md))_
 
 ## Out of scope
 
