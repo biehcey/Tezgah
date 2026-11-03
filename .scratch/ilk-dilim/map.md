@@ -42,10 +42,11 @@ Tezgah'ın ilk dilimi (bağlantı yönetimi + script çalıştırma akışı) i�
 - [Script çalıştırma ekranının yerleşimi](issues/23-script-ekrani-yerlesimi.md): varyant B, yani üstte hedef başlığı, solda editör, sağ sütunda karar kartı ve ifade zaman çizelgesi; Değişiklikler sekmesi yalnızca denemede; hata sonrası yalnızca rollback; prod yazma kilidi tek tıkla, çalıştırma öncesi hiçbir onay yok.
 - [Bağlantı formu ve "bağlantıyı test et" akışı](issues/24-baglanti-formu.md): varyant C, yani kısa form, katlanır SSL/SSH, URL'den doldurma (URL saklanmaz); test kaydedilmemiş değerlerle 6 adım (sırlar → SSH → ulaşma → TLS → kimlik doğrulama → `pg_database`), sonuç ait olduğu bölümde, ilk hatada durur; testsiz kaydetme serbest.
 - [Bağlantı ağacı, klasör etkileşimleri ve Cmd/Ctrl+K hızlı geçiş](issues/25-baglanti-agaci-hizli-gecis.md): varyant C, yani üstte klasörlü bağlantı listesi, altta veritabanı paneli (⭐ görünürlük, şema çipleri, tıkla = hedef); tek düzey klasör, sürükle-bırak; oturumluk şifre Tezgah kapanana kadar bellekte (yalnızca `28P01`'de yeniden); Ctrl+K ↵ mevcut editörün hedefini değiştirir, `postgres://` yapıştırınca mevcut eşleşme + "URL'den yeni bağlantı".
+- [İçe aktarma diyaloğunun yerleşimi](issues/26-ice-aktarma-diyalogu.md): varyant C, yani gelen adaylar bağlantı listesinin içe aktarmadan sonraki hâlinde (mevcutlar gri, "zaten var" eşinin altında), sağda ayrıntı paneli; kaynaklar üstte çip; form yalnızca içe aktarmadan sonra; isteğe bağlı "içe aktardıktan sonra test et"; iç içe IntelliJ grubu tam yol adıyla tek klasör.
 
 ## Not yet specified
 
-_(şu an boş: kalan son ticket [İçe aktarma diyaloğunun yerleşimi](issues/26-ice-aktarma-diyalogu.md))_
+_(boş: tüm ticket'lar çözüldü; harita `/to-spec`'e hazır)_
 
 ## Out of scope
 

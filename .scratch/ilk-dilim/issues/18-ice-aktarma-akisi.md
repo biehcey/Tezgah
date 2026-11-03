@@ -42,3 +42,7 @@ Grilling oturumunda (2026-11-03) kararlaştırıldı.
 **Eşlenemeyenler**: ayrı rapor yok, satır uyarıları. Postgres dışı sürücüler "atlandı" bölümünde gri tek satır; çoklu host'ta yalnız ilki; `auth-provider`/driver özellikleri yok sayılır; bozuk XML kaynak düzeyinde hata, diğer kaynakları engellemez.
 
 **Modül sınırı**: `src/core/import/` saf modüller: `dataSourcesXml` (metin → aday; IO yok), `pgpass` (ayrıştırma + libpq eşleme), gruplama (birleştirme + çakışma tespiti), SSH/SSL eşleme. Keşif ve okuma `src/server`'da. XML ayrıştırıcı `fast-xml-parser`. Birim testleri örnek XML/pgpass dosyalarıyla.
+
+## Comments
+
+- 2026-11-03: Klasör eşlemesindeki "`/` ile bölünüp iç içe klasör" kararı geçersiz. Ticket 25'te klasörler tek düzey; `group` tam yol adıyla tek klasör olur. Bkz. [İçe aktarma diyaloğunun yerleşimi](26-ice-aktarma-diyalogu.md).
