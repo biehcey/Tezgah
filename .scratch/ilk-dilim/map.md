@@ -23,7 +23,7 @@ Tezgah'ın ilk dilimi (bağlantı yönetimi + script çalıştırma akışı) i�
 - [Sunucu modeli: veritabanı listeleme ve pool yönetimi](issues/04-sunucu-modeli.md): başlangıç veritabanından `pg_database`; hedef başına tembel küçük pool; script tek client tutar.
 - [İfade bölme ve hata konumunu satıra eşleme](issues/05-ifade-bolme.md): `src/core`'da kendi lexer'ımız; `position` + ifade offset'i → satır/sütun.
 - [Backend ↔ arayüz iletişimi](issues/06-backend-arayuz-iletisimi.md): CRUD REST, script çalıştırma WebSocket; kopmada rollback.
-- [prod salt okunurluğu ve onay akışı](issues/07-prod-salt-okunurluk.md): `default_transaction_read_only` + `BEGIN READ ONLY`; bağlantı adı yazarak oturumluk yazma kilidi.
+- [prod salt okunurluğu ve onay akışı](issues/07-prod-salt-okunurluk.md): `default_transaction_read_only` + `BEGIN READ ONLY`; oturumluk yazma kilidi (tek tıkla açılır, bkz. Script çalıştırma ekranının yerleşimi).
 - [Bağlantı modelinde SSL/TLS](issues/08-ssl-alanlari.md): `sslmode` + CA/sertifika yolları; varsayılan `prefer`, prod'da `verify-full` önerisi.
 - [Script içindeki SELECT sonuçları](issues/09-script-select-onizleme.md): satır sayısı + ilk 100 satır önizleme.
 - [Entegrasyon test stratejisi](issues/10-test-stratejisi.md): core birim; server `TEZGAH_TEST_PG_URL` varsa gerçek PG; keychain/SSH sahte.
@@ -39,6 +39,7 @@ Tezgah'ın ilk dilimi (bağlantı yönetimi + script çalıştırma akışı) i�
 - [prod hedefinde deneme modu](issues/20-prod-deneme-modu.md): yazma modu kapalıyken de `BEGIN READ WRITE` + otomatik rollback; ad onayı yok, sabit yan etki uyarı şeridi; prod'da `lock_timeout = '3s'`.
 - [Commit/rollback beklerken zaman aşımı](issues/21-commit-bekleme-zaman-asimi.md): Karar süresi `prod` 5 dk / diğerleri 30 dk; dolunca otomatik rollback; son 1 dk geri sayım + sınırsız "Uzat"; Tezgah zamanlayıcısı + `idle_in_transaction_session_timeout` yedeği.
 - [Çalıştırma geçmişi ve denetim kaydı](issues/22-calistirma-gecmisi.md): her çalıştırma için Çalıştırma kaydı (deneme/hata dahil); `history/` altında aylık JSONL, başladı/bitti satırları; script metni + hedef anlık kopyası + sonuç + ifade özeti, satır verisi asla; süresiz, maskeleme yok; prod için ayrı denetim yok; ilk dilimde yalnızca "klasörü aç" bağlantısı.
+- [Script çalıştırma ekranının yerleşimi](issues/23-script-ekrani-yerlesimi.md): varyant B, yani üstte hedef başlığı, solda editör, sağ sütunda karar kartı ve ifade zaman çizelgesi; Değişiklikler sekmesi yalnızca denemede; hata sonrası yalnızca rollback; prod yazma kilidi tek tıkla, çalıştırma öncesi hiçbir onay yok.
 
 ## Not yet specified
 

@@ -12,7 +12,7 @@ PostgreSQL için kişisel, IntelliJ veritabanı aracına benzer bir yönetim ara
 
 - Sunucu yalnızca `127.0.0.1`'e bağlanır; her açılışta rastgele bir erişim anahtarı üretilir ve her istek bu anahtarla doğrulanır.
 - Uygulama açılışta hiçbir sunucuya bağlanmaz; yalnızca kullanıcının açtığı bağlantıya bağlanır.
-- `prod` etiketli bağlantılar kırmızı kenarlıkla ve varsayılan olarak salt okunur açılır; script çalıştırmadan önce bağlantı adı yazdırılarak onay alınır.
+- `prod` etiketli bağlantılar kırmızı kenarlıkla ve varsayılan olarak salt okunur açılır; yazma modu tek tıkla açılır, çalıştırmadan önce ayrıca onay istenmez.
 - Script çalıştırma: ifadeler aynı bağlantıda sırayla, transaction içinde çalışır; hatada durulur ve hatalı satır işaretlenir; sonunda commit/rollback seçilir. Transaction içinde çalışamayan komutlar (`CREATE INDEX CONCURRENTLY`, `VACUUM` vb.) tanınır ve ayrı ele alınır.
 
 ## Kapsam

@@ -16,3 +16,5 @@ Blocked by: —
 - Bu bir **kaza önleyici**dir, güvenlik sınırı değildir.
 
 Çizim oturumunda (2026-11-03) kararlaştırıldı.
+
+**Güncelleme ([Script çalıştırma ekranının yerleşimi](23-script-ekrani-yerlesimi.md), 2026-11-03)**: Katman 2 sadeleştirildi: yazma modu tek tıkla açılır, bağlantı adı yazdırılmaz; çalıştırmadan önce onay yok. Durum yalnızca kilit rozetiyle gösterilir. Katman 1 aynen geçerli.

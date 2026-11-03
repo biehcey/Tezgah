@@ -27,3 +27,5 @@ Seçenekler: (a) karışık script'i reddet, yalnızca tamamı transaction dış
 - Sözlüğe eklendi: **Transaction dışı komut**, **Çalıştırma modu**.
 
 Çalışma oturumunda (2026-11-03) kararlaştırıldı.
+
+**Güncelleme ([Script çalıştırma ekranının yerleşimi](23-script-ekrani-yerlesimi.md), 2026-11-03)**: Autocommit'te çalıştırma öncesi onay yok (prod'da ad yazdırma ve prod dışında tek tıklık onay kalktı); yerine kalıcı uyarı şeridi "N ifade anında kalıcı uygulanır, geri alınamaz". prod salt okunur modda Tezgah tarafındaki ret ve client'ın yok edilmesi aynen geçerli.
