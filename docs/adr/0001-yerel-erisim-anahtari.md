@@ -1,0 +1,3 @@
+# Yerel erişim: URL token → cookie, Host ve Origin doğrulaması
+
+Tezgah tarayıcıda çalışan yerel bir sunucu olduğundan aynı makinedeki herhangi bir web sayfası ona istek atabilir. Her açılışta rastgele bir token üretilir, tarayıcı `?t=<token>` ile açılır, sunucu bunu `HttpOnly; SameSite=Strict` cookie'ye çevirip token'sız URL'e yönlendirir. Her istek cookie, `Host` (yalnızca `127.0.0.1:<port>` / `localhost:<port>`, DNS rebinding'e karşı) ve durum değiştirenlerde aynı-origin `Origin` (CSRF'e karşı) ile doğrulanır; CORS başlığı hiç gönderilmez. Token'ı `Authorization` başlığında taşımak reddedildi: WebSocket upgrade'ine başlık eklenemiyor ve token JS'e açık kalıyordu.
