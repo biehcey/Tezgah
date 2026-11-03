@@ -1,0 +1,372 @@
+<!doctype html>
+<!--
+  PROTOTİP — atılabilir. Ticket: .scratch/ilk-dilim/issues/24-baglanti-formu.md
+  Bağlantı formu + "Bağlantıyı test et" akışının üç yerleşim varyantı (?variant=A|B|C).
+  Senaryo ?senaryo=... (test sonucunu ve formun ön dolumunu belirler).
+  Alttaki çubukta ← → ile varyant, açılır listeyle senaryo; "şifre istemi" düğmesi oturumluk şifre istemini gösterir.
+  Hiçbir şey bağlanmaz; test adımları senaryodan gelir, durum yalnızca bellekte.
+-->
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bağlantı formu prototipi</title>
+<style>
+  :root {
+    --bg:#1e1f22; --panel:#2b2d30; --panel2:#25272a; --line:#393b40; --fg:#dfe1e5; --dim:#8c8f94;
+    --ok:#5fb865; --err:#f75464; --warn:#e5a33a; --run:#4a9eff; --prod:#e5484d;
+    font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); min-height:100vh; }
+  button { font:inherit; color:var(--fg); background:#3c3f44; border:1px solid #4e5157; border-radius:4px; padding:4px 12px; cursor:pointer; }
+  button.primary { background:#3574f0; border-color:#3574f0; }
+  button.danger { background:#a8323a; border-color:#a8323a; }
+  button.ghost { background:none; border-color:transparent; color:#6ea8fe; padding:2px 4px; }
+  button:disabled { opacity:.4; cursor:not-allowed; }
+  input[type=text], input[type=password], input[type=number], select { font:inherit; background:#1e1f22; color:var(--fg); border:1px solid #4e5157; border-radius:4px; padding:4px 7px; width:100%; }
+  input.bad { border-color:var(--err); background:#2e1a1d; }
+  label.f { display:grid; grid-template-columns: 150px 1fr; gap:10px; align-items:center; margin:7px 0; }
+  label.f > span:first-child { color:var(--dim); text-align:right; }
+  label.chk { display:flex; gap:6px; align-items:center; cursor:pointer; }
+  .mono { font-family: "JetBrains Mono", Consolas, monospace; font-size:12.5px; }
+  .dim { color:var(--dim); }
+  .hint { font-size:12px; color:var(--dim); margin:-2px 0 6px 160px; }
+  .hint.w { color:#f3c27a; } .hint.e { color:#ffb3b8; }
+  .row2 { display:grid; grid-template-columns: 1fr 90px; gap:8px; }
+  .dot { width:10px; height:10px; border-radius:50%; display:inline-block; flex:none; }
+  .chips { display:flex; gap:6px; flex-wrap:wrap; }
+  .chip { padding:2px 10px; border-radius:12px; border:1px solid #4e5157; cursor:pointer; display:inline-flex; gap:6px; align-items:center; font-size:12.5px; }
+  .chip.on { border-color:#6ea8fe; background:#1f2b3d; }
+  .seg { display:inline-flex; border:1px solid #4e5157; border-radius:4px; overflow:hidden; }
+  .seg span { padding:3px 10px; cursor:pointer; border-right:1px solid #4e5157; }
+  .seg span:last-child { border:none; } .seg span.on { background:#3574f0; }
+  .secret { display:flex; gap:8px; align-items:center; }
+  .stored { display:flex; gap:8px; align-items:center; padding:3px 8px; border:1px dashed #4e5157; border-radius:4px; color:var(--dim); flex:1; }
+  .step { display:grid; grid-template-columns: 20px 1fr auto; gap:8px; padding:5px 0; align-items:baseline; }
+  .step .t { font-weight:600; } .step .d { grid-column:2 / -1; font-size:12px; color:var(--dim); }
+  .step.err .d { color:#ffb3b8; } .step.warn .d { color:#f3c27a; } .step.skip { color:var(--dim); } .step.skip .t { font-weight:400; }
+  .fixes { grid-column:2 / -1; display:flex; gap:6px; flex-wrap:wrap; margin-top:3px; }
+  .fp { background:#1e1f22; border:1px solid #8a5e1d; border-radius:6px; padding:8px 10px; margin:6px 0; }
+  .fp code { display:block; word-break:break-all; color:#f3c27a; margin:4px 0; }
+  .fp.bad { border-color:#8a2f37; } .fp.bad code { color:#ffb3b8; }
+  .sec { border-top:1px solid var(--line); padding:10px 0 4px; }
+  .sec h4 { margin:0 0 4px; font-size:13px; display:flex; gap:8px; align-items:center; }
+  .sum { display:flex; gap:8px; align-items:center; padding:7px 12px; border-radius:6px; font-size:13px; }
+  .sum.ok { background:#1f3322; color:#a8e0ab; } .sum.err { background:#3a1d20; color:#ffb3b8; } .sum.warn { background:#3a2b14; color:#f3c27a; } .sum.run { background:#1f2b3d; color:#b8d4ff; }
+  .prodframe { box-shadow: inset 0 0 0 2px var(--prod); }
+  /* modal */
+  .modalbg { position:fixed; inset:0; background:rgba(0,0,0,.55); display:flex; align-items:center; justify-content:center; z-index:50; }
+  .modal { background:var(--panel); border:1px solid var(--line); border-radius:8px; width:min(480px, 92vw); padding:16px 18px; box-shadow:0 10px 40px rgba(0,0,0,.5); }
+  .modal h3 { margin:0 0 8px; font-size:15px; }
+  .modal .act { display:flex; justify-content:flex-end; gap:8px; margin-top:14px; }
+  /* switcher */
+  .sw { position:fixed; bottom:14px; left:50%; transform:translateX(-50%); background:#fff; color:#111; border-radius:999px; padding:5px 8px; display:flex; gap:8px; align-items:center; box-shadow:0 6px 24px rgba(0,0,0,.6); z-index:100; font-size:12.5px; }
+  .sw button { background:#111; color:#fff; border:none; border-radius:999px; padding:3px 10px; }
+  .sw select { font:inherit; border-radius:6px; width:auto; background:#fff; color:#111; border:1px solid #bbb; }
+  .sw label { display:flex; gap:4px; align-items:center; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<div class="sw" id="sw"></div>
+<script>
+// ---------- veri ----------
+const ENVS = { "": ["yok", "#6b6f76"], local:["local","#6b6f76"], dev:["dev","#3d9a50"], test:["test","#2f8fb0"], staging:["staging","#c98a1b"], prod:["prod","#e5484d"] };
+const FOLDERS = ["(kök)", "Müşteri A", "Müşteri A / Raporlama", "Kişisel"];
+const SSLMODES = ["disable", "prefer", "require", "verify-ca", "verify-full"];
+
+const baseForm = () => ({
+  name:"", folder:"(kök)", host:"", port:5432, user:"", db:"postgres", pw:"", pwStored:false, pwSave:true,
+  env:"", color:null, ssl:"prefer", ca:"", cert:"", key:"",
+  ssh:false, sshHost:"", sshPort:22, sshUser:"", sshAuth:"key", keyPath:"~/.ssh/id_ed25519", agentPath:"", sshPw:"", sshStored:false, sshSave:true, forgetHost:false,
+});
+const filled = o => Object.assign(baseForm(), { name:"Sipariş API (staging)", folder:"Müşteri A", host:"db.internal", user:"app_user", db:"siparis", pw:"s3cret", env:"staging" }, o);
+
+// adımlar: id, başlık; senaryo her adım için sonuç verir
+// sonuç: ["ok"|"warn"|"err", ayrıntı, fix?]   fix: dizi [etiket, eylem]
+const SCENARIOS = {
+  yeni:      { label:"Yeni bağlantı (boş)", form: baseForm, result: {} , empty:true },
+  basarili:  { label:"Başarılı (SSH + verify-full)", form: () => filled({ env:"prod", name:"Sipariş (prod)", ssl:"verify-full", ssh:true, sshHost:"bastion.example.com", sshUser:"deploy" }),
+    result: { ssh:["ok","bastion.example.com:22 · deploy · anahtar ~/.ssh/id_ed25519 · host anahtarı ~/.ssh/known_hosts'ta"], tcp:["ok","tünel üzerinden db.internal:5432"], tls:["ok","verify-full · TLSv1.3 · CN=db.internal, CA zinciri geçerli"], auth:["ok","app_user · scram-sha-256"], list:["ok","PostgreSQL 16.4 · 7 veritabanı (siparis, siparis_arsiv, raporlama, …)"] } },
+  prefer:    { label:"prefer: SSL yok, düz bağlandı", form: () => filled({ host:"10.0.4.12", env:"dev", name:"Geliştirme" }),
+    result: { tcp:["ok","10.0.4.12:5432"], tls:["warn","Sunucu SSL desteklemiyor; şifresiz bağlandı (prefer). Trafik düz metin.", [["require yap", "ssl=require"]]], auth:["ok","app_user · md5"], list:["ok","PostgreSQL 14.11 · 3 veritabanı"] } },
+  hostbilinmeyen: { label:"SSH host anahtarı bilinmiyor", form: () => filled({ ssh:true, sshHost:"bastion.example.com", sshUser:"deploy" }),
+    result: { ssh:["fp","bastion.example.com:22 ilk kez görülüyor."] }, after: "basarili" },
+  uyusmazlik: { label:"SSH host anahtarı uyuşmuyor", form: () => filled({ ssh:true, sshHost:"bastion.example.com", sshUser:"deploy" }),
+    result: { ssh:["fpbad","bastion.example.com:22 kayıtlı anahtarla UYUŞMUYOR. Bağlantı reddedildi."] } },
+  sshauth:   { label:"SSH kimlik doğrulama hatası", form: () => filled({ ssh:true, sshHost:"bastion.example.com", sshUser:"deploy", sshAuth:"agent" }),
+    result: { ssh:["err","agent (\\\\.\\pipe\\openssh-ssh-agent): agent'ta anahtar yok veya sunucu hiçbirini kabul etmedi (All configured authentication methods failed)", [["Pageant pipe'ı gir","sshAuth=agent"],["Anahtar dosyasına geç","sshAuth=key"]]] } },
+  ulasilamaz:{ label:"Sunucuya ulaşılamıyor", form: () => filled({ host:"db.internal", port:5433 }),
+    result: { tcp:["err","db.internal:5433 · ECONNREFUSED (bağlantı reddedildi). Port veya host yanlış olabilir; ya da sunucu yalnızca tünelden erişilebilir.", [["Port'u düzelt","focus=port"],["SSH tüneli ekle","ssh=on"]]] } },
+  tls:       { label:"TLS doğrulama hatası (verify-full)", form: () => filled({ env:"prod", ssl:"verify-full", host:"siparis.cluster-x.eu-west-1.rds.amazonaws.com" }),
+    result: { tcp:["ok","siparis.cluster-x…:5432"], tls:["err","Sertifika zinciri doğrulanamadı: self-signed certificate in certificate chain (SELF_SIGNED_CERT_IN_CHAIN). CA dosyası verilmedi; sistem CA'ları kullanıldı.", [["CA dosyası seç","focus=ca"],["verify-ca dene","ssl=verify-ca"]]] } },
+  auth:      { label:"Şifre yanlış (28P01)", form: () => filled({}),
+    result: { tcp:["ok","db.internal:5432"], tls:["ok","prefer · TLSv1.3 (doğrulama yok)"], auth:["err","28P01 · password authentication failed for user \"app_user\"", [["Şifreyi yeniden gir","focus=pw"]]] } },
+  keychain:  { label:"Keychain erişimi reddedildi", form: () => filled({ pw:"", pwStored:true }),
+    result: { secrets:["err","Keychain erişimi reddedildi (kullanıcı \"Deny\" seçti). Kayıtlı şifre okunamadı; bu \"şifre yok\" ile aynı değil.", [["Tekrar dene","retry"],["Bu sefer elle gir","focus=pw"]]] } },
+  nodb:      { label:"Başlangıç veritabanı yok (3D000)", form: () => filled({ db:"siparisler" }),
+    result: { tcp:["ok","db.internal:5432"], tls:["ok","prefer · TLSv1.3"], auth:["err","3D000 · database \"siparisler\" does not exist. (Başlangıç veritabanı yalnızca listeleme için; postgres deneyebilirsin.)", [["postgres kullan","db=postgres"]]] } },
+};
+
+const STEPS = [
+  ["secrets","Sırlar", f => (f.pwStored && !f.pw) || (f.ssh && f.sshStored && !f.sshPw) ? "keychain'den okunur" : null],
+  ["ssh","SSH tüneli", f => f.ssh ? `${f.sshHost||"?"}:${f.sshPort} · ${f.sshUser||"?"} · ${f.sshAuth}` : null],
+  ["tcp","Sunucuya ulaşma", f => `${f.host||"?"}:${f.port}${f.ssh?" (tünelden)":""}`],
+  ["tls","TLS", f => f.ssl],
+  ["auth","Kimlik doğrulama", f => `${f.user||"?"} → ${f.db}`],
+  ["list","Veritabanlarını listeleme", f => "SELECT datname FROM pg_database"],
+];
+const ICON = { ok:"✓", warn:"⚠", err:"✗", fp:"?", fpbad:"✗", run:"●", wait:"○", skip:"–" };
+const COLOR = { ok:"var(--ok)", warn:"var(--warn)", err:"var(--err)", fp:"var(--warn)", fpbad:"var(--err)", run:"var(--run)" };
+
+// ---------- durum ----------
+const q = new URLSearchParams(location.search);
+const VARIANTS = { A:"Sekmeli diyalog + tek satır sonuç", B:"Tek sayfa + sağda test hattı", C:"Kısa form, sonuç bölüm içinde" };
+let variant = VARIANTS[q.get("variant")] ? q.get("variant") : "A";
+let scenarioKey = SCENARIOS[q.get("senaryo")] ? q.get("senaryo") : "basarili";
+let F, test, tabA, openC, modal, detailsA;
+function reset() { F = SCENARIOS[scenarioKey].form(); test = null; tabA = "Genel"; openC = {}; modal = null; detailsA = false; }
+reset();
+function setUrl() { const p = new URLSearchParams({ variant, senaryo:scenarioKey }); history.replaceState(null, "", "?" + p); }
+
+const envColor = () => F.color || ENVS[F.env][1];
+const isProd = () => F.env === "prod";
+const activeSteps = () => STEPS.filter(([id,,d]) => d(F) !== null);
+
+// ---------- test akışı ----------
+function runTest(scn) {
+  const res = SCENARIOS[scn || scenarioKey].result;
+  const steps = activeSteps();
+  test = { steps: steps.map(([id]) => ({ id, st:"wait", d:"" })), done:false };
+  let i = 0;
+  const tick = () => {
+    if (i >= steps.length) { test.done = true; render(); return; }
+    const s = test.steps[i]; s.st = "run"; render();
+    setTimeout(() => {
+      const r = res[s.id] || ["ok", s.id === "secrets" ? "şifre keychain'den okundu" : "tamam"];
+      s.st = r[0]; s.d = r[1]; s.fix = r[2];
+      if (["err","fp","fpbad"].includes(r[0])) { test.steps.slice(i+1).forEach(x => { x.st = "skip"; x.d = "çalıştırılmadı"; }); test.done = true; test.failAt = s.id; if (variant==="A") tabA = tabFor(s.id); if (variant==="C") openC[secFor(s.id)] = true; render(); return; }
+      i++; tick();
+    }, 350 + Math.random()*300);
+  };
+  tick();
+}
+const tabFor = id => ({ ssh:"SSH", tls:"SSL", secrets:"Genel", tcp:"Genel", auth:"Genel", list:"Genel" })[id];
+const secFor = id => ({ ssh:"ssh", tls:"ssl" })[id] || "genel";
+function summary() {
+  if (!test) return null;
+  if (!test.done) { const c = test.steps.find(s => s.st==="run"); return ["run", `Test ediliyor: ${STEPS.find(x=>x[0]===c?.id)?.[1]||""}…`]; }
+  const bad = test.steps.find(s => ["err","fp","fpbad"].includes(s.st));
+  if (bad) return [bad.st==="fp"?"warn":"err", `${STEPS.find(x=>x[0]===bad.id)[1]}: ${bad.st==="fp"?"host anahtarı onay bekliyor":"başarısız"}`];
+  const list = test.steps.find(s => s.id==="list");
+  const warn = test.steps.find(s => s.st==="warn");
+  return [warn?"warn":"ok", `${warn?"Bağlandı, uyarıyla":"Bağlantı başarılı"} · ${list.d}`];
+}
+function fix(a) {
+  if (a === "retry") return runTest();
+  const [k, v] = a.split("=");
+  if (k === "focus") { const el = document.querySelector(`[data-k="${v}"]`); if (variant==="A") { tabA = ({ca:"SSL"})[v]||"Genel"; render(); } if (variant==="C" && v==="ca") { openC.ssl = true; render(); } setTimeout(()=>{ const e=document.querySelector(`[data-k="${v}"]`); e?.focus(); e?.select?.(); }, 0); return; }
+  if (k === "ssh") { F.ssh = true; if (variant==="A") tabA="SSH"; if (variant==="C") openC.ssh = true; test = null; return render(); }
+  F[k] = v; test = null; render();
+}
+function trustHost() { runTest(SCENARIOS[scenarioKey].after); }
+function forgetHost() { F.forgetHost = true; scenarioKey = "hostbilinmeyen"; test = null; setUrl(); render(); }
+
+// ---------- ortak parçalar ----------
+const esc = s => String(s ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/"/g,"&quot;");
+function inp(k, opt = {}) {
+  const bad = test?.failAt && opt.badOn?.includes(test.failAt);
+  return `<input data-k="${k}" class="${bad?"bad":""} ${opt.mono?"mono":""}" type="${opt.type||"text"}" value="${esc(F[k])}" placeholder="${opt.ph||""}" oninput="F['${k}']=this.type==='number'?+this.value:this.value"${k==='host'?` onpaste="setTimeout(()=>/^postgres/i.test(this.value)&&applyUrl(this),0)"`:''}>`;
+}
+const field = (lbl, html, hint) => `<label class="f"><span>${lbl}</span><span>${html}</span></label>${hint||""}`;
+function sel(k, opts, onch = "") { return `<select data-k="${k}" onchange="F['${k}']=this.value;${onch}render()">${opts.map(o=>`<option ${o===F[k]?"selected":""}>${o}</option>`).join("")}</select>`; }
+function secret(pwK, storedK, saveK, lbl, badOn) {
+  const box = F[storedK] && !F[pwK]
+    ? `<span class="stored">🔑 keychain'de kayıtlı <span style="flex:1"></span><button class="ghost" onclick="F['${storedK}']=false;render()">değiştir</button></span>`
+    : inp(pwK, { type:"password", ph: F[saveK] ? "" : "kaydedilmeyecek", badOn });
+  return field(lbl, `<span class="secret">${box}</span>`) +
+    `<div class="hint"><label class="chk"><input type="checkbox" ${F[saveK]?"checked":""} onchange="F['${saveK}']=this.checked;render()"> Keychain'e kaydet</label>
+     ${F[saveK] ? "" : `<span class="hint w" style="margin:0">Kaydedilmez: Tezgah her açılışta ilk bağlanmada sorar, yalnızca bellekte tutar.</span>`}</div>`;
+}
+function envPicker() {
+  return `<div class="chips">${Object.entries(ENVS).map(([k,[n,c]])=>`<span class="chip ${F.env===k?"on":""}" onclick="F.env='${k}';F.color=null;render()"><span class="dot" style="background:${c}"></span>${n}</span>`).join("")}
+    <label class="chip" title="rengi değiştir">renk <input type="color" value="${envColor()}" onchange="F.color=this.value;render()" style="width:22px;height:16px;border:none;padding:0;background:none"></label></div>`;
+}
+function sslHint() {
+  if (isProd() && F.ssl !== "verify-full") return `<div class="hint w">prod için <b>verify-full</b> önerilir. <button class="ghost" onclick="F.ssl='verify-full';render()">Uygula</button></div>`;
+  return { disable:`<div class="hint">Şifresiz.</div>`, prefer:`<div class="hint">SSL dener; sunucu desteklemezse şifresiz bağlanır. Sertifika doğrulanmaz.</div>`, require:`<div class="hint">SSL zorunlu; sertifika doğrulanmaz.</div>`, "verify-ca":`<div class="hint">CA zinciri doğrulanır; host adı doğrulanmaz.</div>`, "verify-full":`<div class="hint">CA zinciri ve host adı doğrulanır${F.ssh?" (tünelde gerçek host adı: "+esc(F.host)+")":""}.</div>` }[F.ssl];
+}
+// ---------- URL'den doldurma: postgres[ql]://kullanıcı:şifre@host:port/db?sslmode=...&sslrootcert=... ----------
+let urlMsg = null;
+function parsePgUrl(s) {
+  s = s.trim();
+  if (!/^postgres(ql)?:\/\//i.test(s)) return { err:"postgres:// veya postgresql:// ile başlamalı" };
+  if (/@[^/?]*,/.test(s)) return { err:"Çok host'lu URL desteklenmiyor" };
+  let u; try { u = new URL(s.replace(/^postgres(ql)?:/i, "http:")); } catch { return { err:"URL ayrıştırılamadı" }; }
+  const out = {}, p = u.searchParams;
+  if (u.hostname) out.host = decodeURIComponent(u.hostname.replace(/^\[|\]$/g, ""));
+  if (u.port) out.port = +u.port;
+  if (u.username) out.user = decodeURIComponent(u.username);
+  if (u.password) out.pw = decodeURIComponent(u.password);
+  if (u.pathname.length > 1) out.db = decodeURIComponent(u.pathname.slice(1));
+  const MAP = { sslmode:"ssl", sslrootcert:"ca", sslcert:"cert", sslkey:"key", host:"host", port:"port", user:"user", password:"pw", dbname:"db" };
+  const ignored = [];
+  for (const [k, v] of p) { if (MAP[k]) out[MAP[k]] = k==="port" ? +v : v; else ignored.push(k); }
+  if (out.ssl && !SSLMODES.includes(out.ssl)) return { err:`Bilinmeyen sslmode: ${out.ssl}` };
+  return { out, ignored };
+}
+function applyUrl(el) {
+  const r = parsePgUrl(el.value);
+  if (r.err) { urlMsg = ["e", r.err]; return render(); }
+  Object.assign(F, r.out);
+  if (r.out.pw) F.pwStored = false;
+  if (!F.name && r.out.host) F.name = `${r.out.db || "postgres"} @ ${r.out.host}`;
+  test = null;
+  const names = { host:"host", port:"port", user:"kullanıcı", pw:"şifre", db:"veritabanı", ssl:"sslmode", ca:"CA", cert:"sertifika", key:"anahtar" };
+  urlMsg = ["ok", `Dolduruldu: ${Object.keys(r.out).map(k=>names[k]).join(", ")}.` + (r.out.pw ? " Şifre URL'den alındı; Kaydet'te keychain'e yazılır, URL saklanmaz." : "") + (r.ignored.length ? ` Yok sayıldı: ${r.ignored.join(", ")}.` : "")];
+  el.value = ""; render();
+}
+function toUrl() {
+  const q = new URLSearchParams(); if (F.ssl !== "prefer") q.set("sslmode", F.ssl); if (F.ca) q.set("sslrootcert", F.ca);
+  return `postgresql://${encodeURIComponent(F.user)}@${F.host}${F.port!==5432?":"+F.port:""}/${encodeURIComponent(F.db)}${q.toString()?"?"+q:""}`;
+}
+const URLROW = () => field("URL", `<span class="secret"><input data-k="url" class="mono" type="text" placeholder="postgresql://kullanıcı:şifre@host:5432/veritabanı?sslmode=require" onpaste="setTimeout(()=>applyUrl(this),0)" onkeydown="if(event.key==='Enter')applyUrl(this)"><button onclick="applyUrl(this.previousElementSibling)">Doldur</button></span>`,
+  `<div class="hint ${urlMsg?.[0]==="e"?"e":""}">${urlMsg ? esc(urlMsg[1]) : "Yapıştırınca alanlar doldurulur; sonra tek tek düzenlenebilir."}${F.host ? ` <button class="ghost" title="şifresiz" onclick="navigator.clipboard?.writeText(toUrl())">URL'yi kopyala (şifresiz)</button>` : ""}</div>`);
+const GENEL = () => URLROW() + field("Ad", inp("name", { ph:"ör. Sipariş (prod)" })) +
+  field("Klasör", sel("folder", FOLDERS)) +
+  field("Host / port", `<span class="row2">${inp("host", { ph:"localhost", badOn:["tcp"] })}${inp("port", { type:"number", badOn:["tcp"] })}</span>`) +
+  field("Kullanıcı", inp("user", { ph:"postgres", badOn:["auth"] })) +
+  secret("pw","pwStored","pwSave","Şifre", ["auth","secrets"]) +
+  field("Başlangıç veritabanı", inp("db", { badOn:[] }), `<div class="hint">Yalnızca bağlanıp <span class="mono">pg_database</span>'i listelemek için; görünür veritabanları ağaçta seçilir.</div>`);
+const ORTAM = () => field("Ortam etiketi", envPicker(), isProd() ? `<div class="hint w">prod: kırmızı çerçeve, varsayılan salt okunur.</div>` : "");
+const SSL = () => field("sslmode", sel("ssl", SSLMODES), sslHint()) +
+  (["verify-ca","verify-full","require"].includes(F.ssl) ? field("CA dosyası", inp("ca", { ph:"boşsa sistem CA'ları", mono:true })) : "") +
+  field("İstemci sertifikası", inp("cert", { ph:"opsiyonel", mono:true })) + field("İstemci anahtarı", inp("key", { ph:"opsiyonel", mono:true }));
+function SSH() {
+  const on = `<label class="chk"><input type="checkbox" ${F.ssh?"checked":""} onchange="F.ssh=this.checked;test=null;render()"> SSH tüneli üzerinden bağlan</label>`;
+  if (!F.ssh) return field("", on);
+  const auth = `<span class="seg">${["password","key","agent"].map(a=>`<span class="${F.sshAuth===a?"on":""}" onclick="F.sshAuth='${a}';render()">${({password:"şifre",key:"anahtar dosyası",agent:"agent"})[a]}</span>`).join("")}</span>`;
+  return field("", on) +
+    field("SSH host / port", `<span class="row2">${inp("sshHost", { badOn:["ssh"] })}${inp("sshPort", { type:"number" })}</span>`) +
+    field("SSH kullanıcı", inp("sshUser")) + field("Kimlik doğrulama", auth) +
+    (F.sshAuth === "key" ? field("Özel anahtar", inp("keyPath", { mono:true }), `<div class="hint">Dosya yerinde kalır; yalnızca yolu saklanır.</div>`) + secret("sshPw","sshStored","sshSave","Passphrase") : "") +
+    (F.sshAuth === "password" ? secret("sshPw","sshStored","sshSave","SSH şifresi") : "") +
+    (F.sshAuth === "agent" ? field("Agent yolu", inp("agentPath", { mono:true, ph:"boş: \\\\.\\pipe\\openssh-ssh-agent / $SSH_AUTH_SOCK" }), `<div class="hint">Pageant için değişken pipe adını buraya gir.</div>`) : "") +
+    field("Host anahtarı", F.forgetHost ? `<span class="dim">kayıt yok; ilk bağlanmada parmak izi sorulacak</span>` : `<span class="dim">Tezgah'ta kayıtlı (ED25519)</span> <button class="ghost" onclick="forgetHost()">kayıtlı host anahtarını unut</button>`);
+}
+function fpBox(s) {
+  if (s.st === "fp") return `<div class="fp"><b>Bilinmeyen host anahtarı</b> · bastion.example.com:22<div class="dim" style="font-size:12px">ED25519 · SHA256 parmak izi:</div><code class="mono">SHA256:p2QAMXNIC1TJYWeIOttrVc98/R1BUFWu3/LiyKgUfQM</code>
+    <div class="dim" style="font-size:12px">Sunucu yöneticisinden aldığın parmak iziyle karşılaştır. Onaylarsan Tezgah'ın known_hosts dosyasına yazılır.</div>
+    <div style="display:flex;gap:8px;margin-top:6px"><button class="primary" onclick="trustHost()">Güven ve tekrar dene</button><button onclick="test=null;render()">Vazgeç</button></div></div>`;
+  if (s.st === "fpbad") return `<div class="fp bad"><b>Host anahtarı değişmiş</b> · bastion.example.com:22<div class="dim" style="font-size:12px">Kayıtlı:</div><code class="mono">SHA256:p2QAMXNIC1TJYWeIOttrVc98/R1BUFWu3/LiyKgUfQM</code><div class="dim" style="font-size:12px">Sunucunun sunduğu:</div><code class="mono">SHA256:Xk9f0aQz1pL7yB2mV3nR8tC4wE5uH6iJ7oK8lM9nA0s</code>
+    <div style="font-size:12px;color:#ffb3b8">Ortadaki adam saldırısı olabilir. Devam seçeneği yok. Sunucu gerçekten yeniden kurulduysa kayıtlı anahtarı unut.</div>
+    <div style="margin-top:6px"><button onclick="forgetHost()">Kayıtlı host anahtarını unut</button></div></div>`;
+  return "";
+}
+function stepRow(s) {
+  const [id, t, d] = STEPS.find(x => x[0] === s.id);
+  return `<div class="step ${s.st==="err"||s.st==="fpbad"?"err":s.st==="warn"||s.st==="fp"?"warn":s.st==="skip"?"skip":""}">
+    <span style="color:${COLOR[s.st]||"var(--dim)"}">${ICON[s.st]}</span><span class="t">${t}</span><span class="dim" style="font-size:11.5px">${s.st==="ok"||s.st==="warn"?Math.round(40+Math.random()*200)+" ms":""}</span>
+    <span class="d">${esc(s.d || d(F))}</span>
+    ${s.fix ? `<span class="fixes">${s.fix.map(([l,a])=>`<button onclick="fix('${a}')">${l}</button>`).join("")}</span>` : ""}
+    ${s.st==="fp"||s.st==="fpbad" ? `<span style="grid-column:2/-1">${fpBox(s)}</span>` : ""}
+  </div>`;
+}
+const plannedRows = () => activeSteps().map(([id,t,d]) => `<div class="step skip"><span>○</span><span class="t">${t}</span><span></span><span class="d">${esc(d(F))}</span></div>`).join("");
+const sumBar = (extra="") => { const s = summary(); return s ? `<div class="sum ${s[0]}"><b>${ICON[s[0]==="run"?"run":s[0]]}</b><span style="flex:1">${esc(s[1])}</span>${extra}</div>` : ""; };
+const testBtn = () => `<button onclick="runTest()" ${test&&!test.done?"disabled":""}>${test?.done?"Tekrar test et":"Bağlantıyı test et"}</button>`;
+const saveBtns = () => `<button>İptal</button><button class="primary">Kaydet</button>`;
+const header = (t) => `<div style="display:flex;align-items:center;gap:10px"><span class="dot" style="background:${envColor()};width:12px;height:12px"></span><b style="font-size:15px">${esc(F.name||t)}</b>${F.env?`<span style="background:${envColor()};color:#fff;border-radius:10px;padding:0 8px;font-size:11.5px;font-weight:600">${ENVS[F.env][0]}</span>`:""}</div>`;
+
+// ---------- Varyant A: IntelliJ benzeri sekmeli modal; altta tek satır sonuç, "ayrıntılar" ile adımlar ----------
+function VariantA() {
+  const tabs = ["Genel","SSL","SSH","Görünüm"];
+  const failTab = test?.failAt && tabFor(test.failAt);
+  const body = { Genel:GENEL, SSL, SSH, "Görünüm":ORTAM }[tabA]();
+  const fp = test?.steps.find(s => s.st==="fp"||s.st==="fpbad");
+  return `<div class="modalbg" style="background:#151618"><div class="modal ${isProd()?"prodframe":""}" style="width:min(640px,94vw);padding:0">
+    <div style="padding:12px 16px">${header(SCENARIOS[scenarioKey].empty?"Yeni bağlantı":"Bağlantı")}</div>
+    <div style="display:flex;gap:2px;border-bottom:1px solid var(--line);padding:0 12px">${tabs.map(t=>`<div onclick="tabA='${t}';render()" style="padding:6px 12px;cursor:pointer;border-bottom:2px solid ${t===tabA?"#3574f0":"transparent"};color:${t===tabA?"var(--fg)":"var(--dim)"}">${t}${t===failTab?` <span style="color:var(--err)">●</span>`:""}${t==="SSH"&&F.ssh?` <span class="dim">✓</span>`:""}</div>`).join("")}</div>
+    <div style="padding:8px 18px 12px;min-height:330px">${body}${fp && tabA==="SSH" ? fpBox(fp) : ""}</div>
+    ${test ? `<div style="padding:0 16px 8px">${sumBar(test.done?`<button class="ghost" onclick="detailsA=!detailsA;render()">${detailsA?"gizle":"ayrıntılar"}</button>`:"")}
+      ${detailsA || (fp && tabA!=="SSH") || (test.done && test.failAt) ? `<div style="padding:4px 10px">${test.steps.map(stepRow).join("")}</div>` : ""}</div>` : ""}
+    <div style="display:flex;gap:8px;padding:10px 16px;border-top:1px solid var(--line);background:var(--panel2);border-radius:0 0 8px 8px">${testBtn()}<span style="flex:1"></span>${saveBtns()}</div>
+  </div></div>`;
+}
+
+// ---------- Varyant B: tam sayfa form, bölümler alt alta; sağda her zaman görünen test hattı ----------
+function VariantB() {
+  const nav = ["Genel","Ortam","SSL","SSH"];
+  return `<div style="display:flex;height:100vh" class="${isProd()?"prodframe":""}">
+    <div style="width:150px;background:var(--panel2);border-right:1px solid var(--line);padding:14px 10px">${nav.map(n=>`<div style="padding:4px 8px;color:var(--dim);cursor:pointer" onclick="document.getElementById('b-${n}').scrollIntoView({behavior:'smooth'})">${n}</div>`).join("")}</div>
+    <div style="flex:1;overflow:auto;padding:16px 24px 80px">
+      ${header(SCENARIOS[scenarioKey].empty?"Yeni bağlantı":"Bağlantı")}
+      <div class="sec" id="b-Genel"><h4>Genel</h4>${GENEL()}</div>
+      <div class="sec" id="b-Ortam"><h4>Ortam etiketi</h4>${ORTAM()}</div>
+      <div class="sec" id="b-SSL"><h4>SSL/TLS</h4>${SSL()}</div>
+      <div class="sec" id="b-SSH"><h4>SSH tüneli</h4>${SSH()}</div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;border-top:1px solid var(--line);padding-top:12px">${saveBtns()}</div>
+    </div>
+    <div style="width:380px;border-left:1px solid var(--line);background:var(--panel2);padding:14px;overflow:auto">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px"><b>Bağlantı testi</b><span style="flex:1"></span>${testBtn()}</div>
+      <div class="dim" style="font-size:12px;margin-bottom:6px">${test?"":"Formdaki (kaydedilmemiş) değerlerle şu adımlar sınanır:"}</div>
+      ${test ? sumBar() : ""}
+      <div style="margin-top:6px">${test ? test.steps.map(stepRow).join("") : plannedRows()}</div>
+      ${test?.done && !test.failAt ? `<div class="dim" style="font-size:12px;margin-top:10px">Test hiçbir şey kaydetmez; şifre Kaydet'e basınca keychain'e yazılır.</div>` : ""}
+    </div>
+  </div>`;
+}
+
+// ---------- Varyant C: kısa tek sütun; SSL/SSH katlanır özetler; her test adımının sonucu ait olduğu bölümün içinde ----------
+function VariantC() {
+  const st = id => test?.steps.find(s => s.id === id);
+  const inline = ids => ids.map(st).filter(Boolean).filter(s => s.st !== "wait").map(stepRow).join("");
+  const badge = ids => { const ss = ids.map(st).filter(Boolean); if (!ss.length) return ""; const w = ss.find(s=>["err","fpbad"].includes(s.st))||ss.find(s=>["fp","warn"].includes(s.st))||ss.find(s=>s.st==="run")||ss.find(s=>s.st==="wait"||s.st==="skip")||ss[0]; return `<span style="color:${COLOR[w.st]||"var(--dim)"}">${ICON[w.st]}</span>`; };
+  const disc = (k, title, summaryTxt, body, ids) => `<div class="sec"><h4 style="cursor:pointer" onclick="openC['${k}']=!openC['${k}'];render()">${openC[k]?"▾":"▸"} ${title} ${badge(ids)} <span class="dim" style="font-weight:400">${openC[k]?"":summaryTxt}</span></h4>
+      ${openC[k] ? body : ""}${inline(ids).length && (openC[k] || ids.some(i=>["err","fp","fpbad","warn"].includes(st(i)?.st))) ? `<div style="margin-left:16px;padding-left:10px;border-left:2px solid var(--line)">${inline(ids)}</div>` : ""}</div>`;
+  return `<div style="max-width:620px;margin:24px auto 90px;background:var(--panel);border-radius:8px;padding:16px 20px;border:1px solid var(--line)" class="${isProd()?"prodframe":""}">
+    ${header(SCENARIOS[scenarioKey].empty?"Yeni bağlantı":"Bağlantı")}
+    <div style="margin:10px 0">${test ? sumBar() : ""}</div>
+    <div class="sec" style="border:none"><h4>Bağlantı ${badge(["secrets","tcp","auth","list"])}</h4>${GENEL()}${ORTAM()}
+      ${inline(["secrets","tcp","auth","list"]) ? `<div style="margin-left:16px;padding-left:10px;border-left:2px solid var(--line)">${inline(["secrets","tcp","auth","list"])}</div>` : ""}</div>
+    ${disc("ssl","SSL/TLS", F.ssl + (isProd()&&F.ssl!=="verify-full"?" · ⚠ prod'da verify-full önerilir":""), SSL(), ["tls"])}
+    ${disc("ssh","SSH tüneli", F.ssh ? `${F.sshUser}@${F.sshHost} · ${F.sshAuth}` : "kapalı", SSH(), ["ssh"])}
+    <div style="display:flex;gap:8px;border-top:1px solid var(--line);padding-top:12px;margin-top:8px">${testBtn()}<span style="flex:1"></span>${saveBtns()}</div>
+  </div>`;
+}
+
+// ---------- oturumluk şifre istemi (bağlantı ağaçtan açılırken; formun parçası değil) ----------
+function promptModal() {
+  if (modal !== "pw") return "";
+  return `<div class="modalbg"><div class="modal">
+    <h3>Şifre gerekli</h3>
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px">${header("")}<span class="dim mono">${esc(F.user||"app_user")}@${esc(F.host||"db.internal")}</span></div>
+    <input type="password" autofocus placeholder="şifre">
+    <div class="dim" style="font-size:12px;margin-top:8px">Bu bağlantının şifresi kaydedilmiyor. Tezgah kapanana kadar bellekte tutulur, diske yazılmaz.</div>
+    <label class="chk" style="margin-top:6px;font-size:12.5px"><input type="checkbox"> Keychain'e kaydet (bağlantı ayarını değiştirir)</label>
+    <div class="act"><button onclick="modal=null;render()">İptal</button><button class="primary" onclick="modal=null;render()">Bağlan</button></div>
+  </div></div>`;
+}
+
+// ---------- çizim ----------
+function render() {
+  const ae = document.activeElement?.dataset?.k;
+  document.title = `Bağlantı formu — ${variant}`;
+  document.getElementById("root").innerHTML = ({A:VariantA, B:VariantB, C:VariantC})[variant]() + promptModal();
+  if (ae) document.querySelector(`[data-k="${ae}"]`)?.focus();
+  document.getElementById("sw").innerHTML = `
+    <button onclick="cyc(-1)">←</button><b>${variant}</b> <span>(${VARIANTS[variant]})</span><button onclick="cyc(1)">→</button>
+    <label>senaryo <select onchange="go(this.value)">${Object.entries(SCENARIOS).map(([k,v])=>`<option value="${k}" ${k===scenarioKey?"selected":""}>${v.label}</option>`).join("")}</select></label>
+    <button onclick="modal='pw';render()">şifre istemi</button>`;
+}
+function cyc(d) { const k = Object.keys(VARIANTS); variant = k[(k.indexOf(variant)+d+k.length)%k.length]; setUrl(); render(); }
+function go(k) { scenarioKey = k; urlMsg = null; reset(); setUrl(); render(); }
+addEventListener("keydown", e => {
+  if (e.target.closest("input,textarea,select,[contenteditable]")) return;
+  if (e.key === "ArrowLeft") cyc(-1); if (e.key === "ArrowRight") cyc(1);
+});
+setUrl(); render();
+</script>
+</body>
+</html>
