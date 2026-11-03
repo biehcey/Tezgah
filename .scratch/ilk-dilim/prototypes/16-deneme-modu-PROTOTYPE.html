@@ -1,0 +1,300 @@
+<!doctype html>
+<!--
+  PROTOTYPE — atılabilir. Ticket: .scratch/ilk-dilim/issues/16-deneme-modu.md
+  Soru: Deneme modunda (sonu her zaman rollback) kullanıcıya "değişiklikler" olarak ne gösterilir?
+  Plan: Aynı sahte çalıştırma log ekranının 3 yapısal varyantı, ?variant=A|B|C ile; ?senaryo=basari|hata ile hata durumu.
+  Uygulama henüz yok (src/ boş) → bağımsız tek HTML dosyası; çift tıkla aç. Veri tamamen sahte.
+-->
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Deneme modu prototipi</title>
+<style>
+  :root {
+    --bg: #1e1f22; --panel: #2b2d30; --panel2: #25272a; --line: #393b40; --fg: #dfe1e5; --dim: #8c8f94;
+    --ok: #5fb865; --err: #e5534b; --warn: #e0a347; --blue: #548af7; --ins: #1f3a24; --del: #44201f; --upd: #3a3220;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  code, pre, .mono { font-family: "JetBrains Mono", Consolas, monospace; font-size: 12px; }
+  .app { display: grid; grid-template-rows: auto 1fr; height: 100vh; }
+  .toolbar { display: flex; gap: 10px; align-items: center; padding: 8px 12px; background: var(--panel); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  .pill { padding: 2px 8px; border-radius: 10px; font-size: 11px; border: 1px solid var(--line); }
+  .pill.trial { background: #2d2547; border-color: #6e5bd6; color: #c9bdff; }
+  .pill.tx { background: #20304d; border-color: var(--blue); color: #a9c4ff; }
+  .btn { background: #3a3d41; color: var(--fg); border: 1px solid var(--line); border-radius: 4px; padding: 3px 10px; cursor: pointer; }
+  .main { display: grid; grid-template-columns: minmax(280px, 38%) 1fr; min-height: 0; }
+  .editor { background: var(--panel2); border-right: 1px solid var(--line); overflow: auto; padding: 8px 0; }
+  .ln { display: grid; grid-template-columns: 36px 1fr; white-space: pre; }
+  .ln span:first-child { color: var(--dim); text-align: right; padding-right: 10px; }
+  .ln.errline { background: #4a1e1e; }
+  .ln.stmt-active { background: #2a2f3a; }
+  .kw { color: #cf8e6d; } .str { color: #6aab73; } .num { color: #2aacb8; }
+  .out { overflow: auto; padding: 12px 16px 80px; min-width: 0; }
+  .banner { padding: 8px 12px; border-radius: 6px; margin-bottom: 12px; border: 1px solid; }
+  .banner.trial { background: #241f38; border-color: #6e5bd6; }
+  .banner.err { background: #3a1d1d; border-color: var(--err); }
+  .dim { color: var(--dim); }
+  .ok { color: var(--ok); } .err { color: var(--err); } .warn { color: var(--warn); }
+  table.grid { border-collapse: collapse; margin: 6px 0; font-size: 12px; }
+  table.grid th, table.grid td { border: 1px solid var(--line); padding: 2px 8px; text-align: left; white-space: nowrap; }
+  table.grid th { background: var(--panel); color: var(--dim); font-weight: 500; }
+  tr.ins td { background: var(--ins); } tr.del td { background: var(--del); text-decoration: line-through; text-decoration-color: #e5534b88; }
+  td.chg { background: var(--upd); } td.chg .old { color: var(--dim); text-decoration: line-through; margin-right: 6px; }
+  .note { position: fixed; top: 52px; right: 12px; width: 330px; background: #33302a; border: 1px solid var(--warn); border-radius: 6px; padding: 8px 10px; font-size: 12px; z-index: 5; }
+  .note h4 { margin: 0 0 4px; color: var(--warn); font-size: 12px; }
+  .note ul { margin: 0; padding-left: 16px; }
+  .note.hidden ul { display: none; }
+  /* Variant A */
+  .logrow { display: grid; grid-template-columns: 22px 46px 1fr auto auto; gap: 8px; padding: 4px 6px; border-bottom: 1px solid var(--line); align-items: baseline; }
+  .logrow:hover { background: #2a2c30; cursor: pointer; }
+  .summary-line { margin-top: 12px; padding: 8px; background: var(--panel); border-radius: 4px; }
+  /* Variant B */
+  .card { border: 1px solid var(--line); border-radius: 6px; margin-bottom: 10px; background: var(--panel2); }
+  .card > header { display: flex; gap: 10px; padding: 6px 10px; border-bottom: 1px solid var(--line); align-items: baseline; }
+  .card > .body { padding: 6px 10px; overflow-x: auto; }
+  .card.failed { border-color: var(--err); }
+  .card.skipped { opacity: .45; }
+  details > summary { cursor: pointer; color: var(--blue); }
+  /* Variant C */
+  .tabs { display: flex; gap: 0; border-bottom: 1px solid var(--line); margin-bottom: 12px; }
+  .tab { padding: 6px 14px; cursor: pointer; border-bottom: 2px solid transparent; color: var(--dim); }
+  .tab.on { color: var(--fg); border-bottom-color: #6e5bd6; }
+  .tblsec { margin-bottom: 18px; }
+  .tblsec h3 { margin: 0 0 4px; font-size: 13px; display: flex; gap: 10px; align-items: baseline; }
+  .counts span { margin-right: 10px; font-size: 12px; }
+  .schemadiff { font-family: Consolas, monospace; font-size: 12px; background: var(--panel2); padding: 6px 10px; border-left: 3px solid #6e5bd6; }
+  .schemadiff .add { color: var(--ok); }
+  /* Switcher */
+  .switcher { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); display: flex; gap: 6px; align-items: center;
+    background: #fff; color: #111; border-radius: 999px; padding: 6px 10px; box-shadow: 0 6px 24px #0009; z-index: 10; font-size: 12px; }
+  .switcher button { border: 0; background: #eee; border-radius: 999px; width: 26px; height: 26px; cursor: pointer; font-size: 14px; }
+  .switcher .lbl { min-width: 230px; text-align: center; font-weight: 600; }
+  .switcher select { font-size: 12px; }
+  @media (max-width: 760px) { .main { grid-template-columns: 1fr; } .editor { max-height: 30vh; } .note { position: static; width: auto; margin: 8px; } }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="toolbar">
+    <strong>Script</strong>
+    <span class="mono dim">dev-db · magaza</span>
+    <span class="pill tx">Transaction</span>
+    <span class="pill trial">◐ Deneme modu — sonunda her zaman rollback</span>
+    <span style="flex:1"></span>
+    <button class="btn">▶ Çalıştır</button>
+  </div>
+  <div class="main">
+    <div class="editor" id="editor"></div>
+    <div class="out" id="out"></div>
+  </div>
+</div>
+<div class="note" id="note"></div>
+<div class="switcher">
+  <button id="prev" title="Önceki (←)">‹</button>
+  <span class="lbl" id="lbl"></span>
+  <button id="next" title="Sonraki (→)">›</button>
+  <select id="scn"><option value="basari">senaryo: başarı</option><option value="hata">senaryo: 3. ifadede hata</option></select>
+</div>
+
+<script>
+// ---------- Sahte veri ----------
+const SCRIPT = [
+  "-- Kasım kampanyası hazırlığı",
+  "UPDATE musteriler",
+  "   SET segment = 'premium'",
+  " WHERE toplam_harcama > 10000;",
+  "",
+  "DELETE FROM sepet",
+  " WHERE guncellenme < now() - interval '30 days';",
+  "",
+  "INSERT INTO kampanya (kod, ad, baslangic)",
+  "VALUES ('KASIM26', 'Kasım indirimi', '2026-11-10');",
+  "",
+  "ALTER TABLE musteriler ADD COLUMN son_giris timestamptz;",
+  "",
+  "SELECT segment, count(*) FROM musteriler GROUP BY segment;",
+];
+const STMTS = [
+  { kind: "UPDATE", table: "musteriler", lines: [2,4], rows: 3, ms: 14,
+    cols: ["id","ad","toplam_harcama","segment"],
+    changes: [
+      { pk: 1042, before: [1042,"Ayşe Kaya","12 480,00","standart"], after: [1042,"Ayşe Kaya","12 480,00","premium"] },
+      { pk: 2210, before: [2210,"Mehmet Demir","31 905,50","gold"],     after: [2210,"Mehmet Demir","31 905,50","premium"] },
+      { pk: 3307, before: [3307,"Zeynep Arslan","10 020,00","standart"], after: [3307,"Zeynep Arslan","10 020,00","premium"] },
+    ] },
+  { kind: "DELETE", table: "sepet", lines: [6,7], rows: 128, ms: 41,
+    cols: ["id","musteri_id","urun_sayisi","guncellenme"],
+    changes: Array.from({length: 6}, (_, i) => ({ pk: 88100+i, before: [88100+i, 1000+i*37, (i%4)+1, `2026-09-${String(3+i*4).padStart(2,"0")} 14:0${i}`] })) },
+  { kind: "INSERT", table: "kampanya", lines: [9,10], rows: 1, ms: 3,
+    cols: ["id","kod","ad","baslangic","olusturma"],
+    changes: [ { pk: 57, after: [57,"KASIM26","Kasım indirimi","2026-11-10","2026-11-03 10:42:18"] } ],
+    error: { sqlstate: "23505", msg: 'duplicate key value violates unique constraint "kampanya_kod_key"', detail: "Key (kod)=(KASIM26) already exists.", line: 10, col: 9 } },
+  { kind: "DDL", table: "musteriler", lines: [12,12], ms: 6, tag: "ALTER TABLE",
+    schema: { add: ["son_giris timestamptz NULL"] } },
+  { kind: "SELECT", lines: [14,14], rows: 3, ms: 2, cols: ["segment","count"],
+    preview: [["standart","8 412"],["gold","1 096"],["premium","3"]] },
+];
+
+const params = new URLSearchParams(location.search);
+let variant = (params.get("variant") || "A").toUpperCase();
+let scenario = params.get("senaryo") || "basari";
+const VARIANTS = ["A","B","C"];
+const NAMES = { A: "Yalnız satır sayısı", B: "İfade başına RETURNING önizleme", C: "Tablo bazlı önce/sonra farkı" };
+
+function failIdx() { return scenario === "hata" ? 2 : -1; }
+function status(i) { const f = failIdx(); if (f < 0) return "ok"; return i < f ? "ok" : i === f ? "err" : "skip"; }
+
+// ---------- Editör ----------
+function hl(s) {
+  return s.replace(/&/g,"&amp;").replace(/</g,"&lt;")
+    .replace(/('[^']*')/g,'<span class="str">$1</span>')
+    .replace(/\b(UPDATE|SET|WHERE|DELETE|FROM|INSERT|INTO|VALUES|ALTER|TABLE|ADD|COLUMN|SELECT|GROUP|BY|interval|now)\b/g,'<span class="kw">$1</span>')
+    .replace(/(--.*)$/,'<span class="dim">$1</span>');
+}
+function renderEditor() {
+  const f = failIdx();
+  const errLine = f >= 0 ? STMTS[f].error.line : -1;
+  document.getElementById("editor").innerHTML = SCRIPT.map((l, i) =>
+    `<div class="ln ${i+1===errLine?"errline":""}" data-line="${i+1}"><span>${i+1}</span><span>${hl(l)||" "}</span></div>`).join("");
+}
+function flash(i) {
+  document.querySelectorAll(".ln").forEach(e => e.classList.remove("stmt-active"));
+  const [a,b] = STMTS[i].lines;
+  for (let n=a;n<=b;n++) document.querySelector(`.ln[data-line="${n}"]`)?.classList.add("stmt-active");
+}
+
+// ---------- Ortak parçalar ----------
+function stmtLabel(s) { return s.kind === "DDL" ? `${s.tag} ${s.table}` : s.kind === "SELECT" ? "SELECT" : `${s.kind} ${s.table}`; }
+function rowsWord(s) {
+  if (s.kind === "DDL") return "✓";
+  if (s.kind === "SELECT") return `${s.rows} satır döndü`;
+  return `${s.rows.toLocaleString("tr")} satır ${ {UPDATE:"güncellendi",DELETE:"silindi",INSERT:"eklendi"}[s.kind] }`;
+}
+function icon(st) { return st === "ok" ? '<span class="ok">✓</span>' : st === "err" ? '<span class="err">✕</span>' : '<span class="dim">○</span>'; }
+function banner() {
+  const f = failIdx();
+  if (f >= 0) {
+    const e = STMTS[f].error;
+    return `<div class="banner err"><strong>Deneme durdu — satır ${e.line}:${e.col}</strong> · <span class="mono">${e.sqlstate}</span> ${e.msg}<br><span class="dim">${e.detail} · Önceki ${f} ifadenin etkisi aşağıda; hepsi rollback edildi, hiçbiri kalıcı değil.</span></div>`;
+  }
+  return `<div class="banner trial"><strong>Deneme tamamlandı — rollback edildi.</strong> <span class="dim">Aşağıdakiler gerçekte olsaydı olacaklardır; veritabanında hiçbir şey değişmedi.</span> <button class="btn" style="margin-left:8px">Gerçekten çalıştır…</button></div>`;
+}
+function grid(cols, rows, cls) {
+  return `<table class="grid"><tr>${cols.map(c=>`<th>${c}</th>`).join("")}</tr>${rows.map(r=>`<tr class="${cls||""}">${r.map(v=>`<td>${v}</td>`).join("")}</tr>`).join("")}</table>`;
+}
+function selectPreview(s) { return grid(s.cols, s.preview); }
+
+// ---------- Varyant A: yalnız satır sayısı ----------
+function VariantA() {
+  let h = banner();
+  h += STMTS.map((s, i) => {
+    const st = status(i);
+    const right = st === "ok" ? rowsWord(s) : st === "err" ? '<span class="err">hata</span>' : '<span class="dim">çalıştırılmadı</span>';
+    return `<div class="logrow" onclick="flash(${i})">${icon(st)}<span class="dim mono">${s.lines[0]}</span><span class="mono">${stmtLabel(s)}</span><span>${right}</span><span class="dim">${st==="ok"?s.ms+" ms":""}</span></div>`
+      + (s.kind === "SELECT" && st === "ok" ? `<div style="padding:0 0 6px 76px">${selectPreview(s)}</div>` : "");
+  }).join("");
+  const done = STMTS.filter((_, i) => status(i) === "ok");
+  const sum = (k) => done.filter(s => s.kind === k).reduce((a, s) => a + s.rows, 0);
+  h += `<div class="summary-line">Toplam (rollback edildi): <b>${sum("UPDATE")}</b> güncelleme · <b>${sum("DELETE")}</b> silme · <b>${sum("INSERT")}</b> ekleme · <b>${done.filter(s=>s.kind==="DDL").length}</b> şema değişikliği</div>`;
+  return h;
+}
+
+// ---------- Varyant B: ifade başına RETURNING ----------
+function VariantB() {
+  let h = banner();
+  h += STMTS.map((s, i) => {
+    const st = status(i);
+    let body = "";
+    if (st === "ok") {
+      if (s.kind === "UPDATE") body = `<div class="dim">Güncellenen satırların <b>yeni</b> hali (RETURNING *):</div>` + grid(s.cols, s.changes.map(c => c.after));
+      if (s.kind === "INSERT") body = `<div class="dim">Eklenen satır (varsayılanlar ve serial dahil):</div>` + grid(s.cols, s.changes.map(c => c.after), "ins");
+      if (s.kind === "DELETE") body = `<details><summary>Silinen ${s.rows} satırı göster (ilk 100)</summary>` + grid(s.cols, s.changes.map(c => c.before), "del") + `<div class="dim">… ${s.rows - s.changes.length} satır daha (önizleme 100 satırla sınırlı)</div></details>`;
+      if (s.kind === "DDL") body = `<div class="schemadiff"><span class="add">+ musteriler.son_giris timestamptz NULL</span></div><div class="dim" style="margin-top:4px">Katalogdan rollback öncesi okundu.</div>`;
+      if (s.kind === "SELECT") body = selectPreview(s);
+    } else if (st === "err") {
+      body = `<div class="err mono">${s.error.sqlstate}: ${s.error.msg}</div><div class="dim">${s.error.detail}</div>`;
+    } else body = `<div class="dim">Çalıştırılmadı.</div>`;
+    return `<div class="card ${st==="err"?"failed":st==="skip"?"skipped":""}" onclick="flash(${i})"><header>${icon(st)}<span class="mono">${stmtLabel(s)}</span><span class="dim">satır ${s.lines[0]}</span><span style="flex:1"></span><span>${st==="ok"?rowsWord(s):""}</span><span class="dim">${st==="ok"?s.ms+" ms":""}</span></header><div class="body">${body}</div></div>`;
+  }).join("");
+  return h;
+}
+
+// ---------- Varyant C: tablo bazlı önce/sonra ----------
+let cTab = "degisiklik";
+function VariantC() {
+  let h = banner();
+  h += `<div class="tabs"><div class="tab ${cTab==="degisiklik"?"on":""}" onclick="cTab='degisiklik';render()">Değişiklikler</div><div class="tab ${cTab==="log"?"on":""}" onclick="cTab='log';render()">Çalıştırma logu</div></div>`;
+  if (cTab === "log") return h + VariantA().replace(banner(), "");
+  const done = STMTS.map((s,i)=>({s,i})).filter(x => status(x.i) === "ok");
+  const tables = {};
+  for (const {s} of done) if (s.table) (tables[s.table] ||= []).push(s);
+  if (!Object.keys(tables).length) return h + `<div class="dim">Değişiklik yok.</div>`;
+  for (const [t, ss] of Object.entries(tables)) {
+    const c = k => ss.filter(s => s.kind === k).reduce((a, s) => a + s.rows, 0);
+    h += `<div class="tblsec"><h3><span class="mono">public.${t}</span><span class="counts">`
+      + (c("INSERT") ? `<span class="ok">+${c("INSERT")} eklendi</span>` : "")
+      + (c("UPDATE") ? `<span class="warn">~${c("UPDATE")} güncellendi</span>` : "")
+      + (c("DELETE") ? `<span class="err">−${c("DELETE")} silindi</span>` : "")
+      + `</span></h3>`;
+    for (const s of ss) {
+      if (s.kind === "DDL") { h += `<div class="schemadiff">şema: <span class="add">+ kolon son_giris timestamptz NULL</span></div>`; continue; }
+      const cols = ["", ...s.cols];
+      const rows = s.changes.map(ch => {
+        if (s.kind === "UPDATE") return `<tr><td class="warn">~</td>${ch.after.map((v, k) => v !== ch.before[k] ? `<td class="chg"><span class="old">${ch.before[k]}</span>${v}</td>` : `<td>${v}</td>`).join("")}</tr>`;
+        if (s.kind === "INSERT") return `<tr class="ins"><td>+</td>${ch.after.map(v=>`<td>${v}</td>`).join("")}</tr>`;
+        return `<tr class="del"><td>−</td>${ch.before.map(v=>`<td>${v}</td>`).join("")}</tr>`;
+      }).join("");
+      h += `<table class="grid"><tr>${cols.map(x=>`<th>${x}</th>`).join("")}</tr>${rows}</table>`;
+      if (s.kind === "DELETE") h += `<div class="dim">… ${s.rows - s.changes.length} satır daha (ilk 100 gösterilir)</div>`;
+    }
+    h += `</div>`;
+  }
+  const sel = done.find(x => x.s.kind === "SELECT");
+  if (sel) h += `<div class="dim">SELECT sonuçları "Çalıştırma logu" sekmesinde.</div>`;
+  return h;
+}
+
+// ---------- Teknik notlar (karar için) ----------
+const NOTES = {
+  A: ["Ek maliyet yok: <code>rowCount</code> zaten WS <code>done</code> olayında.",
+      "İfade yeniden yazma yok, her PG sürümünde çalışır.",
+      "Zayıf yan: \"3 satır güncellendi\" WHERE'in doğru satırları seçtiğini söylemez — deneme modunun asıl sorusu bu."],
+  B: ["Lexer ile DML sonuna <code>RETURNING *</code> eklenir (zaten RETURNING varsa dokunulmaz).",
+      "UPDATE yalnız <b>yeni</b> hali verir; eski değer görünmez (PG18 öncesi).",
+      "DELETE RETURNING silinen satırı verir; INSERT varsayılan/serial değerleri gösterir.",
+      "Sonuç 100 satırla kesilir (SELECT önizleme kararıyla aynı); 1M satırlık UPDATE'te tüm satırlar yine de sunucudan akar → cursor veya LIMIT'li CTE sarmalayıcı gerekir.",
+      "DDL: rollback öncesi katalog sorgusu (information_schema) ile tablo şeması farkı."],
+  C: ["Önce/sonra için eski değer gerekir. Yollar: (1) PG18+ <code>RETURNING old.*, new.*</code>; (2) eski sürümlerde DML öncesi aynı WHERE ile <code>SELECT … FOR UPDATE</code> — WHERE'i ayıklamak = SQL ayrıştırma, lexer yetmez; (3) geçici trigger — tabloya kilit + TRIGGER yetkisi ister.",
+      "PK gerektirir; PK'sız tabloda satır eşleme yok → B'ye düşülür.",
+      "Aynı satıra birden fazla ifade dokunursa birleştirme mantığı gerekir (saf core modülü).",
+      "En okunur sonuç; en pahalı uygulama."],
+};
+
+// ---------- Switcher ----------
+function render() {
+  document.getElementById("lbl").textContent = `${variant} (${NAMES[variant]})`;
+  document.getElementById("scn").value = scenario;
+  renderEditor();
+  document.getElementById("out").innerHTML = { A: VariantA, B: VariantB, C: VariantC }[variant]();
+  document.getElementById("note").innerHTML = `<h4>Teknik not — ${variant} <span class="dim" style="cursor:pointer;float:right" onclick="this.closest('.note').classList.toggle('hidden')">gizle/göster</span></h4><ul>${NOTES[variant].map(n=>`<li>${n}</li>`).join("")}</ul>`;
+}
+function go(d) {
+  variant = VARIANTS[(VARIANTS.indexOf(variant) + d + VARIANTS.length) % VARIANTS.length];
+  params.set("variant", variant); history.replaceState(null, "", "?" + params);
+  render();
+}
+document.getElementById("prev").onclick = () => go(-1);
+document.getElementById("next").onclick = () => go(1);
+document.getElementById("scn").onchange = e => { scenario = e.target.value; params.set("senaryo", scenario); history.replaceState(null, "", "?" + params); render(); };
+document.addEventListener("keydown", e => {
+  if (e.target.closest("input,textarea,select,[contenteditable]")) return;
+  if (e.key === "ArrowLeft") go(-1);
+  if (e.key === "ArrowRight") go(1);
+});
+if (!VARIANTS.includes(variant)) variant = "A";
+render();
+</script>
+</body>
+</html>
