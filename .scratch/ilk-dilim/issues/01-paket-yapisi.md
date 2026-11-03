@@ -21,3 +21,7 @@ Workspace yok, **tek npm paketi**:
 - Minimum Node 22 LTS.
 
 Çizim oturumunda (2026-11-03) kararlaştırıldı.
+
+### Ek (2026-11-03): ssh2 bundle'lanır
+
+[npx kurulumunda ssh2 native derleme davranışı](19-npx-ssh2-kurulum.md) sonucunda: `ssh2` runtime bağımlılığı değil, `devDependencies`'te; tsup `noExternal: ['ssh2']` ile `dist/server`'a gömer, `external: [/\.node$/, 'cpu-features']`. Kurulumda node-gyp çalışmaz; ssh2 her zaman saf JS/Node `crypto` yolunu kullanır. Gömülen paketlerin MIT lisans metinleri dağıtıma eklenir.

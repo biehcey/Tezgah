@@ -34,6 +34,8 @@ Tezgah'ın ilk dilimi (bağlantı yönetimi + script çalıştırma akışı) i�
 - [Transaction dışı komutlar ve karışık script](issues/15-transaction-disi-komutlar.md): çalıştırma modu içerikten çıkar (Transaction / Autocommit / karışık → reddedilir); ilk anahtar kelime deseni + `25001` yedeği; deneme modunda reddedilir; kopmada iptal.
 - [Deneme modunda ne gösterilir](issues/16-deneme-modu.md): tablo bazlı önce/sonra farkı (PG18+ `RETURNING old.*, new.*`); PG18 öncesi veya PK'sız tabloda ifade başına `RETURNING *` önizleme; DDL için katalog şema farkı.
 - [SSH tüneli yaşam döngüsü](issues/17-ssh-tunel-yasam-dongusu.md): tek atlama, `password|key|agent`; tembel aç/son pool'la kapat; kopmada pool'lar atılır, otomatik yeniden bağlanma yok; host anahtarı `~/.ssh/known_hosts` (salt okunur) + Tezgah `known_hosts`, bilinmeyende parmak izi onayı, uyuşmazlıkta sert ret; SSH sırrı `<connectionId>:ssh`, kaydetmeme seçeneği DB şifresine de.
+- [İçe aktarma akışı: dataSources.xml ve .pgpass](issues/18-ice-aktarma-akisi.md): önizlemeli tek diyalog; sunucu-düzeyi anahtarla aday birleştirme, mevcutta varsayılan atla; `.pgpass` somut satırları aday + şifreler keychain'e kopya; `read-only` → `prod` önerisi; IntelliJ şifreleri okunmaz; saf ayrıştırıcılar `src/core/import`.
+- [npx kurulumunda ssh2 native derleme davranışı](issues/19-npx-ssh2-kurulum.md): kurulum her durumda sessiz başarılı, binding yalnızca performans; `ssh2` tsup ile `dist/server`'a gömülür (native external), `overrides` tüketici tarafında işlemez.
 
 ## Not yet specified
 
@@ -41,6 +43,7 @@ Tezgah'ın ilk dilimi (bağlantı yönetimi + script çalıştırma akışı) i�
 - Klasör ağacı etkileşimleri (sürükle-bırak, yeniden adlandırma, silme).
 - Bağlantı formu ve "bağlantıyı test et" akışı (SSH alanları, "Keychain'e kaydet" kutusu, oturumluk şifre istemi ve host anahtarı onay diyaloğu dahil).
 - Script çalıştırma ekranının yerleşimi (editör, log, commit/rollback çubuğu, prod çerçevesi, çalıştırma modu rozeti, autocommit onayı); deneme modunun sonuç alanı Değişiklikler/Log sekmeleri olarak belirlendi, aynı sekmelerin normal çalıştırmada da kullanılıp kullanılmayacağı açık.
+- İçe aktarma diyaloğunun yerleşimi (kaynak listesi, proje yolu girişi, önizleme tablosu); sütunlar ve davranış [İçe aktarma akışı](issues/18-ice-aktarma-akisi.md)'nda belirlendi.
 - Commit/rollback beklerken zaman aşımı (açık transaction ne kadar bekleyebilir?).
 - Çalıştırma geçmişi/denetim kaydı ilk dilime girer mi?
 
