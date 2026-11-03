@@ -36,6 +36,7 @@ Tezgah'ın ilk dilimi (bağlantı yönetimi + script çalıştırma akışı) i�
 - [SSH tüneli yaşam döngüsü](issues/17-ssh-tunel-yasam-dongusu.md): tek atlama, `password|key|agent`; tembel aç/son pool'la kapat; kopmada pool'lar atılır, otomatik yeniden bağlanma yok; host anahtarı `~/.ssh/known_hosts` (salt okunur) + Tezgah `known_hosts`, bilinmeyende parmak izi onayı, uyuşmazlıkta sert ret; SSH sırrı `<connectionId>:ssh`, kaydetmeme seçeneği DB şifresine de.
 - [İçe aktarma akışı: dataSources.xml ve .pgpass](issues/18-ice-aktarma-akisi.md): önizlemeli tek diyalog; sunucu-düzeyi anahtarla aday birleştirme, mevcutta varsayılan atla; `.pgpass` somut satırları aday + şifreler keychain'e kopya; `read-only` → `prod` önerisi; IntelliJ şifreleri okunmaz; saf ayrıştırıcılar `src/core/import`.
 - [npx kurulumunda ssh2 native derleme davranışı](issues/19-npx-ssh2-kurulum.md): kurulum her durumda sessiz başarılı, binding yalnızca performans; `ssh2` tsup ile `dist/server`'a gömülür (native external), `overrides` tüketici tarafında işlemez.
+- [prod hedefinde deneme modu](issues/20-prod-deneme-modu.md): yazma modu kapalıyken de `BEGIN READ WRITE` + otomatik rollback; ad onayı yok, sabit yan etki uyarı şeridi; prod'da `lock_timeout = '3s'`.
 
 ## Not yet specified
 

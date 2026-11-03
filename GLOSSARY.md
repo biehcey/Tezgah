@@ -37,3 +37,7 @@ _Avoid_: Özel komut, non-tx
 **Çalıştırma modu**:
 Bir script'in içeriğinden çıkarılan, nasıl çalışacağını belirleyen mod: *Transaction* (tüm ifadeler tek transaction'da, sonda commit veya rollback) ya da *Autocommit* (script yalnızca transaction dışı komutlardan oluşur; her ifade anında kalıcı). İki türü karıştıran script çalıştırılamaz. Deneme modu bir çalıştırma modu değildir; Transaction modunun sonu her zaman rollback olan biçimidir.
 _Avoid_: Transaction modu anahtarı, execution mode
+
+**Deneme modu**:
+Bir script'i Transaction modunda çalıştırıp sonunda her zaman geri alan, ne değişeceğini gösteren çalıştırma biçimi. Hiçbir şeyi kalıcı yazmaz; bu yüzden `prod` hedefinde yazma modu kapalıyken de kullanılabilir. Geri alınamayan yan etkileri (ilerleyen sequence'ler, dış sistemlere giden etkiler) vardır.
+_Avoid_: Dry run, simülasyon, test çalıştırma
