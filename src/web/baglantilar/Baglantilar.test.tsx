@@ -19,7 +19,7 @@ describe('bağlantı listesi', () => {
         connection({ id: 'b', name: 'Analitik', user: 'app', host: 'db.example', port: 6432 }),
       ]),
     );
-    const rows = await within(nav()).findAllByRole('button');
+    const rows = await within(nav()).findAllByRole('button', { name: /@/ });
     expect(rows.map((r) => r.textContent)).toEqual([
       expect.stringContaining('Yerel'),
       expect.stringContaining('Analitik'),
@@ -276,7 +276,7 @@ describe('bağlantı silme', () => {
   it('onaylanınca bağlantı ve şifresi silinir, listeden kalkar', async () => {
     const { user, fake, dialog } = await openDelete();
     await user.click(within(dialog).getByRole('button', { name: 'Sil' }));
-    await waitFor(() => expect(within(nav()).getAllByRole('button')).toHaveLength(1));
+    await waitFor(() => expect(within(nav()).getAllByRole('button', { name: /@/ })).toHaveLength(1));
     expect(within(nav()).getByRole('button', { name: /Kalan/ })).toBeInTheDocument();
     expect(fake.requests).toEqual([{ method: 'DELETE', id: 'b1' }]);
     expect(fake.passwords.has('b1')).toBe(false);

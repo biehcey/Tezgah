@@ -34,6 +34,9 @@ export interface TestServer {
   request(path: string, options?: RequestOptions): Promise<Response>;
   /** Geçerli erişim cookie'si ve aynı-origin `Origin` ile. */
   authed(path: string, options?: RequestOptions): Promise<Response>;
+  /** Yetkili JSON isteği; gövde varsa JSON olarak gönderilir, yanıt gövdesi ayrıştırılır. */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- testler JSON gövdeyi serbestçe okur
+  api(method: string, path: string, body?: unknown): Promise<{ status: number; body: any }>;
   cookie: string;
   host: string;
   origin: string;
@@ -90,13 +93,23 @@ export async function startTestServer(options: Partial<ServerOptions> = {}): Pro
       req.end(opts.body);
     });
 
+  const authed = (path: string, opts: RequestOptions = {}) =>
+    request(path, { ...opts, headers: { cookie, origin, ...opts.headers } });
+
   return {
     server,
     configDir,
     keychain,
     request,
-    authed: (path, opts = {}) =>
-      request(path, { ...opts, headers: { cookie, origin, ...opts.headers } }),
+    authed,
+    async api(method, path, body) {
+      const res = await authed(path, {
+        method,
+        headers: body === undefined ? {} : { 'content-type': 'application/json' },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+      return { status: res.status, body: res.body ? JSON.parse(res.body) : undefined };
+    },
     cookie,
     host,
     origin,

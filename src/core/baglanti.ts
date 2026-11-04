@@ -14,6 +14,10 @@ export const DEFAULT_ENV_COLORS: Record<EnvTag, string> = {
   prod: '#dc2626',
 };
 
+/** libpq `sslmode` değerlerinden Tezgah'ın desteklediği küme (`allow` yok). */
+export const SSL_MODES = ['disable', 'prefer', 'require', 'verify-ca', 'verify-full'] as const;
+export type SslMode = (typeof SSL_MODES)[number];
+
 export const DEFAULT_PORT = 5432;
 export const DEFAULT_DATABASE = 'postgres';
 /** Windows Credential Manager blob sınırı 2560 bayt (UTF-16); güvenli pay bırakılır. */
@@ -175,4 +179,18 @@ export interface PasswordStatusResponse {
 export interface ValidationErrorResponse {
   hata: string;
   alanlar: Partial<Record<ConnectionField, string>>;
+}
+
+/** Kopyanın adı: `ad (kopya)`; o ad alınmışsa `ad (kopya 2)`, `ad (kopya 3)`… */
+export function copyName(name: string, taken: readonly string[]): string {
+  const names = new Set(taken);
+  let candidate = `${name} (kopya)`;
+  for (let n = 2; names.has(candidate); n++) candidate = `${name} (kopya ${n})`;
+  return candidate;
+}
+
+/** Kopya: aynı alanlar ve Veritabanı seçimi, yeni kimlik ve ad. */
+export function copyConnection(source: Connection, id: string, taken: readonly string[]): Connection {
+  const databaseSelection = source.databaseSelection.map((d) => ({ ...d, schemas: d.schemas && [...d.schemas] }));
+  return { ...source, id, name: copyName(source.name, taken), databaseSelection };
 }

@@ -1,4 +1,5 @@
 import { createContext, useContext, type ReactNode } from 'react';
+import type { DeleteFolderResponse, Folder } from '../../core/ayarlar';
 import type {
   Connection,
   ConnectionInput,
@@ -18,12 +19,24 @@ export interface ApiClient {
   createConnection(input: ConnectionRequest): Promise<SaveConnectionResponse>;
   updateConnection(id: string, input: ConnectionRequest): Promise<SaveConnectionResponse>;
   deleteConnection(id: string): Promise<DeleteConnectionResponse>;
+  /** Hemen arkasına "ad (kopya)" oluşturur; kayıtlı şifre yeni kimlik altına kopyalanır. */
+  copyConnection(id: string): Promise<SaveConnectionResponse>;
   /** Keychain'de kayıtlı şifre var mı; değer hiçbir zaman gelmez. */
   passwordStatus(id: string): Promise<PasswordStatusResponse>;
+  listFolders(): Promise<Folder[]>;
+  createFolder(name: string): Promise<Folder>;
+  renameFolder(id: string, name: string): Promise<Folder>;
+  /** İçindeki bağlantılar Klasörsüz'e taşınır. */
+  deleteFolder(id: string): Promise<DeleteFolderResponse>;
 }
 
 /** Oluşturma/güncelleme gövdesi; `password` verilmezse kayıtlı şifreye dokunulmaz, boş dize siler. */
 export type ConnectionRequest = Omit<ConnectionInput, 'password'> & { password?: string };
+
+/** Kayıtlı bağlantının alanlarıyla güncelleme gövdesi; şifreye dokunmaz. */
+export function connectionRequest({ id: _id, databaseSelection: _selection, ...fields }: Connection): ConnectionRequest {
+  return fields;
+}
 
 export interface ServerStatus {
   uygulama: 'tezgah';
@@ -55,13 +68,19 @@ export function createHttpApiClient(): ApiClient {
       body: body === undefined ? undefined : JSON.stringify(body),
     });
   const connectionUrl = (id: string) => `/api/baglantilar/${encodeURIComponent(id)}`;
+  const folderUrl = (id: string) => `/api/klasorler/${encodeURIComponent(id)}`;
   return {
     status: () => request<ServerStatus>('/api/durum'),
     listConnections: () => request<Connection[]>('/api/baglantilar'),
     createConnection: (input) => send('POST', '/api/baglantilar', input),
     updateConnection: (id, input) => send('PUT', connectionUrl(id), input),
     deleteConnection: (id) => send('DELETE', connectionUrl(id)),
+    copyConnection: (id) => send('POST', `${connectionUrl(id)}/kopya`),
     passwordStatus: (id) => request(`${connectionUrl(id)}/sifre`),
+    listFolders: () => request<Folder[]>('/api/klasorler'),
+    createFolder: (name) => send('POST', '/api/klasorler', { name }),
+    renameFolder: (id, name) => send('PUT', folderUrl(id), { name }),
+    deleteFolder: (id) => send('DELETE', folderUrl(id)),
   };
 }
 

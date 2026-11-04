@@ -266,3 +266,50 @@ describe('ayar dosyası', () => {
     expect(await readFile(join(t.configDir, 'tezgah.json'), 'utf8')).toBe(newer);
   });
 });
+
+describe('bağlantı kopyalama', () => {
+  it('hemen yanına "ad (kopya)" oluşturur, alanlar ve Veritabanı seçimi aynı, şifre yeni kimliğe kopyalanır', async () => {
+    const folder = (await t.api('POST', '/api/klasorler', { name: 'Billing' })).body;
+    const first = (await api('POST', '/api/baglantilar', { ...input, folderId: folder.id })).body.connection;
+    const last = (await api('POST', '/api/baglantilar', { ...input, name: 'Son' })).body.connection;
+
+    const copied = await api('POST', `/api/baglantilar/${first.id}/kopya`);
+    expect(copied.status).toBe(201);
+    const copy = copied.body.connection;
+    expect(copied.body).toEqual({
+      connection: { ...first, id: expect.not.stringMatching(first.id), name: 'Yerel (kopya)' },
+      password: 'kaydedildi',
+    });
+    expect((await api('GET', '/api/baglantilar')).body).toEqual([first, copy, last]);
+    expect(t.keychain.entries.get(copy.id)).toBe('gizli-sifre');
+    expect(t.keychain.entries.get(first.id)).toBe('gizli-sifre');
+  });
+
+  it('kopyanın kopyası ve tekrarlı kopya adları çakışmaz', async () => {
+    const { connection } = (await api('POST', '/api/baglantilar', input)).body;
+    const names = [];
+    for (let i = 0; i < 2; i++) names.push((await api('POST', `/api/baglantilar/${connection.id}/kopya`)).body.connection.name);
+    expect(names).toEqual(['Yerel (kopya)', 'Yerel (kopya 2)']);
+  });
+
+  it('kayıtlı şifresi olmayan ya da keychain\'e kaydetmeyen bağlantıda keychain\'e yazılmaz', async () => {
+    const noPw = (await api('POST', '/api/baglantilar', { ...input, password: undefined })).body.connection;
+    const session = (await api('POST', '/api/baglantilar', { ...input, savePassword: false })).body.connection;
+    expect((await api('POST', `/api/baglantilar/${noPw.id}/kopya`)).body.password).toBe('degismedi');
+    expect((await api('POST', `/api/baglantilar/${session.id}/kopya`)).body.password).toBe('degismedi');
+    expect(t.keychain.entries.size).toBe(0);
+  });
+
+  it('keychain reddederse kopya yine oluşur, sonuç reddedildi olur', async () => {
+    const { connection } = (await api('POST', '/api/baglantilar', input)).body;
+    t.keychain.deny = true;
+    const copied = await api('POST', `/api/baglantilar/${connection.id}/kopya`);
+    expect(copied.status).toBe(201);
+    expect(copied.body.password).toBe('reddedildi');
+    expect((await settingsFile()).connections).toHaveLength(2);
+  });
+
+  it('olmayan bağlantı 404 döner', async () => {
+    expect((await api('POST', '/api/baglantilar/yok/kopya')).status).toBe(404);
+  });
+});

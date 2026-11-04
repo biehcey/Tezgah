@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { newConnection, parseConnectionInput, passwordAction } from './baglanti';
+import { copyConnection, copyName, newConnection, parseConnectionInput, passwordAction, type ConnectionInput } from './baglanti';
 
 const minimal = { name: 'Yerel', host: 'localhost', user: 'postgres' };
 
@@ -79,5 +79,27 @@ describe('newConnection', () => {
     expect(connection.databaseSelection).toEqual([{ database: 'app', schemas: null }]);
     expect(connection).not.toHaveProperty('password');
     expect(connection.id).toBe('id-1');
+  });
+});
+
+describe('copyName', () => {
+  it.each([
+    ['ilk kopya', 'Yerel', ['Yerel'], 'Yerel (kopya)'],
+    ['kopya adı alınmışsa numaralanır', 'Yerel', ['Yerel', 'Yerel (kopya)'], 'Yerel (kopya 2)'],
+    ['boşluk atlanmaz, ilk boş numara', 'Yerel', ['Yerel (kopya)', 'Yerel (kopya 2)', 'Yerel (kopya 4)'], 'Yerel (kopya 3)'],
+    ['kopyanın kopyası', 'Yerel (kopya)', ['Yerel', 'Yerel (kopya)'], 'Yerel (kopya) (kopya)'],
+  ])('%s', (_, name, taken, expected) => {
+    expect(copyName(name, taken)).toBe(expected);
+  });
+});
+
+describe('copyConnection', () => {
+  it('alanları ve Veritabanı seçimini kopyalar; kimlik ve ad yenidir, seçim kaynakla paylaşılmaz', () => {
+    const source = newConnection('a', { ...(parseConnectionInput(minimal) as { value: ConnectionInput }).value, folderId: 'k1' });
+    source.databaseSelection = [{ database: 'postgres', schemas: ['public'] }];
+    const copy = copyConnection(source, 'b', ['Yerel']);
+    expect(copy).toEqual({ ...source, id: 'b', name: 'Yerel (kopya)' });
+    copy.databaseSelection[0]!.schemas!.push('x');
+    expect(source.databaseSelection[0]!.schemas).toEqual(['public']);
   });
 });

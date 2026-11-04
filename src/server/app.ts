@@ -6,6 +6,7 @@ import pkg from '../../package.json' with { type: 'json' };
 import { SettingsFileError, createSettingsStore } from './ayar-deposu';
 import { createConnectionRoutes } from './baglantilar';
 import { createAccessPolicy } from './erisim';
+import { createFolderRoutes } from './klasorler';
 import { BodyError, json } from './http';
 import type { Keychain } from './keychain';
 import { serveStatic } from './statik';
@@ -52,8 +53,10 @@ export async function startServer(options: ServerOptions): Promise<TezgahServer>
   const port = (http.address() as AddressInfo).port;
   const access = createAccessPolicy(options.devWebPort ? [port, options.devWebPort] : [port]);
   const wss = new WebSocketServer({ noServer: true });
+  const store = createSettingsStore(options.configDir);
+  const folderRoutes = createFolderRoutes({ store });
   const connectionRoutes = createConnectionRoutes({
-    store: createSettingsStore(options.configDir),
+    store,
     keychain: options.keychain,
     log: options.log,
   });
@@ -85,6 +88,7 @@ export async function startServer(options: ServerOptions): Promise<TezgahServer>
       return json(res, 200, { uygulama: 'tezgah', surum: pkg.version });
     }
     if (await connectionRoutes(req, res, url.pathname)) return;
+    if (await folderRoutes(req, res, url.pathname)) return;
     if (url.pathname === '/api' || url.pathname.startsWith('/api/')) return json(res, 404, { hata: 'Bulunamadı' });
     if (req.method !== 'GET' && req.method !== 'HEAD') return sendStatus(res, 405);
     await serveStatic(options.webRoot, url.pathname, res);

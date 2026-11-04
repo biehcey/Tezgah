@@ -7,6 +7,14 @@ export function json(res: ServerResponse, status: number, body: unknown) {
   res.end(JSON.stringify(body));
 }
 
+export function notFound(res: ServerResponse, hata: string) {
+  json(res, 404, { hata });
+}
+
+export function methodNotAllowed(res: ServerResponse) {
+  json(res, 405, { hata: 'Desteklenmeyen yöntem' });
+}
+
 /** İstek gövdesi JSON değilse ya da çok büyükse döndürülecek durum. */
 export class BodyError extends Error {
   constructor(readonly status: 400 | 413 | 415, message: string) {

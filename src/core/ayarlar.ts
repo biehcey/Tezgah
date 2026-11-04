@@ -54,3 +54,43 @@ export function migrateSettings(
   }
   return settings as unknown as Settings;
 }
+
+export type FolderNameResult = { ok: true; name: string } | { ok: false; error: string };
+
+/**
+ * Büyük/küçük harf duyarsız eşitlik. Türkçe çevrim tek başına "BILLING"i "bıllıng" yapar, kök çevrim
+ * de "İzmir"i "i̇zmir" yapar; ikisinden biri eşleşirse aynı ad sayılır.
+ */
+function sameName(a: string, b: string): boolean {
+  const tr = (s: string) => s.toLocaleUpperCase('tr').toLocaleLowerCase('tr');
+  return tr(a) === tr(b) || a.toLowerCase() === b.toLowerCase();
+}
+
+/** Klasör adı boş olamaz ve (büyük/küçük harf duyarsız) başka bir klasörünkiyle aynı olamaz. */
+export function parseFolderName(raw: unknown, folders: readonly Folder[], selfId?: string): FolderNameResult {
+  const input = typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>).name : undefined;
+  const name = typeof input === 'string' ? input.trim() : '';
+  if (name === '') return { ok: false, error: 'Klasör adı gerekli' };
+  if (folders.some((f) => f.id !== selfId && sameName(f.name, name))) {
+    return { ok: false, error: `“${name}” adlı bir klasör zaten var` };
+  }
+  return { ok: true, name };
+}
+
+/** Klasörü siler; içindeki bağlantılar silinmez, Klasörsüz'e taşınır. Taşınan sayısını döndürür. */
+export function deleteFolder(settings: Pick<Settings, 'folders' | 'connections'>, folderId: string): number {
+  settings.folders = settings.folders.filter((f) => f.id !== folderId);
+  let moved = 0;
+  for (const c of settings.connections) {
+    if (c.folderId === folderId) {
+      c.folderId = null;
+      moved++;
+    }
+  }
+  return moved;
+}
+
+export interface DeleteFolderResponse {
+  /** Klasörsüz'e taşınan bağlantı sayısı. */
+  tasinan: number;
+}

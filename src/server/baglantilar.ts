@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Settings } from '../core/ayarlar';
 import {
+  copyConnection,
   newConnection,
   parseConnectionInput,
   passwordAction,
@@ -13,7 +14,7 @@ import {
   type ValidationErrorResponse,
 } from '../core/baglanti';
 import type { SettingsStore } from './ayar-deposu';
-import { json, readJson } from './http';
+import { json, methodNotAllowed, notFound as notFoundWith, readJson } from './http';
 import { passwordAccount, type Keychain, type SecretDelete, type SecretRead, type SecretWrite } from './keychain';
 
 export interface ConnectionDeps {
@@ -79,6 +80,32 @@ export function createConnectionRoutes({ store, keychain, log }: ConnectionDeps)
     json(res, 200, body);
   }
 
+  /** Kopya kaynağın hemen arkasına eklenir; kayıtlı şifre yeni kimlik altına kopyalanır. */
+  async function copy(res: ServerResponse, id: string) {
+    const copied = await store.update((settings) => {
+      const index = settings.connections.findIndex((c) => c.id === id);
+      const source = settings.connections[index];
+      if (!source) return null;
+      const connection = copyConnection(source, randomUUID(), settings.connections.map((c) => c.name));
+      settings.connections.splice(index + 1, 0, connection);
+      return connection;
+    });
+    if (!copied) return notFound(res);
+    const body: SaveConnectionResponse = { connection: copied, password: await copyPassword(id, copied) };
+    json(res, 201, body);
+  }
+
+  async function copyPassword(sourceId: string, copy: Connection): Promise<SaveConnectionResponse['password']> {
+    if (!copy.savePassword) return 'degismedi';
+    const read = await keychain.get(passwordAccount(sourceId));
+    logDenied('okuma', sourceId, read);
+    if (read.result === 'yok') return 'degismedi';
+    if (read.result === 'reddedildi') return 'reddedildi';
+    const written = await keychain.set(passwordAccount(copy.id), read.value);
+    logDenied('yazma', copy.id, written);
+    return written.result;
+  }
+
   async function passwordStatus(res: ServerResponse, id: string) {
     const { connections } = await store.read();
     if (!connections.some((c) => c.id === id)) return notFound(res);
@@ -122,11 +149,14 @@ export function createConnectionRoutes({ store, keychain, log }: ConnectionDeps)
       else methodNotAllowed(res);
       return true;
     }
-    const match = /^\/api\/baglantilar\/([^/]+)(\/sifre)?$/.exec(pathname);
+    const match = /^\/api\/baglantilar\/([^/]+)(?:\/(sifre|kopya))?$/.exec(pathname);
     if (!match) return false;
     const id = decodeURIComponent(match[1]!);
-    if (match[2]) {
+    if (match[2] === 'sifre') {
       if (req.method === 'GET') await passwordStatus(res, id);
+      else methodNotAllowed(res);
+    } else if (match[2] === 'kopya') {
+      if (req.method === 'POST') await copy(res, id);
       else methodNotAllowed(res);
     } else if (req.method === 'PUT') await update(req, res, id);
     else if (req.method === 'DELETE') await remove(res, id);
@@ -140,11 +170,7 @@ function folderExists(settings: Settings, folderId: string | null) {
 }
 
 function notFound(res: ServerResponse) {
-  json(res, 404, { hata: 'Bağlantı bulunamadı' });
-}
-
-function methodNotAllowed(res: ServerResponse) {
-  json(res, 405, { hata: 'Desteklenmeyen yöntem' });
+  notFoundWith(res, 'Bağlantı bulunamadı');
 }
 
 function invalid(res: ServerResponse, alanlar: ValidationErrorResponse['alanlar']) {
