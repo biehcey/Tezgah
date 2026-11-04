@@ -3,12 +3,14 @@ import type { DeleteFolderResponse, Folder } from '../../core/ayarlar';
 import type {
   Connection,
   ConnectionInput,
+  DatabaseSelection,
   DeleteConnectionResponse,
   PasswordStatusResponse,
   SaveConnectionResponse,
   ValidationErrorResponse,
 } from '../../core/baglanti';
 import type { ConnectionTestRequest, ConnectionTestResponse } from '../../core/baglanti-testi';
+import type { DatabaseListResponse, SchemaListResponse, TargetErrorResponse } from '../../core/veritabani-secimi';
 
 /**
  * Web'in sunucuyla tek konuşma noktası (REST + ileride WS olay akışı).
@@ -31,6 +33,13 @@ export interface ApiClient {
   renameFolder(id: string, name: string): Promise<Folder>;
   /** İçindeki bağlantılar Klasörsüz'e taşınır. */
   deleteFolder(id: string): Promise<DeleteFolderResponse>;
+  /** Başlangıç veritabanının pool'unu açar (gerekirse) ve `pg_database`'i listeler. */
+  listDatabases(id: string): Promise<DatabaseListResponse>;
+  /** Hedefin (bağlantı + veritabanı) pool'u üzerinden şemaları listeler. */
+  listSchemas(id: string, database: string): Promise<SchemaListResponse>;
+  updateDatabaseSelection(id: string, selection: DatabaseSelection[]): Promise<Connection>;
+  /** Bağlantının tüm pool'larını kapatır. */
+  disconnect(id: string): Promise<void>;
 }
 
 /** Oluşturma/güncelleme gövdesi; `password` verilmezse kayıtlı şifreye dokunulmaz, boş dize siler. */
@@ -52,8 +61,8 @@ export interface ServerStatus {
 export class ApiError extends Error {
   constructor(
     readonly status: number,
-    /** Sunucunun JSON hata gövdesi (`hata`, doğrulamada `alanlar`). */
-    readonly body?: Partial<ValidationErrorResponse>,
+    /** Sunucunun JSON hata gövdesi (`hata`, doğrulamada `alanlar`, hedef hatasında `kod`). */
+    readonly body?: Partial<ValidationErrorResponse & TargetErrorResponse>,
   ) {
     super(body?.hata ?? `Sunucu ${status} döndü`);
     this.name = 'ApiError';
@@ -88,6 +97,12 @@ export function createHttpApiClient(): ApiClient {
     createFolder: (name) => send('POST', '/api/klasorler', { name }),
     renameFolder: (id, name) => send('PUT', folderUrl(id), { name }),
     deleteFolder: (id) => send('DELETE', folderUrl(id)),
+    listDatabases: (id) => request(`${connectionUrl(id)}/veritabanlari`),
+    listSchemas: (id, database) => request(`${connectionUrl(id)}/veritabanlari/${encodeURIComponent(database)}/semalar`),
+    updateDatabaseSelection: (id, selection) => send('PUT', `${connectionUrl(id)}/veritabani-secimi`, selection),
+    disconnect: async (id) => {
+      await send('POST', `${connectionUrl(id)}/baglantiyi-kes`);
+    },
   };
 }
 

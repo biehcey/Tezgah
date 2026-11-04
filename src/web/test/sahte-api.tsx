@@ -7,6 +7,7 @@ import {
   newConnection,
   passwordAction,
   type Connection,
+  type DatabaseSelection,
   type PasswordStatus,
   type PasswordWriteOutcome,
 } from '../../core/baglanti';
@@ -28,6 +29,10 @@ export function createFakeApi(overrides: Partial<ApiClient> = {}): ApiClient {
     createFolder: missing('createFolder'),
     renameFolder: missing('renameFolder'),
     deleteFolder: missing('deleteFolder'),
+    listDatabases: missing('listDatabases'),
+    listSchemas: missing('listSchemas'),
+    updateDatabaseSelection: missing('updateDatabaseSelection'),
+    disconnect: missing('disconnect'),
     ...overrides,
   };
 }
@@ -61,10 +66,27 @@ export interface FakeConnections {
   /** Keychain'deki şifreler (bağlantı kimliği → değer). */
   passwords: Map<string, string>;
   /** Kaydet/güncelle/sil isteklerinin gövdeleri, sırasıyla. */
-  requests: { method: string; id?: string; body?: ConnectionRequest | { name: string } }[];
+  requests: { method: string; id?: string; body?: ConnectionRequest | { name: string } | DatabaseSelection[] }[];
   /** Açıkken keychain işlemleri "Deny" ile reddedilmiş gibi döner. */
   deny: boolean;
+  /**
+   * Bağlantı kimliğine göre sunucudaki veritabanları ve şemaları. Tanımlı olmayan bağlantının
+   * sunucusuna ulaşılamaz (502).
+   */
+  servers: Map<string, FakeServer>;
+  /** Veritabanı paneli istekleri (`listele`, `semalar/<db>`, `kes`), bağlantı kimliğiyle. */
+  databaseRequests: string[];
 }
+
+export interface FakeServer {
+  /** Veritabanı → şemalar. */
+  databases: Record<string, string[]>;
+}
+
+export const UNREACHABLE = new ApiError(502, {
+  hata: 'localhost:5432 bağlantıyı reddetti; bu portta dinleyen bir sunucu yok.',
+  kod: 'ECONNREFUSED',
+});
 
 export function folder(id: string, name: string): Folder {
   return { id, name };
@@ -82,6 +104,8 @@ export function createFakeConnections(
     passwords: new Map(),
     requests: [],
     deny: false,
+    servers: new Map(),
+    databaseRequests: [],
     api: undefined as unknown as ApiClient,
   };
   let next = 1;
@@ -165,6 +189,30 @@ export function createFakeConnections(
       state.requests.push({ method: 'DELETE', id: `klasor/${id}` });
       if (!state.folders.some((f) => f.id === id)) throw new ApiError(404, { hata: 'Klasör bulunamadı' });
       return { tasinan: deleteFolder(state, id) };
+    },
+    async listDatabases(id) {
+      find(id);
+      state.databaseRequests.push(`${id}: listele`);
+      const server = state.servers.get(id);
+      if (!server) throw UNREACHABLE;
+      return { veritabanlari: Object.keys(server.databases).sort() };
+    },
+    async listSchemas(id, database) {
+      find(id);
+      state.databaseRequests.push(`${id}: semalar/${database}`);
+      const schemas = state.servers.get(id)?.databases[database];
+      if (!schemas) throw UNREACHABLE;
+      return { semalar: [...schemas].sort() };
+    },
+    async updateDatabaseSelection(id, selection) {
+      state.requests.push({ method: 'PUT', id: `${id}/veritabani-secimi`, body: structuredClone(selection) });
+      const target = find(id);
+      target.databaseSelection = structuredClone(selection);
+      return structuredClone(target);
+    },
+    async disconnect(id) {
+      find(id);
+      state.databaseRequests.push(`${id}: kes`);
     },
     async passwordStatus(id) {
       find(id);

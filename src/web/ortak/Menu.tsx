@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react';
 
 export interface MenuItem {
   label: string;
@@ -12,6 +12,12 @@ export interface MenuItem {
 export interface MenuPosition {
   x: number;
   y: number;
+}
+
+/** ⋯ düğmesinin hemen altı. */
+export function menuBelow(e: ReactMouseEvent<HTMLElement>): MenuPosition {
+  const rect = e.currentTarget.getBoundingClientRect();
+  return { x: rect.left, y: rect.bottom };
 }
 
 interface Props extends MenuPosition {

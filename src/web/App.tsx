@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { Folder } from '../core/ayarlar';
-import type { Connection, PasswordWriteOutcome } from '../core/baglanti';
+import { isProd, type Connection, type DatabaseSelection, type PasswordWriteOutcome } from '../core/baglanti';
 import { buildConnectionUrl } from '../core/baglanti-url';
 import { ApiError, connectionRequest, useApi } from './api/client';
 import { BaglantiFormu } from './baglantilar/BaglantiFormu';
@@ -9,6 +9,10 @@ import { KlasorAdi } from './baglantilar/KlasorAdi';
 import { SilmeOnayi } from './baglantilar/SilmeOnayi';
 import { Menu, type MenuItem, type MenuPosition } from './ortak/Menu';
 import { Onay } from './ortak/Onay';
+import { ScriptEkrani } from './script/ScriptEkrani';
+import { changesServerSession, defaultTargetDatabase, type Target } from '../core/veritabani-secimi';
+import type { ConnectionSession } from './veritabanlari/hedef';
+import { VeritabaniPaneli } from './veritabanlari/VeritabaniPaneli';
 
 type Status = { kind: 'loading' } | { kind: 'ok'; version: string } | { kind: 'error'; message: string };
 /** Çalışma alanında açık form: yeni bağlantı ya da düzenlenen bağlantının kimliği. */
@@ -44,6 +48,10 @@ export function App() {
   const [notice, setNotice] = useState<string | null>(null);
   /** Geçici bilgi satırı (ör. "URL kopyalandı"). */
   const [info, setInfo] = useState<string | null>(null);
+  /** Editörün hedefi; bağlanmadan da seçilebilir. */
+  const [target, setTarget] = useState<Target | null>(null);
+  /** Bağlantı kimliğine göre sunucu oturumu; olmayan bağlantı bağlı değildir. */
+  const [sessions, setSessions] = useState<Record<string, ConnectionSession>>({});
 
   useEffect(() => {
     let active = true;
@@ -66,11 +74,55 @@ export function App() {
   }, [api]);
 
   const edited = editing?.kind === 'duzenle' ? connections?.find((c) => c.id === editing.id) : undefined;
+  const selected = connections?.find((c) => c.id === selectedId);
+  const targetConnection = target ? connections?.find((c) => c.id === target.connectionId) : undefined;
+  const targetView = target && targetConnection ? { connection: targetConnection, database: target.database } : null;
 
   function open(next: Editing) {
     setNotice(null);
     setInfo(null);
     setEditing(next);
+  }
+
+  function setSession(id: string, session: ConnectionSession | null) {
+    setSessions((prev) => {
+      const { [id]: _old, ...rest } = prev;
+      return session ? { ...rest, [id]: session } : rest;
+    });
+  }
+
+  /** Bağlan / yenile: başlangıç veritabanının pool'u üzerinden `pg_database` listesi. */
+  async function connect(connection: Connection) {
+    setSelectedId(connection.id);
+    setSession(connection.id, { durum: 'baglaniyor' });
+    try {
+      const { veritabanlari } = await api.listDatabases(connection.id);
+      setSession(connection.id, { durum: 'bagli', veritabanlari });
+    } catch (err) {
+      setSession(connection.id, { durum: 'hata', hata: errorMessage(err) });
+    }
+  }
+
+  async function disconnect(connection: Connection) {
+    try {
+      await api.disconnect(connection.id);
+      setSession(connection.id, null);
+    } catch (err) {
+      setNotice(`“${connection.name}” bağlantısı kesilemedi: ${errorMessage(err)}`);
+    }
+  }
+
+  async function changeSelection(connection: Connection, selection: DatabaseSelection[]) {
+    try {
+      const updated = await api.updateDatabaseSelection(connection.id, selection);
+      setConnections((list) => (list ?? []).map((c) => (c.id === updated.id ? updated : c)));
+    } catch (err) {
+      setNotice(`Veritabanı seçimi kaydedilemedi: ${errorMessage(err)}`);
+    }
+  }
+
+  function selectTarget(connection: Connection, database: string) {
+    setTarget({ connectionId: connection.id, database });
   }
 
   function edit(id: string) {
@@ -87,6 +139,11 @@ export function App() {
   }
 
   function saved(connection: Connection, password: PasswordWriteOutcome) {
+    const before = connections?.find((c) => c.id === connection.id);
+    // Sunucu bağlanma ayarı ya da şifresi değişen bağlantının pool'larını kapattı.
+    if (before && (changesServerSession(before, connection) || password === 'kaydedildi' || password === 'silindi')) {
+      setSession(connection.id, null);
+    }
     setConnections((list) => {
       const current = list ?? [];
       return current.some((c) => c.id === connection.id)
@@ -103,6 +160,8 @@ export function App() {
       const result = await api.deleteConnection(connection.id);
       setConnections((list) => (list ?? []).filter((c) => c.id !== connection.id));
       if (selectedId === connection.id) setSelectedId(null);
+      if (target?.connectionId === connection.id) setTarget(null);
+      setSession(connection.id, null);
       setEditing(null);
       setNotice(
         result.password === 'reddedildi'
@@ -166,11 +225,27 @@ export function App() {
       })),
       { label: 'Klasörsüz', disabled: connection.folderId === null, onSelect: () => void move(connection, null) },
     ];
+    const targetDatabase = defaultTargetDatabase(connection);
+    const session = sessions[connection.id];
     showMenu(`${connection.name} menüsü`, at, [
+      {
+        label: 'Hedef yap',
+        disabled: targetDatabase === null,
+        onSelect: () => {
+          setSelectedId(connection.id);
+          selectTarget(connection, targetDatabase!);
+        },
+      },
+      {
+        label: session?.durum === 'bagli' ? 'Yenile' : 'Bağlan',
+        disabled: session?.durum === 'baglaniyor',
+        onSelect: () => void connect(connection),
+      },
       { label: 'Düzenle', onSelect: () => edit(connection.id) },
       { label: 'Kopyala', onSelect: () => void copy(connection) },
       { label: 'Klasöre taşı ▸', submenu: targets, disabled: folders.length === 0 },
       { label: 'URL’yi kopyala (şifresiz)', onSelect: () => void copyUrl(connection) },
+      { label: 'Bağlantıyı kes', disabled: session === undefined, onSelect: () => void disconnect(connection) },
       { label: 'Sil', danger: true, onSelect: () => setDeleting(connection) },
     ]);
   }
@@ -212,7 +287,7 @@ export function App() {
   }
 
   return (
-    <div className="tezgah">
+    <div className={`tezgah${targetConnection && isProd(targetConnection.envTag) ? ' prod-cerceve' : ''}`}>
       <aside className="kenar">
         <header className="kenar-baslik">
           <h1>Tezgah</h1>
@@ -241,13 +316,28 @@ export function App() {
               connections={connections}
               folders={folders}
               selectedId={selectedId}
-              onSelect={edit}
+              sessions={sessions}
+              targetConnectionId={targetConnection?.id ?? null}
+              onSelect={setSelectedId}
               onConnectionMenu={connectionMenu}
               onFolderMenu={folderMenu}
               onMove={(connection, folderId) => void move(connection, folderId)}
             />
           )}
         </nav>
+        {selected && (
+          <VeritabaniPaneli
+            key={selected.id}
+            connection={selected}
+            session={sessions[selected.id]}
+            target={target}
+            onConnect={() => void connect(selected)}
+            onSelectTarget={(database) => selectTarget(selected, database)}
+            onSelectionChange={(selection) => void changeSelection(selected, selection)}
+            onEdit={() => edit(selected.id)}
+            onMenu={(at) => connectionMenu(selected, at)}
+          />
+        )}
         <footer className="kenar-alt">{status.kind === 'ok' && <span>v{status.version}</span>}</footer>
       </aside>
       <main className="calisma-alani">
@@ -266,7 +356,7 @@ export function App() {
             {info}
           </p>
         )}
-        {(editing?.kind === 'yeni' || edited) && (
+        {editing?.kind === 'yeni' || edited ? (
           <BaglantiFormu
             key={edited?.id ?? 'yeni'}
             connection={edited ?? null}
@@ -275,6 +365,8 @@ export function App() {
             onCancel={() => setEditing(null)}
             onDelete={setDeleting}
           />
+        ) : (
+          <ScriptEkrani target={targetView} />
         )}
       </main>
       {menu && <Menu key={menu.key} x={menu.x} y={menu.y} label={menu.label} items={menu.items} onClose={closeMenu} />}

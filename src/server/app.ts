@@ -7,10 +7,13 @@ import { SettingsFileError, createSettingsStore } from './ayar-deposu';
 import { createConnectionTestRoutes } from './baglanti-testi';
 import { createConnectionRoutes } from './baglantilar';
 import { createAccessPolicy } from './erisim';
+import { createPoolManager } from './havuzlar';
 import { createFolderRoutes } from './klasorler';
 import { BodyError, json } from './http';
 import type { Keychain } from './keychain';
+import { systemClock, type Clock } from './saat';
 import { serveStatic } from './statik';
+import { createDatabaseRoutes } from './veritabanlari';
 
 export interface ServerOptions {
   /** Sabit port; verilmezse işletim sistemi rastgele bir port seçer. */
@@ -25,6 +28,8 @@ export interface ServerOptions {
   /** `tezgah.json`'ın bulunduğu yapılandırma dizini; ilk yazmada oluşturulur. */
   configDir: string;
   keychain: Keychain;
+  /** Pool boşta kalma süresi gibi zamanlayıcılar; testlerde sahte saat. */
+  clock?: Clock;
   log: (line: string) => void;
 }
 
@@ -56,11 +61,16 @@ export async function startServer(options: ServerOptions): Promise<TezgahServer>
   const wss = new WebSocketServer({ noServer: true });
   const store = createSettingsStore(options.configDir);
   const folderRoutes = createFolderRoutes({ store });
+  // Pool'lar tembel: açılışta hiçbir sunucuya bağlanılmaz.
+  const pools = createPoolManager({ keychain: options.keychain, clock: options.clock ?? systemClock, log: options.log });
   const connectionRoutes = createConnectionRoutes({
     store,
     keychain: options.keychain,
     log: options.log,
+    // Ayarı değişen ya da silinen bağlantının pool'ları eski ayarla açık kalmasın.
+    onChanged: (id) => void pools.disconnect(id),
   });
+  const databaseRoutes = createDatabaseRoutes({ store, pools });
 
   const connectionTestRoutes = createConnectionTestRoutes({ store, keychain: options.keychain, log: options.log });
 
@@ -91,6 +101,7 @@ export async function startServer(options: ServerOptions): Promise<TezgahServer>
       return json(res, 200, { uygulama: 'tezgah', surum: pkg.version });
     }
     if (await connectionRoutes(req, res, url.pathname)) return;
+    if (await databaseRoutes(req, res, url.pathname)) return;
     if (await connectionTestRoutes(req, res, url.pathname)) return;
     if (await folderRoutes(req, res, url.pathname)) return;
     if (url.pathname === '/api' || url.pathname.startsWith('/api/')) return json(res, 404, { hata: 'Bulunamadı' });
@@ -127,7 +138,10 @@ export async function startServer(options: ServerOptions): Promise<TezgahServer>
         for (const client of wss.clients) client.terminate();
         wss.close();
         http.closeAllConnections();
-        http.close((err) => (err ? reject(err) : resolve()));
+        http.close((err) => {
+          if (err) return reject(err);
+          pools.closeAll().then(resolve, reject);
+        });
       }),
   };
 }

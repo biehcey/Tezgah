@@ -194,12 +194,21 @@ describe('bağlantıyı klasöre taşıma', () => {
 });
 
 describe('bağlantı menüsü', () => {
-  it('sağ tık ve ⋯ aynı menüyü açar: düzenle, kopyala, klasöre taşı, URL’yi kopyala, sil', async () => {
+  it('sağ tık ve ⋯ aynı menüyü açar: hedef yap, bağlan, düzenle, kopyala, klasöre taşı, URL’yi kopyala, bağlantıyı kes, sil', async () => {
     const { user } = setup(withFolders());
     const row = await within(nav()).findByRole('button', { name: /Yerel/ });
     fireEvent.contextMenu(row);
     const items = () => screen.getAllByRole('menuitem').map((i) => i.textContent);
-    const expected = ['Düzenle', 'Kopyala', 'Klasöre taşı ▸', 'URL’yi kopyala (şifresiz)', 'Sil'];
+    const expected = [
+      'Hedef yap',
+      'Bağlan',
+      'Düzenle',
+      'Kopyala',
+      'Klasöre taşı ▸',
+      'URL’yi kopyala (şifresiz)',
+      'Bağlantıyı kes',
+      'Sil',
+    ];
     expect(items()).toEqual(expected);
     await user.keyboard('{Escape}');
     await user.click(menuButton('Yerel'));

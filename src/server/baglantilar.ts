@@ -13,6 +13,7 @@ import {
   type SaveConnectionResponse,
   type ValidationErrorResponse,
 } from '../core/baglanti';
+import { changesServerSession } from '../core/veritabani-secimi';
 import type { SettingsStore } from './ayar-deposu';
 import { json, methodNotAllowed, notFound as notFoundWith, readJson } from './http';
 import { passwordAccount, type Keychain, type SecretDelete, type SecretRead, type SecretWrite } from './keychain';
@@ -21,12 +22,14 @@ export interface ConnectionDeps {
   store: SettingsStore;
   keychain: Keychain;
   log: (line: string) => void;
+  /** Bağlantının sunucuya bağlanma ayarı ya da şifresi değişti, ya da bağlantı silindi. */
+  onChanged?: (id: string) => void;
 }
 
 const COLLECTION = '/api/baglantilar';
 
 /** `/api/baglantilar` uçları. İsteği ele aldıysa `true` döner. */
-export function createConnectionRoutes({ store, keychain, log }: ConnectionDeps) {
+export function createConnectionRoutes({ store, keychain, log, onChanged }: ConnectionDeps) {
   async function create(req: IncomingMessage, res: ServerResponse) {
     const parsed = parseConnectionInput(await readJson(req));
     if (!parsed.ok) return invalid(res, parsed.errors);
@@ -55,14 +58,14 @@ export function createConnectionRoutes({ store, keychain, log }: ConnectionDeps)
       if (!folderExists(settings, fields.folderId)) return { status: 'klasor-yok' as const };
       const connection: Connection = { ...existing, ...fields };
       settings.connections[index] = connection;
-      return { status: 'tamam' as const, connection };
+      return { status: 'tamam' as const, connection, changed: changesServerSession(existing, connection) };
     });
     if (outcome.status === 'yok') return notFound(res);
     if (outcome.status === 'klasor-yok') return invalid(res, { folderId: 'Klasör bulunamadı' });
-    const body: SaveConnectionResponse = {
-      connection: outcome.connection,
-      password: await writePassword(id, parsed.value, { isNew: false }),
-    };
+    const passwordOutcome = await writePassword(id, parsed.value, { isNew: false });
+    // Şifre yazıldıktan sonra: arada açılan pool eski şifreyle kalmasın.
+    if (outcome.changed || passwordOutcome === 'kaydedildi' || passwordOutcome === 'silindi') onChanged?.(id);
+    const body: SaveConnectionResponse = { connection: outcome.connection, password: passwordOutcome };
     json(res, 200, body);
   }
 
@@ -73,6 +76,7 @@ export function createConnectionRoutes({ store, keychain, log }: ConnectionDeps)
       return settings.connections.length < before;
     });
     if (!removed) return notFound(res);
+    onChanged?.(id);
     // Ayar silindikten sonra keychain: erişim reddedilse de bağlantı silinmiş kalır, sonuç bildirilir.
     const result = await keychain.delete(passwordAccount(id));
     logDenied('silme', id, result);

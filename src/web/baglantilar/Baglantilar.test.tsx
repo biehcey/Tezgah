@@ -2,6 +2,7 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import { App } from '../App';
+import { editConnection } from '../test/eylemler';
 import { connection, createFakeConnections, renderWithApi, type FakeConnections } from '../test/sahte-api';
 
 function renderApp(fake = createFakeConnections()) {
@@ -167,7 +168,7 @@ describe('bağlantı düzenleme ve keychain', () => {
     const fake = createFakeConnections([saved]);
     setup(fake);
     renderApp(fake);
-    await user.click(await within(nav()).findByRole('button', { name: /Dev DB/ }));
+    await editConnection(user, /Dev DB/);
     return { user, fake, f: within(form()) };
   }
 
@@ -257,7 +258,7 @@ describe('bağlantı silme', () => {
     fake.passwords.set('b1', 'p');
     setup(fake);
     renderApp(fake);
-    await user.click(await within(nav()).findByRole('button', { name: /Silinecek/ }));
+    await editConnection(user, /Silinecek/);
     await user.click(within(form()).getByRole('button', { name: 'Sil' }));
     return { user, fake, dialog: screen.getByRole('alertdialog') };
   }
@@ -300,7 +301,7 @@ describe('kayıtlı şifreyi koruma', () => {
   async function openEdit(fake: FakeConnections) {
     const user = userEvent.setup();
     renderApp(fake);
-    await user.click(await within(nav()).findByRole('button', { name: /Dev DB/ }));
+    await editConnection(user, /Dev DB/);
     return { user, f: within(form()) };
   }
 

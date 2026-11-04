@@ -1,19 +1,15 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { readFile } from 'node:fs/promises';
 import { connect as netConnect } from 'node:net';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
 import { checkServerIdentity, type PeerCertificate } from 'node:tls';
 import pg from 'pg';
-import { sslPathsUsed, type SslSettings, type ValidationErrorResponse } from '../core/baglanti';
-import { buildSslOptions, type PgSsl, type SslFileContents } from '../core/baglanti-ssl';
+import type { ValidationErrorResponse } from '../core/baglanti';
+import { buildSslOptions, type PgSsl } from '../core/baglanti-ssl';
 import {
   PASSWORD_REQUIRED,
   TestRun,
   classifyConnectError,
   classifyListError,
   classifyReachError,
-  classifySslFileError,
   parseConnectionTestInput,
   shouldRetryWithoutSsl,
   testPlan,
@@ -21,12 +17,12 @@ import {
   type ConnectionTestRequest,
   type ConnectionTestResponse,
   type DriverError,
-  type StepFailure,
   type TestInputField,
 } from '../core/baglanti-testi';
 import type { SettingsStore } from './ayar-deposu';
 import { json, methodNotAllowed, readJson } from './http';
 import { passwordAccount, type Keychain } from './keychain';
+import { readSslFiles } from './ssl-dosyalari';
 
 export interface ConnectionTestDeps {
   store: SettingsStore;
@@ -187,29 +183,6 @@ async function connect(input: ConnectionTestRequest, password: string | undefine
     await client.end().catch(() => {});
     return { ok: false, error: toDriverError(err) };
   }
-}
-
-/** `~/` ile başlayan yolu ev dizinine çevirir; diğer yollar (ayrıştırmada mutlak olduğu doğrulandı) aynen. */
-function resolvePath(path: string): string {
-  return /^~[\\/]/.test(path) ? join(homedir(), path.slice(2)) : path;
-}
-
-type SslFiles = { ok: true; contents: SslFileContents } | { ok: false; failure: StepFailure };
-
-/** Modun kullandığı SSL dosyalarını okur (disable'da hiçbiri, prefer'de CA değil). Dosyalar yerinde kalır. */
-async function readSslFiles(input: SslSettings): Promise<SslFiles> {
-  const contents: SslFileContents = { ca: null, cert: null, key: null };
-  const target = { sslrootcert: 'ca', sslcert: 'cert', sslkey: 'key' } as const;
-  for (const field of sslPathsUsed(input.sslmode)) {
-    const path = input[field];
-    if (path === null) continue;
-    try {
-      contents[target[field]] = await readFile(resolvePath(path), 'utf8');
-    } catch (err) {
-      return { ok: false, failure: classifySslFileError(field, path, toDriverError(err)) };
-    }
-  }
-  return { ok: true, contents };
 }
 
 /** Keychain'deki şifresi okunacak kayıtlı bağlantının kimliği; kayıtlı değilse `null`. */

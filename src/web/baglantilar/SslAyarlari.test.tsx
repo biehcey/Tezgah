@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import type { ConnectionTestResponse, TestStep } from '../../core/baglanti-testi';
 import { App } from '../App';
 import type { ConnectionTestBody } from '../api/client';
+import { editConnection } from '../test/eylemler';
 import { connection, createFakeConnections, renderWithApi } from '../test/sahte-api';
 
 const form = () => screen.getByRole('form', { name: /bağlantı/i });
@@ -44,7 +45,7 @@ async function setup({
   });
   if (existing) fake.passwords.set(existing.id, 'kayitli');
   renderWithApi(<App />, fake.api);
-  if (existing) await user.click(await screen.findByRole('button', { name: new RegExp(existing.name) }));
+  if (existing) await editConnection(user, new RegExp(existing.name));
   else await user.click(screen.getByRole('button', { name: 'Yeni bağlantı' }));
   return { user, fake, sent, f: within(form()) };
 }

@@ -2,6 +2,7 @@ import { screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import { App } from '../App';
+import { editConnection } from '../test/eylemler';
 import { connection, createFakeConnections, folder, renderWithApi, type FakeConnections } from '../test/sahte-api';
 
 const nav = () => screen.getByRole('navigation', { name: 'Bağlantılar' });
@@ -132,7 +133,7 @@ describe('URL’den doldurma', () => {
     fake.passwords.set('b1', 'eski');
     const user = userEvent.setup();
     renderWithApi(<App />, fake.api);
-    await user.click(await within(nav()).findByRole('button', { name: /Dev/ }));
+    await editConnection(user, /Dev/);
     const f = within(form());
     await f.findByText(/keychain'de kayıtlı/);
     await user.click(f.getByLabelText('URL'));
@@ -155,7 +156,7 @@ describe('formda klasör', () => {
     await user.click(f.getByRole('button', { name: 'Kaydet' }));
     expect(fake.requests[0]?.body).toMatchObject({ folderId: 'k1' });
 
-    await user.click(await within(nav()).findByRole('button', { name: /^A/ }));
+    await editConnection(user, /^A/);
     expect(within(form()).getByLabelText('Klasör')).toHaveValue('k1');
   });
 });
@@ -174,7 +175,7 @@ describe('URL ve klasör: inceleme düzeltmeleri', () => {
     const fake = createFakeConnections([connection({ id: 'b1', name: 'Dev', folderId: null })], {}, [folder('k1', 'Billing')]);
     const user = userEvent.setup();
     renderWithApi(<App />, fake.api);
-    await user.click(await within(nav()).findByRole('button', { name: /Dev/ }));
+    await editConnection(user, /Dev/);
     const li = within(nav()).getByText('Dev', { selector: '.baglanti-adi' }).closest('li')!;
     await user.click(within(li).getByRole('button', { name: 'Bağlantı menüsü' }));
     await user.click(screen.getByRole('menuitem', { name: /Klasöre taşı/ }));

@@ -1,12 +1,17 @@
-import { useState, type DragEvent, type MouseEvent } from 'react';
+import { useState, type DragEvent } from 'react';
 import type { Folder } from '../../core/ayarlar';
 import { connectionAddress, isProd, type Connection } from '../../core/baglanti';
-import type { MenuPosition } from '../ortak/Menu';
+import { menuBelow, type MenuPosition } from '../ortak/Menu';
+import type { ConnectionSession } from '../veritabanlari/hedef';
 
 interface Props {
   connections: Connection[];
   folders: Folder[];
   selectedId: string | null;
+  /** Bağlantı kimliğine göre sunucu oturumu; satırdaki durum ikonu buradan. */
+  sessions: Readonly<Record<string, ConnectionSession>>;
+  /** Hedefin bağlantısı; satırında "● hedef". */
+  targetConnectionId: string | null;
   onSelect: (id: string) => void;
   onConnectionMenu: (connection: Connection, at: MenuPosition) => void;
   onFolderMenu: (folder: Folder, at: MenuPosition) => void;
@@ -18,8 +23,24 @@ interface Props {
 const DRAG_TYPE = 'application/x-tezgah-baglanti';
 const UNFILED = 'klasorsuz';
 
+const STATUS: Record<ConnectionSession['durum'], { icon: string; label: string }> = {
+  baglaniyor: { icon: '◌', label: 'bağlanıyor' },
+  bagli: { icon: '●', label: 'bağlı' },
+  hata: { icon: '⚠', label: 'bağlanamadı' },
+};
+
 /** Kenar çubuğundaki bağlantı listesi: tek düzey klasörler, en altta Klasörsüz. */
-export function BaglantiListesi({ connections, folders, selectedId, onSelect, onConnectionMenu, onFolderMenu, onMove }: Props) {
+export function BaglantiListesi({
+  connections,
+  folders,
+  selectedId,
+  sessions,
+  targetConnectionId,
+  onSelect,
+  onConnectionMenu,
+  onFolderMenu,
+  onMove,
+}: Props) {
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   const [dropTarget, setDropTarget] = useState<string | null>(null);
 
@@ -29,46 +50,56 @@ export function BaglantiListesi({ connections, folders, selectedId, onSelect, on
 
   const rows = (list: Connection[]) => (
     <ul className="baglanti-listesi">
-      {list.map((c) => (
-        <li key={c.id} className="baglanti-ogesi">
-          <button
-            type="button"
-            className={`baglanti-satiri${isProd(c.envTag) ? ' prod-serit' : ''}`}
-            data-ortam={c.envTag ?? undefined}
-            aria-current={c.id === selectedId ? 'true' : undefined}
-            draggable
-            onDragStart={(e) => {
-              e.dataTransfer.setData(DRAG_TYPE, c.id);
-              e.dataTransfer.effectAllowed = 'move';
-            }}
-            onDragEnd={() => setDropTarget(null)}
-            onClick={() => onSelect(c.id)}
-            onContextMenu={(e) => {
-              e.preventDefault();
-              onConnectionMenu(c, { x: e.clientX, y: e.clientY });
-            }}
-          >
-            <span
-              className="ortam-noktasi"
-              data-testid="ortam-noktasi"
-              style={{ backgroundColor: c.color ?? 'transparent' }}
-              aria-hidden="true"
-            />
-            <span className="baglanti-adi">{c.name}</span>
-            <span className="baglanti-adresi">{connectionAddress(c)}</span>
-          </button>
-          <button
-            type="button"
-            className="satir-menusu"
-            aria-label="Bağlantı menüsü"
-            title="Bağlantı menüsü"
-            aria-haspopup="menu"
-            onClick={(e) => onConnectionMenu(c, below(e))}
-          >
-            ⋯
-          </button>
-        </li>
-      ))}
+      {list.map((c) => {
+        const session = sessions[c.id];
+        const status = session && STATUS[session.durum];
+        return (
+          <li key={c.id} className="baglanti-ogesi">
+            <button
+              type="button"
+              className={`baglanti-satiri${isProd(c.envTag) ? ' prod-serit' : ''}`}
+              data-ortam={c.envTag ?? undefined}
+              aria-current={c.id === selectedId ? 'true' : undefined}
+              draggable
+              onDragStart={(e) => {
+                e.dataTransfer.setData(DRAG_TYPE, c.id);
+                e.dataTransfer.effectAllowed = 'move';
+              }}
+              onDragEnd={() => setDropTarget(null)}
+              onClick={() => onSelect(c.id)}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                onConnectionMenu(c, { x: e.clientX, y: e.clientY });
+              }}
+            >
+              <span
+                className="ortam-noktasi"
+                data-testid="ortam-noktasi"
+                style={{ backgroundColor: c.color ?? 'transparent' }}
+                aria-hidden="true"
+              />
+              <span className="baglanti-adi">{c.name}</span>
+              {session && status && (
+                <span className={`durum durum-${session.durum}`} role="img" aria-label={status.label} title={status.label}>
+                  {status.icon}
+                </span>
+              )}
+              {c.id === targetConnectionId && <span className="hedef-isareti">● hedef</span>}
+              <span className="baglanti-adresi">{connectionAddress(c)}</span>
+            </button>
+            <button
+              type="button"
+              className="satir-menusu"
+              aria-label="Bağlantı menüsü"
+              title="Bağlantı menüsü"
+              aria-haspopup="menu"
+              onClick={(e) => onConnectionMenu(c, menuBelow(e))}
+            >
+              ⋯
+            </button>
+          </li>
+        );
+      })}
     </ul>
   );
 
@@ -137,9 +168,4 @@ export function BaglantiListesi({ connections, folders, selectedId, onSelect, on
       {section(UNFILED, 'Klasörsüz', null)}
     </>
   );
-}
-
-function below(e: MouseEvent<HTMLElement>): MenuPosition {
-  const rect = e.currentTarget.getBoundingClientRect();
-  return { x: rect.left, y: rect.bottom };
 }
