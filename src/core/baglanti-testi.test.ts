@@ -9,7 +9,6 @@ import {
   testPlan,
   testSummary,
   toDriverError,
-  unsupportedSslMode,
   type ExternalCode,
   type TestStep,
 } from './baglanti-testi';
@@ -29,6 +28,9 @@ describe('parseConnectionTestInput', () => {
         password: undefined,
         savePassword: true,
         sslmode: 'prefer',
+        sslrootcert: null,
+        sslcert: null,
+        sslkey: null,
       },
     });
   });
@@ -40,6 +42,8 @@ describe('parseConnectionTestInput', () => {
     [{ host: 'h', user: 'u', database: '' }, 'database'],
     [{ host: 'h', user: 'u', password: 5 }, 'password'],
     [{ host: 'h', user: 'u', sslmode: 'allow' }, 'sslmode'],
+    [{ host: 'h', user: 'u', sslmode: 'verify-ca', sslrootcert: './ca.pem' }, 'sslrootcert'],
+    [{ host: 'h', user: 'u', sslcert: '/c.crt' }, 'sslkey'],
   ])('geçersiz girdiyi alan hatasıyla reddeder (%o → %s)', (raw, field) => {
     const result = parseConnectionTestInput(raw);
     expect(result.ok).toBe(false);
@@ -149,6 +153,39 @@ describe('classifyConnectError', () => {
     expect(classifyConnectError(err, target)).toMatchObject({ adim: 'tls', kod: 'ECONNRESET' });
   });
 
+  it.each(['SELF_SIGNED_CERT_IN_CHAIN', 'DEPTH_ZERO_SELF_SIGNED_CERT', 'UNABLE_TO_GET_ISSUER_CERT_LOCALLY'])(
+    'doğrulanamayan sertifika zinciri (%s) CA alanına ve "CA dosyası seç"e götürür',
+    (code) => {
+      const err = { code, message: 'self-signed certificate in certificate chain' };
+      expect(classifyConnectError(err, { ...target, sslmode: 'verify-full' })).toMatchObject({
+        adim: 'tls',
+        kod: code,
+        alan: 'sslrootcert',
+        oneriler: ['caDosyasiSec', 'tekrarDene'],
+      });
+    },
+  );
+
+  it('verify-full’da host adı uyuşmazlığı "verify-ca dene" önerir', () => {
+    const err = { code: 'ERR_TLS_CERT_ALTNAME_INVALID', message: "Hostname/IP does not match certificate's altnames" };
+    expect(classifyConnectError(err, { ...target, sslmode: 'verify-full' })).toMatchObject({
+      adim: 'tls',
+      kod: 'ERR_TLS_CERT_ALTNAME_INVALID',
+      alan: 'host',
+      oneriler: ['verifyCaDene', 'hostuDuzelt'],
+    });
+  });
+
+  it('istemci sertifikası ile anahtar uyuşmazsa TLS adımında anahtar alanını işaret eder', () => {
+    const err = { code: 'ERR_OSSL_X509_KEY_VALUES_MISMATCH', message: 'key values mismatch' };
+    expect(classifyConnectError(err, { ...target, sslmode: 'require' })).toMatchObject({ adim: 'tls', alan: 'sslkey' });
+  });
+
+  it('hangi dosyadan geldiği bilinmeyen PEM hatası (bozuk CA da olabilir) bir alanı suçlamaz', () => {
+    const err = { code: 'ERR_OSSL_PEM_NO_START_LINE', message: 'no start line' };
+    expect(classifyConnectError(err, { ...target, sslmode: 'verify-full' })).toMatchObject({ adim: 'tls', alan: null });
+  });
+
   it('düz bağlantıda sunucu yanıt vermeden kopan bağlantı kimlik adımındadır', () => {
     const err = { message: 'Connection terminated unexpectedly' };
     expect(classifyConnectError(err, { ...target, ssl: false })).toMatchObject({
@@ -230,21 +267,17 @@ describe('TestRun', () => {
   });
 
   it.each([
-    ['disable', true, 'basarili', null, []],
-    ['prefer', false, 'basarili', null, []],
-    ['prefer', true, 'uyari', 'sifresizDusus', ['requireYap']],
-  ] as const)('TLS: sslmode=%s, SSL’siz=%s → %s', (sslmode, withoutSsl, sonuc, kod, oneriler) => {
+    ['disable', true, false, 'basarili', null, [], /SSL kapalı/],
+    ['prefer', false, false, 'basarili', null, [], /sertifika doğrulanmadı/],
+    ['prefer', true, false, 'uyari', 'sifresizDusus', ['requireYap'], /şifresiz/],
+    ['require', false, false, 'basarili', null, [], /sertifika doğrulanmadı, sslmode=require/],
+    ['require', false, true, 'basarili', null, [], /CA zinciri doğrulandı; host adı doğrulanmadı/],
+    ['verify-ca', false, true, 'basarili', null, [], /CA zinciri doğrulandı; host adı doğrulanmadı/],
+    ['verify-full', false, false, 'basarili', null, [], /CA zinciri ve host adı doğrulandı/],
+  ] as const)('TLS: sslmode=%s, SSL’siz=%s, CA=%s → %s', (sslmode, withoutSsl, ca, sonuc, kod, oneriler, mesaj) => {
     const run = new TestRun(['tls']);
-    run.tls(sslmode, withoutSsl);
-    expect(run.result().adimlar[0]).toMatchObject({ sonuc, kod, oneriler });
-  });
-});
-
-describe('unsupportedSslMode', () => {
-  it('bu sürümde yalnızca disable ve prefer çalışır', () => {
-    expect(unsupportedSslMode('disable')).toBeNull();
-    expect(unsupportedSslMode('prefer')).toBeNull();
-    expect(unsupportedSslMode('verify-full')).toMatchObject({ kod: 'sslmodeDesteklenmiyor' });
+    run.tls({ sslmode, withoutSsl, ca });
+    expect(run.result().adimlar[0]).toMatchObject({ sonuc, kod, oneriler, mesaj: expect.stringMatching(mesaj) });
   });
 });
 

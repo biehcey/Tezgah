@@ -106,6 +106,11 @@ describe('buildConnectionUrl (şifresiz)', () => {
     expect(buildConnectionUrl(connection)).toBe(url);
   });
 
+  it('kayıtlı bağlantının boş yolları ve varsayılan sslmode=prefer yazılmaz', () => {
+    const saved = { ...base, sslmode: 'prefer' as const, sslrootcert: null, sslcert: null, sslkey: null };
+    expect(buildConnectionUrl(saved)).toBe('postgres://app@db.example:5432/uygulama');
+  });
+
   it('üretilen URL ayrıştırılınca aynı alanlar geri gelir', () => {
     const connection = { host: '2001:db8::1', port: 6543, user: 'ö@z:', database: 'veri tabanı', sslmode: 'require' as const, sslkey: 'C:\\k.key' };
     expect(parseConnectionUrl(buildConnectionUrl(connection))).toEqual({ ok: true, fields: connection, ignored: [] });

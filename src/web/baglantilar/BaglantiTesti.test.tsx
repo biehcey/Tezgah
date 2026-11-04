@@ -89,6 +89,9 @@ describe('Bağlantıyı test et', () => {
         password: 'gizli',
         savePassword: true,
         sslmode: 'prefer',
+        sslrootcert: null,
+        sslcert: null,
+        sslkey: null,
       },
     ]);
     expect(fake.requests).toEqual([]);

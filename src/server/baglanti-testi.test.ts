@@ -1,4 +1,4 @@
-import { access } from 'node:fs/promises';
+import { access, mkdir, writeFile } from 'node:fs/promises';
 import { createServer, type AddressInfo, type Server } from 'node:net';
 import { join } from 'node:path';
 import pg from 'pg';
@@ -123,20 +123,50 @@ describe('bağlantı testi: sırlar', () => {
 });
 
 describe('bağlantı testi: TLS', () => {
-  it('bu sürümde desteklenmeyen sslmode TLS adımında hata verir', async () => {
+  async function onListener(body: Record<string, unknown>) {
     const { port, server } = await listening();
     try {
-      const r = await runTest({ host: '127.0.0.1', port, user: 'u', password: 'x', sslmode: 'verify-full' });
-      expect(results(r)).toEqual([
-        ['ulasma', 'basarili'],
-        ['tls', 'hata'],
-        ['kimlik', 'calistirilmadi'],
-        ['listeleme', 'calistirilmadi'],
-      ]);
-      expect(step(r, 'tls').kod).toBe('sslmodeDesteklenmiyor');
+      return await runTest({ host: '127.0.0.1', port, user: 'u', password: 'x', ...body });
     } finally {
       server.close();
     }
+  }
+
+  it('verify-ca’da CA dosyası yoksa sunucuya bağlanmadan TLS adımında "CA dosyası seç" ile durur', async () => {
+    const r = await onListener({ sslmode: 'verify-ca' });
+    expect(results(r)).toEqual([
+      ['ulasma', 'basarili'],
+      ['tls', 'hata'],
+      ['kimlik', 'calistirilmadi'],
+      ['listeleme', 'calistirilmadi'],
+    ]);
+    expect(step(r, 'tls')).toMatchObject({ kod: 'caGerekli', alan: 'sslrootcert', oneriler: ['caDosyasiSec'] });
+  });
+
+  it('CA dosyası okunamazsa TLS adımında dosya yolunu ve alanı bildirir', async () => {
+    const missing = join(t.configDir, 'yok', 'ca.pem');
+    const r = await onListener({ sslmode: 'verify-full', sslrootcert: missing });
+    expect(step(r, 'tls')).toMatchObject({
+      sonuc: 'hata',
+      kod: 'ENOENT',
+      alan: 'sslrootcert',
+      oneriler: ['caDosyasiSec'],
+      mesaj: expect.stringContaining(missing),
+    });
+  });
+
+  it('istemci anahtarı okunamazsa anahtar alanını işaret eder', async () => {
+    const cert = join(t.configDir, 'client.crt');
+    await mkdir(t.configDir, { recursive: true });
+    await writeFile(cert, 'CERT');
+    const r = await onListener({ sslmode: 'require', sslcert: cert, sslkey: join(t.configDir, 'client.key') });
+    expect(step(r, 'tls')).toMatchObject({ sonuc: 'hata', kod: 'ENOENT', alan: 'sslkey' });
+  });
+
+  it('require’da SSL el sıkışması kurulamazsa TLS adımında durur', async () => {
+    const r = await onListener({ sslmode: 'require' });
+    expect(step(r, 'tls').sonuc).toBe('hata');
+    expect(step(r, 'kimlik').sonuc).toBe('calistirilmadi');
   });
 });
 
@@ -170,17 +200,37 @@ describePg('bağlantı testi: gerçek Postgres', () => {
     expect(r.sunucu?.veritabaniSayisi).toBeGreaterThanOrEqual(1);
   });
 
-  it('prefer: SSL varsa SSL ile, yoksa "require yap" önerisiyle uyarılı şifresiz bağlanır', async () => {
+  async function serverHasSsl() {
     const probe = new pg.Client({ ...real, ssl: { rejectUnauthorized: false } });
-    const serverHasSsl = await probe.connect().then(
+    const hasSsl = await probe.connect().then(
       () => true,
       (err: Error) => !/does not support SSL/.test(err.message),
     );
     await probe.end().catch(() => {});
+    return hasSsl;
+  }
 
+  it('prefer: SSL varsa SSL ile, yoksa "require yap" önerisiyle uyarılı şifresiz bağlanır', async () => {
+    const hasSsl = await serverHasSsl();
     const tls = step(await runTest({ ...real, sslmode: 'prefer' }), 'tls');
-    if (serverHasSsl) expect(tls).toMatchObject({ sonuc: 'basarili', kod: null });
+    if (hasSsl) expect(tls).toMatchObject({ sonuc: 'basarili', kod: null });
     else expect(tls).toMatchObject({ sonuc: 'uyari', kod: 'sifresizDusus', oneriler: ['requireYap'] });
+  });
+
+  it('require: SSL varsa doğrulamasız SSL ile bağlanır, yoksa TLS adımında durur', async () => {
+    const r = await runTest({ ...real, sslmode: 'require' });
+    if (await serverHasSsl()) {
+      expect(step(r, 'tls')).toMatchObject({ sonuc: 'basarili', mesaj: expect.stringMatching(/sslmode=require/) });
+      expect(step(r, 'listeleme').sonuc).toBe('basarili');
+    } else expect(step(r, 'tls').sonuc).toBe('hata');
+  });
+
+  it('verify-full: SSL’siz sunucuda ya da doğrulanamayan sertifikada TLS adımında durur, kimlik çalışmaz', async () => {
+    const r = await runTest({ ...real, sslmode: 'verify-full' });
+    const tls = step(r, 'tls');
+    // Yerel test sunucusu genelde SSL'siz ya da kendinden imzalıdır; geçerli bir sertifikası varsa geçer.
+    if (tls.sonuc === 'hata') expect(step(r, 'kimlik').sonuc).toBe('calistirilmadi');
+    else expect(tls.mesaj).toMatch(/host adı doğrulandı/);
   });
 
   it('sslmode=disable ile de bağlanır', async () => {

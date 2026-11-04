@@ -1,7 +1,7 @@
-import type { Connection } from './baglanti';
+import { DEFAULT_SSL, type Connection } from './baglanti';
 
 /** `tezgah.json` şemasının sürümü. Şema değiştiğinde artırılır ve `MIGRATIONS`'a adım eklenir. */
-export const SETTINGS_VERSION = 1;
+export const SETTINGS_VERSION = 2;
 
 /** Tek düzey klasör (iç içe yok). */
 export interface Folder {
@@ -19,8 +19,17 @@ type RawSettings = Record<string, unknown>;
 /** `n` sürümündeki ayarı `n + 1` sürümüne taşıyan adım. */
 export type Migration = (settings: RawSettings) => RawSettings;
 
-/** Sürüm → bir sonraki sürüme geçiş. İlk sürümde henüz adım yok. */
-const MIGRATIONS: Record<number, Migration> = {};
+/** Sürüm → bir sonraki sürüme geçiş. */
+const MIGRATIONS: Record<number, Migration> = {
+  // 2: bağlantılara SSL ayarları (ticket 05).
+  1: (settings) => ({
+    ...settings,
+    version: 2,
+    connections: Array.isArray(settings.connections)
+      ? settings.connections.map((c: unknown) => (typeof c === 'object' && c !== null ? { ...DEFAULT_SSL, ...c } : c))
+      : settings.connections,
+  }),
+};
 
 export function emptySettings(): Settings {
   return { version: SETTINGS_VERSION, folders: [], connections: [] };

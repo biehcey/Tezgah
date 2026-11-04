@@ -20,6 +20,8 @@ export const FIX_LABELS: Record<FixId, string> = {
   veritabaniniDuzelt: 'Veritabanını düzelt',
   postgresKullan: 'postgres kullan',
   requireYap: 'require yap',
+  caDosyasiSec: 'CA dosyası seç',
+  verifyCaDene: 'verify-ca dene',
 };
 
 const ICONS = { basarili: '✓', uyari: '⚠', hata: '✗', calistirilmadi: '·' } as const;

@@ -92,6 +92,10 @@ describe('yeni bağlantı formu', () => {
           color: '#d97706',
           savePassword: true,
           password: 's3cret',
+          sslmode: 'prefer',
+          sslrootcert: null,
+          sslcert: null,
+          sslkey: null,
         },
       },
     ]);

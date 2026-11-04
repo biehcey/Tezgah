@@ -2,6 +2,7 @@ import { render } from '@testing-library/react';
 import type { ReactElement } from 'react';
 import { deleteFolder, parseFolderName, type Folder } from '../../core/ayarlar';
 import {
+  DEFAULT_SSL,
   copyConnection,
   newConnection,
   passwordAction,
@@ -47,6 +48,7 @@ export function connection(overrides: Partial<Connection> = {}): Connection {
     envTag: null,
     color: null,
     savePassword: true,
+    ...DEFAULT_SSL,
     databaseSelection: [{ database: 'postgres', schemas: null }],
     ...overrides,
   };

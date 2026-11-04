@@ -2,7 +2,14 @@
  * "Bağlantıyı test et": istek/yanıt sözleşmesi ve sürücü hatalarının adımlara, alanlara ve
  * düzeltme önerilerine eşlenmesi. Sunucu ve web aynı tanımı kullanır; ağ ve sürücüden bağımsızdır.
  */
-import { DEFAULT_DATABASE, SSL_MODES, connectionFieldReader, type SslMode } from './baglanti';
+import {
+  DEFAULT_DATABASE,
+  SSL_PATH_LABELS,
+  connectionFieldReader,
+  type SslMode,
+  type SslPathField,
+  type SslSettings,
+} from './baglanti';
 
 /** Adımlar bu sırayla koşar; uygulanmayan adım (sır okunmuyorsa `sirlar`, tünel yoksa `ssh`) listede yoktur. */
 export const TEST_STEPS = ['sirlar', 'ssh', 'ulasma', 'tls', 'kimlik', 'listeleme'] as const;
@@ -20,10 +27,12 @@ export type FixId =
   | 'sifreGir'
   | 'veritabaniniDuzelt'
   | 'postgresKullan'
-  | 'requireYap';
+  | 'requireYap'
+  | 'caDosyasiSec'
+  | 'verifyCaDene';
 
 /** Bir adımın sorumlu tuttuğu form alanı (formda kırmızı gösterilir). */
-export type TestField = 'host' | 'port' | 'user' | 'password' | 'database';
+export type TestField = 'host' | 'port' | 'user' | 'password' | 'database' | SslPathField;
 
 /** Tezgah'ın kendi yapısal kodları; sürücü ya da ağ bir kod vermediğinde ya da durum sürücü hatası değilse. */
 export const TEST_CODES = [
@@ -31,8 +40,9 @@ export const TEST_CODES = [
   'sirYok',
   'reddedildi',
   'sifresizDusus',
-  'sslmodeDesteklenmiyor',
   'tlsHatasi',
+  'caGerekli',
+  'dosyaOkunamadi',
   'ulasilamadi',
   'baglanilamadi',
   'listelenemedi',
@@ -79,7 +89,7 @@ export const STEP_LABELS: Record<TestStepId, string> = {
 };
 
 /** Formdaki kaydedilmemiş değerler. `password` verilmezse ve kaydı keychain'deyse şifre oradan okunur. */
-export interface ConnectionTestRequest {
+export interface ConnectionTestRequest extends SslSettings {
   /** Düzenlenen bağlantı; yeni bağlantıda `null`. Yalnızca keychain'deki şifreyi bulmak için. */
   connectionId: string | null;
   host: string;
@@ -88,7 +98,6 @@ export interface ConnectionTestRequest {
   database: string;
   password: string | undefined;
   savePassword: boolean;
-  sslmode: SslMode;
 }
 
 export interface ConnectionTestResponse {
@@ -96,9 +105,6 @@ export interface ConnectionTestResponse {
   /** Yalnızca tüm adımlar geçtiyse. */
   sunucu: { surum: string; veritabaniSayisi: number } | null;
 }
-
-/** Bu ticket'ta TLS adımının desteklediği modlar; diğerleri SSL/TLS ayarlarıyla gelir. */
-export const TEST_SSL_MODES = ['disable', 'prefer'] as const satisfies readonly SslMode[];
 
 export type TestInputField = Exclude<keyof ConnectionTestRequest, 'connectionId' | 'savePassword'>;
 export type TestParseResult =
@@ -117,18 +123,13 @@ export function parseConnectionTestInput(raw: unknown): TestParseResult {
   const database = read.text('database', 'Başlangıç veritabanı', DEFAULT_DATABASE);
   const port = read.port();
   const password = read.password();
-
-  let sslmode: SslMode = 'prefer';
-  if (input.sslmode !== undefined) {
-    if (SSL_MODES.includes(input.sslmode as SslMode)) sslmode = input.sslmode as SslMode;
-    else errors.sslmode = `sslmode şunlardan biri olmalı: ${SSL_MODES.join(', ')}`;
-  }
+  const ssl = read.ssl();
 
   const connectionId = typeof input.connectionId === 'string' ? input.connectionId : null;
   const savePassword = typeof input.savePassword === 'boolean' ? input.savePassword : true;
 
   if (Object.keys(errors).length > 0) return { ok: false, errors };
-  return { ok: true, value: { connectionId, host, port, user, database, password, savePassword, sslmode } };
+  return { ok: true, value: { connectionId, host, port, user, database, password, savePassword, ...ssl } };
 }
 
 /** Sürücüden ya da ağdan gelen hata; yalnızca `code` ve `message` okunur. */
@@ -182,7 +183,57 @@ export const PASSWORD_REQUIRED = 'sifreGerekli' satisfies TestCode;
 const SQLSTATE = /^[0-9A-Z]{5}$/;
 
 function isTlsError(err: DriverError): boolean {
-  return /^ERR_(SSL|TLS)_/.test(err.code ?? '') || err.code === 'EPROTO';
+  return /^ERR_(SSL|TLS|OSSL)_/.test(err.code ?? '') || err.code === 'EPROTO' || CHAIN_ERRORS.has(err.code ?? '');
+}
+
+/** Node/OpenSSL'in sunucu sertifikası zinciri doğrulanamadığında verdiği kodlar. */
+const CHAIN_ERRORS = new Set([
+  'SELF_SIGNED_CERT_IN_CHAIN',
+  'DEPTH_ZERO_SELF_SIGNED_CERT',
+  'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+  'UNABLE_TO_GET_ISSUER_CERT',
+  'UNABLE_TO_GET_ISSUER_CERT_LOCALLY',
+  'CERT_UNTRUSTED',
+  'CERT_SIGNATURE_FAILURE',
+]);
+
+/** TLS adımındaki hata: sertifika zinciri, host adı ya da istemci sertifikası/anahtarı. */
+function classifyTlsError(err: DriverError, sslmode: SslMode | undefined): StepFailure {
+  const kod = codeOf(err, 'tlsHatasi');
+  if (CHAIN_ERRORS.has(err.code ?? '')) {
+    return {
+      kod,
+      mesaj: `Sunucu sertifikası doğrulanamadı: ${err.message}`,
+      alan: 'sslrootcert',
+      oneriler: ['caDosyasiSec', 'tekrarDene'],
+    };
+  }
+  if (err.code === 'ERR_TLS_CERT_ALTNAME_INVALID') {
+    return {
+      kod,
+      mesaj: `Sertifika bu host adı için değil: ${err.message}`,
+      alan: 'host',
+      oneriler: sslmode === 'verify-full' ? ['verifyCaDene', 'hostuDuzelt'] : ['hostuDuzelt'],
+    };
+  }
+  if (err.code === 'ERR_OSSL_X509_KEY_VALUES_MISMATCH') {
+    return {
+      kod,
+      mesaj: `İstemci anahtarı sertifikayla eşleşmiyor: ${err.message}`,
+      alan: 'sslkey',
+      oneriler: ['tekrarDene'],
+    };
+  }
+  if (/^ERR_OSSL_/.test(err.code ?? '')) {
+    // Bozuk PEM CA'dan da, istemci sertifikası ya da anahtarından da gelebilir; hangisi bilinmez.
+    return {
+      kod,
+      mesaj: `CA dosyası, istemci sertifikası ya da anahtarı kullanılamadı (geçerli PEM mi?): ${err.message}`,
+      alan: null,
+      oneriler: ['tekrarDene'],
+    };
+  }
+  return { kod, mesaj: `TLS kurulamadı: ${err.message}`, alan: null, oneriler: ['tekrarDene'] };
 }
 
 /**
@@ -192,7 +243,7 @@ function isTlsError(err: DriverError): boolean {
  */
 export function classifyConnectError(
   err: DriverError,
-  { database, ssl }: TestAddress & { ssl: boolean },
+  { database, ssl, sslmode }: TestAddress & { ssl: boolean; sslmode?: SslMode },
 ): StepFailure & { adim: 'tls' | 'kimlik' } {
   if (err.code === PASSWORD_REQUIRED) {
     return {
@@ -234,16 +285,19 @@ export function classifyConnectError(
         return { adim: 'kimlik', kod, mesaj: err.message, alan: null, oneriler: ['tekrarDene'] };
     }
   }
-  if (ssl || isTlsError(err)) {
-    return {
-      adim: 'tls',
-      kod: codeOf(err, 'tlsHatasi'),
-      mesaj: `TLS kurulamadı: ${err.message}`,
-      alan: null,
-      oneriler: ['tekrarDene'],
-    };
-  }
+  if (ssl || isTlsError(err)) return { adim: 'tls', ...classifyTlsError(err, sslmode) };
   return { adim: 'kimlik', kod: codeOf(err, 'baglanilamadi'), mesaj: err.message, alan: null, oneriler: ['tekrarDene'] };
+}
+
+/** SSL dosyası (CA, istemci sertifikası ya da anahtarı) okunamadı; TLS adımının hatasıdır. */
+export function classifySslFileError(field: SslPathField, path: string, err: DriverError): StepFailure {
+  const reason = err.code === 'ENOENT' ? 'dosya yok' : err.code === 'EACCES' || err.code === 'EPERM' ? 'okuma izni yok' : err.message;
+  return {
+    kod: codeOf(err, 'dosyaOkunamadi'),
+    mesaj: `${SSL_PATH_LABELS[field]} okunamadı (${path}): ${reason}.`,
+    alan: field,
+    oneriler: field === 'sslrootcert' ? ['caDosyasiSec'] : ['tekrarDene'],
+  };
 }
 
 /** `prefer`: doğrulamasız SSL denemesinden sonra yalnızca bu hatada bir kez düz bağlantı denenir. */
@@ -294,8 +348,11 @@ export class TestRun {
   fail(id: TestStepId, failure: StepFailure) {
     this.done.push({ id, sonuc: 'hata', ...failure });
   }
-  /** Bağlantının TLS sonucu: `withoutSsl`, SSL'siz bağlanıldığını söyler (disable ya da prefer düşüşü). */
-  tls(sslmode: SslMode, withoutSsl: boolean) {
+  /**
+   * Bağlantının TLS sonucu: `withoutSsl`, SSL'siz bağlanıldığını söyler (disable ya da prefer düşüşü);
+   * `ca`, bir CA dosyası verildiğini (require'da doğrulamayı açar).
+   */
+  tls({ sslmode, withoutSsl, ca }: { sslmode: SslMode; withoutSsl: boolean; ca: boolean }) {
     if (sslmode === 'disable') this.ok('tls', 'SSL kapalı (sslmode=disable); bağlantı şifresiz.');
     else if (withoutSsl) {
       this.warn('tls', {
@@ -304,7 +361,11 @@ export class TestRun {
         alan: null,
         oneriler: ['requireYap'],
       });
-    } else this.ok('tls', 'SSL ile bağlanıldı (sertifika doğrulanmadı, sslmode=prefer).');
+    } else if (sslmode === 'verify-full') {
+      this.ok('tls', `SSL ile bağlanıldı; CA zinciri ve host adı doğrulandı${ca ? '' : ' (sistem CA’ları)'}.`);
+    } else if (sslmode === 'verify-ca' || (sslmode === 'require' && ca)) {
+      this.ok('tls', `SSL ile bağlanıldı; CA zinciri doğrulandı; host adı doğrulanmadı (sslmode=${sslmode}).`);
+    } else this.ok('tls', `SSL ile bağlanıldı (sertifika doğrulanmadı, sslmode=${sslmode}).`);
   }
   result(sunucu: ConnectionTestResponse['sunucu'] = null): ConnectionTestResponse {
     const notRun = this.plan.slice(this.done.length).map(
@@ -312,17 +373,6 @@ export class TestRun {
     );
     return { adimlar: [...this.done, ...notRun], sunucu };
   }
-}
-
-/** Bu sürümde TLS adımının çalıştıramadığı mod. */
-export function unsupportedSslMode(sslmode: SslMode): StepFailure | null {
-  if ((TEST_SSL_MODES as readonly SslMode[]).includes(sslmode)) return null;
-  return {
-    kod: 'sslmodeDesteklenmiyor',
-    mesaj: `sslmode=${sslmode} henüz desteklenmiyor; şimdilik yalnızca disable ve prefer.`,
-    alan: null,
-    oneriler: [],
-  };
 }
 
 /** Herhangi bir yakalanan değeri `DriverError`'a indirger. */

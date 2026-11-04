@@ -18,8 +18,30 @@ describe('parseConnectionInput', () => {
         color: null,
         savePassword: true,
         password: undefined,
+        sslmode: 'prefer',
+        sslrootcert: null,
+        sslcert: null,
+        sslkey: null,
       },
     });
+  });
+
+  it('SSL alanlarını okur; boş yol "yok" demektir', () => {
+    const result = parseConnectionInput({
+      ...minimal,
+      sslmode: 'verify-full',
+      sslrootcert: ' /etc/ssl/ca.pem ',
+      sslcert: 'C:\\certs\\client.crt',
+      sslkey: '~/.postgresql/client.key',
+    });
+    expect(result.ok && result.value).toMatchObject({
+      sslmode: 'verify-full',
+      sslrootcert: '/etc/ssl/ca.pem',
+      sslcert: 'C:\\certs\\client.crt',
+      sslkey: '~/.postgresql/client.key',
+    });
+    const empty = parseConnectionInput({ ...minimal, sslrootcert: '', sslcert: null });
+    expect(empty.ok && empty.value).toMatchObject({ sslrootcert: null, sslcert: null });
   });
 
   it('ortam etiketi verilip renk verilmezse etiketin varsayılan rengini kullanır', () => {
@@ -45,10 +67,22 @@ describe('parseConnectionInput', () => {
     [{ ...minimal, password: 42 }, 'password'],
     [{ ...minimal, password: 'x'.repeat(1025) }, 'password'],
     [{ ...minimal, database: '' }, 'database'],
+    [{ ...minimal, sslmode: 'allow' }, 'sslmode'],
+    [{ ...minimal, sslmode: 'require', sslrootcert: 'ca.pem' }, 'sslrootcert'],
+    [{ ...minimal, sslmode: 'verify-full', sslrootcert: 5 }, 'sslrootcert'],
+    [{ ...minimal, sslcert: '/c.crt' }, 'sslkey'],
+    [{ ...minimal, sslkey: '/c.key' }, 'sslcert'],
   ])('geçersiz alanı adıyla bildirir (%#)', (input, field) => {
     const result = parseConnectionInput(input);
     expect(result.ok).toBe(false);
     expect(!result.ok && Object.keys(result.errors)).toEqual([field]);
+  });
+
+  it('modun kullanmadığı yollar doğrulanmaz ama korunur (prefer CA’yı, disable hiçbirini kullanmaz)', () => {
+    const prefer = parseConnectionInput({ ...minimal, sslmode: 'prefer', sslrootcert: ' /ca.pem ' });
+    expect(prefer.ok && prefer.value.sslrootcert).toBe('/ca.pem');
+    const disable = parseConnectionInput({ ...minimal, sslmode: 'disable', sslrootcert: 'ca.pem', sslcert: '/c.crt' });
+    expect(disable.ok && disable.value).toMatchObject({ sslrootcert: 'ca.pem', sslcert: '/c.crt', sslkey: null });
   });
 
   it('nesne olmayan girdiyi reddeder', () => {

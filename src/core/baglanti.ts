@@ -18,6 +18,43 @@ export const DEFAULT_ENV_COLORS: Record<EnvTag, string> = {
 export const SSL_MODES = ['disable', 'prefer', 'require', 'verify-ca', 'verify-full'] as const;
 export type SslMode = (typeof SSL_MODES)[number];
 
+/** SSL dosya yolları (libpq adlarıyla): CA, istemci sertifikası, istemci anahtarı. */
+export const SSL_PATH_FIELDS = ['sslrootcert', 'sslcert', 'sslkey'] as const;
+export type SslPathField = (typeof SSL_PATH_FIELDS)[number];
+
+/**
+ * Bağlantının SSL ayarları. Dosyalar yerinde kalır, yalnızca yolları saklanır; `~/` ev dizinidir.
+ * Verilmeyen yol `null`: CA yoksa `verify-full` sistem CA'larını kullanır.
+ */
+export interface SslSettings {
+  sslmode: SslMode;
+  sslrootcert: string | null;
+  sslcert: string | null;
+  sslkey: string | null;
+}
+
+export const DEFAULT_SSL: SslSettings = { sslmode: 'prefer', sslrootcert: null, sslcert: null, sslkey: null };
+
+export const SSL_PATH_LABELS: Record<SslPathField, string> = {
+  sslrootcert: 'CA dosyası',
+  sslcert: 'İstemci sertifikası',
+  sslkey: 'İstemci anahtarı',
+};
+
+export function isSslPathField(field: string | null | undefined): field is SslPathField {
+  return (SSL_PATH_FIELDS as readonly (string | null | undefined)[]).includes(field);
+}
+
+/** Modun kullandığı dosyalar: `disable` hiçbirini, `prefer` CA'yı kullanmaz (doğrulamaz). */
+export function sslPathsUsed(sslmode: SslMode): SslPathField[] {
+  if (sslmode === 'disable') return [];
+  if (sslmode === 'prefer') return ['sslcert', 'sslkey'];
+  return [...SSL_PATH_FIELDS];
+}
+
+/** Mutlak yol (POSIX, Windows sürücü ya da UNC) ya da `~/` ile başlayan yol. */
+const ABSOLUTE_PATH = /^(?:~[\\/]|\/|[A-Za-z]:[\\/]|\\\\)/;
+
 export const DEFAULT_PORT = 5432;
 export const DEFAULT_DATABASE = 'postgres';
 /** Windows Credential Manager blob sınırı 2560 bayt (UTF-16); güvenli pay bırakılır. */
@@ -30,7 +67,7 @@ export interface DatabaseSelection {
 }
 
 /** `tezgah.json`'da saklanan Bağlantı. Şifre burada yoktur; keychain'dedir. */
-export interface Connection {
+export interface Connection extends SslSettings {
   id: string;
   name: string;
   folderId: string | null;
@@ -90,6 +127,37 @@ export function connectionFieldReader(input: Record<string, unknown>, errors: Pa
       else return value;
       return undefined;
     },
+    /**
+     * `sslmode` ve dosya yolları. Yalnızca modun kullandığı yollar doğrulanır (sertifika ile anahtar
+     * birlikte); diğerleri olduğu gibi saklanır, mod değişince kaybolmasın.
+     */
+    ssl(): SslSettings {
+      let sslmode: SslMode = DEFAULT_SSL.sslmode;
+      if (input.sslmode !== undefined) {
+        if (SSL_MODES.includes(input.sslmode as SslMode)) sslmode = input.sslmode as SslMode;
+        else errors.sslmode = `sslmode şunlardan biri olmalı: ${SSL_MODES.join(', ')}`;
+      }
+      const used = sslPathsUsed(sslmode);
+      const paths = {} as Record<SslPathField, string | null>;
+      for (const field of SSL_PATH_FIELDS) {
+        const value = input[field];
+        paths[field] = null;
+        if (value === undefined || value === null || (typeof value === 'string' && value.trim() === '')) continue;
+        if (typeof value !== 'string') errors[field] = `Geçersiz ${SSL_PATH_LABELS[field]}`;
+        else if (!used.includes(field)) paths[field] = value.trim();
+        else if (!ABSOLUTE_PATH.test(value.trim())) {
+          errors[field] = `${SSL_PATH_LABELS[field]} için tam yol girin (ör. /etc/ssl/ca.pem ya da ~/.postgresql/root.crt)`;
+        } else paths[field] = value.trim();
+      }
+      const client = used.includes('sslcert');
+      if (client && paths.sslcert !== null && paths.sslkey === null && !errors.sslkey) {
+        errors.sslkey = 'İstemci sertifikasıyla birlikte anahtarı da gerekli';
+      }
+      if (client && paths.sslkey !== null && paths.sslcert === null && !errors.sslcert) {
+        errors.sslcert = 'İstemci anahtarıyla birlikte sertifikası da gerekli';
+      }
+      return { sslmode, ...paths };
+    },
   };
 }
 
@@ -132,11 +200,12 @@ export function parseConnectionInput(raw: unknown): ParseResult {
   }
 
   const password = read.password();
+  const ssl = read.ssl();
 
   if (Object.keys(errors).length > 0) return { ok: false, errors };
   return {
     ok: true,
-    value: { name, folderId, host, port, user, database, envTag, color, savePassword, password },
+    value: { name, folderId, host, port, user, database, envTag, color, savePassword, password, ...ssl },
   };
 }
 

@@ -22,6 +22,15 @@ describe('migrateSettings', () => {
     });
   });
 
+  it('sürüm 1 bağlantılarına SSL varsayılanlarını (prefer, dosya yok) ekler', () => {
+    const v1 = { id: 'b1', name: 'Yerel', host: 'localhost', port: 5432, user: 'postgres' };
+    const settings = migrateSettings({ version: 1, folders: [], connections: [v1] });
+    expect(settings.version).toBe(SETTINGS_VERSION);
+    expect(settings.connections).toEqual([
+      { ...v1, sslmode: 'prefer', sslrootcert: null, sslcert: null, sslkey: null },
+    ]);
+  });
+
   it('daha yeni bir Tezgah\'ın yazdığı ayarı reddeder', () => {
     expect(() => migrateSettings({ version: SETTINGS_VERSION + 1, folders: [], connections: [] })).toThrow(
       /daha yeni/,

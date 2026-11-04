@@ -2,6 +2,7 @@ import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { startTestServer, type TestServer } from './test/sunucu';
+import { SETTINGS_VERSION } from '../core/ayarlar';
 
 let t: TestServer;
 beforeEach(async () => {
@@ -53,12 +54,16 @@ describe('bağlantı oluşturma', () => {
         envTag: 'dev',
         color: '#16a34a',
         savePassword: true,
+        sslmode: 'prefer',
+        sslrootcert: null,
+        sslcert: null,
+        sslkey: null,
         databaseSelection: [{ database: 'postgres', schemas: null }],
       },
     ]);
 
     const file = await settingsFile();
-    expect(file).toEqual({ version: 1, folders: [], connections: list.body });
+    expect(file).toEqual({ version: SETTINGS_VERSION, folders: [], connections: list.body });
     const raw = await readFile(join(t.configDir, 'tezgah.json'), 'utf8');
     expect(raw).not.toContain('gizli-sifre');
     expect(t.keychain.entries.get(id)).toBe('gizli-sifre');
@@ -109,6 +114,14 @@ describe('bağlantı güncelleme', () => {
     expect(res.body.password).toBe('silindi');
     expect(res.body.connection.savePassword).toBe(false);
     expect(t.keychain.entries.size).toBe(0);
+  });
+
+  it('SSL ayarlarını (sslmode ve dosya yolları) saklar; dosyaların kendisine dokunmaz', async () => {
+    const created = await api('POST', '/api/baglantilar', input);
+    const ssl = { sslmode: 'verify-full', sslrootcert: '/etc/ssl/ca.pem', sslcert: '~/c.crt', sslkey: '~/c.key' };
+    const updated = await api('PUT', `/api/baglantilar/${created.body.connection.id}`, { ...input, ...ssl });
+    expect(updated.body.connection).toMatchObject(ssl);
+    expect((await settingsFile()).connections[0]).toMatchObject(ssl);
   });
 
   it('olmayan bağlantı 404 döner', async () => {

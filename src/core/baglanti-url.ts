@@ -42,13 +42,19 @@ const QUERY_FIELDS = {
 
 class UrlError extends Error {}
 
-/** URL'e yazılacak bağlantı alanları; şifre hiçbir zaman yazılmaz. */
-export type UrlSource = Required<Pick<UrlFields, 'host' | 'port' | 'user' | 'database'>> & UrlSsl;
+/** URL'e yazılacak bağlantı alanları; şifre hiçbir zaman yazılmaz. Kayıtlı bağlantıda boş yol `null`'dır. */
+export type UrlSource = Required<Pick<UrlFields, 'host' | 'port' | 'user' | 'database'>> & {
+  [K in keyof UrlSsl]?: UrlSsl[K] | null;
+};
 
-/** Şifresiz `postgres://kullanıcı@host:port/veritabanı[?ssl…]` üretir. */
+/** Şifresiz `postgres://kullanıcı@host:port/veritabanı[?ssl…]` üretir; libpq varsayılanı `prefer` yazılmaz. */
 export function buildConnectionUrl(source: UrlSource): string {
   const host = source.host.includes(':') ? `[${source.host}]` : encodeURIComponent(source.host);
-  const query = URL_SSL_KEYS.filter((key) => source[key] !== undefined && source[key] !== '')
+  const written = (key: (typeof URL_SSL_KEYS)[number]) => {
+    const value = source[key];
+    return value !== undefined && value !== null && value !== '' && !(key === 'sslmode' && value === 'prefer');
+  };
+  const query = URL_SSL_KEYS.filter(written)
     .map((key) => `${key}=${encodeURIComponent(source[key]!)}`);
   const url = `postgres://${encodeURIComponent(source.user)}@${host}:${source.port}/${encodeURIComponent(source.database)}`;
   return query.length ? `${url}?${query.join('&')}` : url;

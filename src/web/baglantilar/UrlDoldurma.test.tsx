@@ -43,6 +43,10 @@ describe('URL’den doldurma', () => {
       color: null,
       savePassword: true,
       password: 's@cret',
+      sslmode: 'prefer',
+      sslrootcert: null,
+      sslcert: null,
+      sslkey: null,
     });
     expect(JSON.stringify(fake.requests)).not.toContain('postgres://');
     expect(fake.passwords.get(fake.connections[0]!.id)).toBe('s@cret');
@@ -77,17 +81,30 @@ describe('URL’den doldurma', () => {
     expect(f.getByLabelText('Başlangıç veritabanı')).toHaveValue('postgres');
   });
 
-  it('yok sayılan parametreler listelenir; SSL parametreleri tutulur ve SSL bölümü gelene dek kaydedilmez', async () => {
+  it('yok sayılan parametreler listelenir; SSL parametreleri SSL/TLS alanlarına dolar ve kaydedilir', async () => {
     const { user, fake, f } = await openNew();
     await user.click(f.getByLabelText('URL'));
-    await user.paste('postgres://u@h/db?sslmode=verify-full&sslrootcert=/ca.pem&application_name=x&connect_timeout=3');
-    const status = f.getByRole('status');
-    expect(status).toHaveTextContent('Yok sayıldı: application_name, connect_timeout');
-    expect(status).toHaveTextContent('SSL: sslmode=verify-full, sslrootcert=/ca.pem');
+    await user.paste(
+      'postgres://u@h/db?sslmode=verify-full&sslrootcert=/ca.pem&sslcert=/c.crt&sslkey=/c.key&application_name=x&connect_timeout=3',
+    );
+    expect(f.getByRole('status')).toHaveTextContent('Yok sayıldı: application_name, connect_timeout');
+
+    const ssl = within(screen.getByRole('group', { name: 'SSL/TLS' }));
+    expect(ssl.getByRole('button', { name: /SSL\/TLS/ })).toHaveTextContent('verify-full');
+    await user.click(ssl.getByRole('button', { name: /SSL\/TLS/ }));
+    expect(ssl.getByLabelText('sslmode')).toHaveValue('verify-full');
+    expect(ssl.getByLabelText('CA dosyası')).toHaveValue('/ca.pem');
+    expect(ssl.getByLabelText('İstemci sertifikası')).toHaveValue('/c.crt');
+    expect(ssl.getByLabelText('İstemci anahtarı')).toHaveValue('/c.key');
 
     await user.type(f.getByLabelText('Ad'), 'A');
     await user.click(f.getByRole('button', { name: 'Kaydet' }));
-    expect(fake.requests[0]?.body).not.toHaveProperty('sslmode');
+    expect(fake.requests[0]?.body).toMatchObject({
+      sslmode: 'verify-full',
+      sslrootcert: '/ca.pem',
+      sslcert: '/c.crt',
+      sslkey: '/c.key',
+    });
   });
 
   it.each([

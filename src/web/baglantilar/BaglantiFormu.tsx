@@ -2,6 +2,9 @@ import { useEffect, useId, useState, type ClipboardEvent, type FormEvent } from 
 import type { Folder } from '../../core/ayarlar';
 import {
   DEFAULT_DATABASE,
+  DEFAULT_SSL,
+  SSL_PATH_FIELDS,
+  isSslPathField,
   DEFAULT_ENV_COLORS,
   DEFAULT_PORT,
   ENV_TAGS,
@@ -13,9 +16,10 @@ import {
   type PasswordWriteOutcome,
 } from '../../core/baglanti';
 import { parseConnectionTestInput, type FixId, type TestField } from '../../core/baglanti-testi';
-import { URL_SSL_KEYS, isConnectionUrl, parseConnectionUrl, type UrlSsl } from '../../core/baglanti-url';
+import { isConnectionUrl, parseConnectionUrl } from '../../core/baglanti-url';
 import { ApiError, useApi, type ConnectionRequest, type ConnectionTestBody } from '../api/client';
-import { TestAdimlari, TestOzeti, TlsDurumu, type TestState } from './TestSonucu';
+import { SslBolumu, sslForm, sslSettings, type SslForm } from './SslBolumu';
+import { TestAdimlari, TestOzeti, type TestState } from './TestSonucu';
 
 interface Props {
   /** Düzenlenen bağlantı; `null` ise yeni bağlantı. */
@@ -36,12 +40,10 @@ const FIX_FIELDS: Partial<Record<FixId, TestField>> = {
   sifreyiDuzelt: 'password',
   sifreGir: 'password',
   veritabaniniDuzelt: 'database',
+  caDosyasiSec: 'sslrootcert',
 };
 
-const SSL_MODE_NOTES: Partial<Record<string, string>> = {
-  disable: 'SSL kullanılmaz; bağlantı şifresizdir.',
-  prefer: 'Önce SSL denenir (sertifika doğrulanmaz); sunucu desteklemiyorsa şifresiz bağlanılır.',
-};
+const SSL_ERROR_FIELDS = ['sslmode', ...SSL_PATH_FIELDS] as const;
 
 /** Son URL doldurmasında yok sayılan parametreler. */
 interface UrlNote {
@@ -58,15 +60,14 @@ const STORED_PASSWORD_NOTES: Partial<Record<StoredPassword, string>> = {
   bilinmiyor: 'Keychain durumu alınamadı; kayıtlı şifre olup olmadığı bilinmiyor.',
 };
 
-/** Kısa tek sütun bağlantı formu (ticket 24 varyant C): şimdilik yalnızca Bağlantı bölümü. */
+/** Kısa tek sütun bağlantı formu (ticket 24 varyant C): Bağlantı ve katlanır SSL/TLS bölümleri. */
 export function BaglantiFormu({ connection, folders, onSaved, onCancel, onDelete }: Props) {
   const api = useApi();
   const id = useId();
   const [url, setUrl] = useState('');
   const [urlError, setUrlError] = useState<string | null>(null);
   const [urlNote, setUrlNote] = useState<UrlNote | null>(null);
-  /** URL'den gelen SSL parametreleri: SSL/TLS bölümü (ticket 05) gelene kadar formda tutulur, kaydedilmez. */
-  const [ssl, setSsl] = useState<UrlSsl>({});
+  const [ssl, setSsl] = useState<SslForm>(() => sslForm(connection ?? DEFAULT_SSL));
   const [name, setName] = useState(connection?.name ?? '');
   const [folderId, setFolderId] = useState<string | null>(connection?.folderId ?? null);
   // Form açıkken bağlantı listeden başka klasöre taşınırsa Kaydet onu eski klasörüne geri götürmesin.
@@ -135,9 +136,13 @@ export function BaglantiFormu({ connection, folders, onSaved, onCancel, onDelete
       setPassword(fields.password);
       setChanging(true);
     }
-    const ssl: UrlSsl = {};
-    for (const key of URL_SSL_KEYS) if (fields[key] !== undefined) Object.assign(ssl, { [key]: fields[key] });
-    setSsl(ssl);
+    // sslmode da port gibi: URL'de yoksa libpq varsayılanı; dosya yolları yalnızca URL'de varsa.
+    setSsl((current) => ({
+      sslmode: fields.sslmode ?? DEFAULT_SSL.sslmode,
+      sslrootcert: fields.sslrootcert ?? current.sslrootcert,
+      sslcert: fields.sslcert ?? current.sslcert,
+      sslkey: fields.sslkey ?? current.sslkey,
+    }));
     setUrl('');
     setUrlError(null);
     setUrlNote({ ignored });
@@ -160,7 +165,11 @@ export function BaglantiFormu({ connection, folders, onSaved, onCancel, onDelete
     setColor(tag ? DEFAULT_ENV_COLORS[tag] : null);
   }
 
-  const sslmode = ssl.sslmode ?? 'prefer';
+  /** Alan hataları SSL bölümündeyse bölüm açılır. */
+  function showErrors(next: Errors) {
+    setErrors(next);
+    if (SSL_ERROR_FIELDS.some((f) => next[f])) setSslOpen(true);
+  }
 
   /** Formdaki kaydedilmemiş değerlerle test; hiçbir şey kaydedilmez. */
   async function runTest(overrides: Partial<ConnectionTestBody> = {}) {
@@ -171,13 +180,13 @@ export function BaglantiFormu({ connection, folders, onSaved, onCancel, onDelete
       user,
       database,
       savePassword,
-      sslmode,
+      ...sslSettings(ssl),
       ...overrides,
     };
     // Kaydet'teki gibi: boş alan kayıtlı şifreyi kullanır (sunucu keychain'den okur).
     if (password !== '' && body.password === undefined) body.password = password;
     const parsed = parseConnectionTestInput(body);
-    if (!parsed.ok) return setErrors(parsed.errors);
+    if (!parsed.ok) return showErrors(parsed.errors);
     setErrors({});
     setTestField(null);
     setTestState({ durum: 'calisiyor' });
@@ -186,14 +195,16 @@ export function BaglantiFormu({ connection, folders, onSaved, onCancel, onDelete
       setTestState({ durum: 'bitti', yanit });
       const failed = yanit.adimlar.find((s) => s.sonuc === 'hata');
       setTestField(failed?.alan ?? null);
-      if (failed?.id === 'tls') setSslOpen(true);
+      if (failed?.id === 'tls' || isSslPathField(failed?.alan)) {
+        setSslOpen(true);
+      }
     } catch (err) {
       setTestState({ durum: 'basarisiz', hata: err instanceof ApiError && err.body?.hata ? err.body.hata : 'sunucuya ulaşılamadı' });
     }
   }
 
   function canFix(fix: FixId): boolean {
-    if (fix === 'tekrarDene' || fix === 'postgresKullan') return true;
+    if (fix === 'tekrarDene' || fix === 'postgresKullan' || fix === 'verifyCaDene' || fix === 'requireYap') return true;
     const target = FIX_FIELDS[fix];
     // Şifre alanı "Keychain'e kaydet" kapalıyken yok (oturumluk şifre ayrı bir akış).
     if (target === 'password') return savePassword;
@@ -206,9 +217,15 @@ export function BaglantiFormu({ connection, folders, onSaved, onCancel, onDelete
       setDatabase(DEFAULT_DATABASE);
       return void runTest({ database: DEFAULT_DATABASE });
     }
+    if (fix === 'verifyCaDene') {
+      setSsl((current) => ({ ...current, sslmode: 'verify-ca' }));
+      return void runTest({ ...sslSettings({ ...ssl, sslmode: 'verify-ca' }) });
+    }
+    if (fix === 'requireYap') return setSsl((current) => ({ ...current, sslmode: 'require' }));
     const target = FIX_FIELDS[fix];
     if (!target) return;
     if (target === 'password') setChanging(true);
+    if (isSslPathField(target)) setSslOpen(true);
     setFocusField(target);
   }
 
@@ -226,12 +243,13 @@ export function BaglantiFormu({ connection, folders, onSaved, onCancel, onDelete
       envTag,
       color,
       savePassword,
+      ...sslSettings(ssl),
     };
     // Boş alan kayıtlı şifreye dokunmaz; şifreyi keychain'den kaldırmanın yolu "Keychain'e kaydet"i kapatmak.
     if (savePassword && password !== '') request.password = password;
 
     const parsed = parseConnectionInput(request);
-    if (!parsed.ok) return setErrors(parsed.errors);
+    if (!parsed.ok) return showErrors(parsed.errors);
     setErrors({});
     setSaving(true);
     try {
@@ -241,7 +259,7 @@ export function BaglantiFormu({ connection, folders, onSaved, onCancel, onDelete
       onSaved(result.connection, result.password);
     } catch (err) {
       setSaving(false);
-      if (err instanceof ApiError && err.body?.alanlar) setErrors(err.body.alanlar);
+      if (err instanceof ApiError && err.body?.alanlar) showErrors(err.body.alanlar);
       else setErrors({ genel: err instanceof ApiError && err.body?.hata ? err.body.hata : 'Kaydedilemedi.' });
     }
   }
@@ -325,15 +343,6 @@ export function BaglantiFormu({ connection, folders, onSaved, onCancel, onDelete
             <p role="status" className="url-ozeti">
               <span>URL’den dolduruldu.</span>
               {urlNote.ignored.length > 0 && <span> Yok sayıldı: {urlNote.ignored.join(', ')}.</span>}
-              {Object.keys(ssl).length > 0 && (
-                <span>
-                  {' '}
-                  SSL: {URL_SSL_KEYS.filter((k) => ssl[k] !== undefined)
-                    .map((k) => `${k}=${ssl[k]}`)
-                    .join(', ')}{' '}
-                  (SSL/TLS ayarları henüz formda yok; kaydedilmez).
-                </span>
-              )}
             </p>
           )}
         </div>
@@ -437,26 +446,22 @@ export function BaglantiFormu({ connection, folders, onSaved, onCancel, onDelete
         <TestAdimlari state={testState} section="baglanti" onFix={applyFix} canFix={canFix} />
       </fieldset>
 
-      <fieldset className="bolum katlanir" aria-label="SSL/TLS">
-        <legend>
-          <button
-            type="button"
-            className="bolum-acici"
-            aria-expanded={sslOpen}
-            onClick={() => setSslOpen((open) => !open)}
-          >
-            <span aria-hidden="true">{sslOpen ? '▾' : '▸'}</span> SSL/TLS
-            <span className="bolum-ozeti"> · {sslmode}</span>
-            <TlsDurumu state={testState} />
-          </button>
-        </legend>
-        {sslOpen && (
-          <>
-            <p className="soluk">{SSL_MODE_NOTES[sslmode] ?? `sslmode=${sslmode}`}</p>
-            <TestAdimlari state={testState} section="ssl" onFix={applyFix} canFix={canFix} />
-          </>
-        )}
-      </fieldset>
+      <SslBolumu
+        id={id}
+        value={ssl}
+        onChange={(next) => {
+          setSsl(next);
+          if (isSslPathField(testField)) setTestField(null);
+        }}
+        open={sslOpen}
+        onToggle={() => setSslOpen((open) => !open)}
+        prod={isProd(envTag)}
+        errors={errors}
+        invalid={(field) => testField === field}
+        testState={testState}
+        onFix={applyFix}
+        canFix={canFix}
+      />
 
       {(errors.genel || errors.folderId) && (
         <p role="alert" className="uyari">

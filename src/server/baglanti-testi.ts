@@ -1,21 +1,27 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { readFile } from 'node:fs/promises';
 import { connect as netConnect } from 'node:net';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+import { checkServerIdentity, type PeerCertificate } from 'node:tls';
 import pg from 'pg';
-import type { ValidationErrorResponse } from '../core/baglanti';
+import { sslPathsUsed, type SslSettings, type ValidationErrorResponse } from '../core/baglanti';
+import { buildSslOptions, type PgSsl, type SslFileContents } from '../core/baglanti-ssl';
 import {
   PASSWORD_REQUIRED,
   TestRun,
   classifyConnectError,
   classifyListError,
   classifyReachError,
+  classifySslFileError,
   parseConnectionTestInput,
   shouldRetryWithoutSsl,
   testPlan,
   toDriverError,
-  unsupportedSslMode,
   type ConnectionTestRequest,
   type ConnectionTestResponse,
   type DriverError,
+  type StepFailure,
   type TestInputField,
 } from '../core/baglanti-testi';
 import type { SettingsStore } from './ayar-deposu';
@@ -95,34 +101,45 @@ export async function runConnectionTest(
   }
   run.ok('ulasma', `${input.host}:${input.port} yanıt veriyor.`);
 
-  const unsupported = unsupportedSslMode(input.sslmode);
-  if (unsupported) {
-    run.fail('tls', unsupported);
+  const files = await readSslFiles(input);
+  if (!files.ok) {
+    run.fail('tls', files.failure);
+    return run.result();
+  }
+  const built = buildSslOptions({
+    sslmode: input.sslmode,
+    files: files.contents,
+    realHost: input.host,
+    checkHostname: (host, cert) => checkServerIdentity(host, cert as PeerCertificate),
+  });
+  if (!built.ok) {
+    run.fail('tls', built.failure);
     return run.result();
   }
 
   // prefer: önce doğrulamasız SSL; yalnızca sunucu SSL desteklemiyorsa bir kez düz bağlantı.
-  let withoutSsl = input.sslmode === 'disable';
-  let attempt = await connect(input, password, withoutSsl);
-  if (!attempt.ok && !withoutSsl && shouldRetryWithoutSsl(attempt.error)) {
-    withoutSsl = true;
-    attempt = await connect(input, password, withoutSsl);
+  let ssl = built.ssl;
+  let attempt = await connect(input, password, ssl);
+  if (!attempt.ok && input.sslmode === 'prefer' && shouldRetryWithoutSsl(attempt.error)) {
+    ssl = false;
+    attempt = await connect(input, password, ssl);
   }
+  const tls = { sslmode: input.sslmode, withoutSsl: ssl === false, ca: files.contents.ca !== null };
 
   if (!attempt.ok) {
-    const failure = classifyConnectError(attempt.error, { ...input, ssl: !withoutSsl });
+    const failure = classifyConnectError(attempt.error, { ...input, ssl: ssl !== false });
     if (failure.adim === 'tls') {
       run.fail('tls', failure);
       return run.result();
     }
-    run.tls(input.sslmode, withoutSsl);
+    run.tls(tls);
     run.fail('kimlik', failure);
     return run.result();
   }
 
   const { client } = attempt;
   try {
-    run.tls(input.sslmode, withoutSsl);
+    run.tls(tls);
     run.ok('kimlik', `${input.user} olarak ${input.database} veritabanına giriş yapıldı.`);
     try {
       const { rows } = await client.query<{ surum: string; sayi: number }>(
@@ -143,7 +160,7 @@ export async function runConnectionTest(
 
 type Attempt = { ok: true; client: pg.Client } | { ok: false; error: DriverError };
 
-async function connect(input: ConnectionTestRequest, password: string | undefined, withoutSsl: boolean): Promise<Attempt> {
+async function connect(input: ConnectionTestRequest, password: string | undefined, ssl: PgSsl): Promise<Attempt> {
   const client = new pg.Client({
     host: input.host,
     port: input.port,
@@ -156,7 +173,7 @@ async function connect(input: ConnectionTestRequest, password: string | undefine
       }
       return password;
     },
-    ssl: withoutSsl ? false : { rejectUnauthorized: false },
+    ssl,
     connectionTimeoutMillis: TIMEOUT_MS,
     query_timeout: TIMEOUT_MS,
     application_name: 'Tezgah (bağlantı testi)',
@@ -170,6 +187,29 @@ async function connect(input: ConnectionTestRequest, password: string | undefine
     await client.end().catch(() => {});
     return { ok: false, error: toDriverError(err) };
   }
+}
+
+/** `~/` ile başlayan yolu ev dizinine çevirir; diğer yollar (ayrıştırmada mutlak olduğu doğrulandı) aynen. */
+function resolvePath(path: string): string {
+  return /^~[\\/]/.test(path) ? join(homedir(), path.slice(2)) : path;
+}
+
+type SslFiles = { ok: true; contents: SslFileContents } | { ok: false; failure: StepFailure };
+
+/** Modun kullandığı SSL dosyalarını okur (disable'da hiçbiri, prefer'de CA değil). Dosyalar yerinde kalır. */
+async function readSslFiles(input: SslSettings): Promise<SslFiles> {
+  const contents: SslFileContents = { ca: null, cert: null, key: null };
+  const target = { sslrootcert: 'ca', sslcert: 'cert', sslkey: 'key' } as const;
+  for (const field of sslPathsUsed(input.sslmode)) {
+    const path = input[field];
+    if (path === null) continue;
+    try {
+      contents[target[field]] = await readFile(resolvePath(path), 'utf8');
+    } catch (err) {
+      return { ok: false, failure: classifySslFileError(field, path, toDriverError(err)) };
+    }
+  }
+  return { ok: true, contents };
 }
 
 /** Keychain'deki şifresi okunacak kayıtlı bağlantının kimliği; kayıtlı değilse `null`. */
