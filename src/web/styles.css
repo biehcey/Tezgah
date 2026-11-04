@@ -1,0 +1,74 @@
+:root {
+  color-scheme: light dark;
+  --zemin: #ffffff;
+  --kenar-zemin: #f4f4f5;
+  --cizgi: #e4e4e7;
+  --metin: #18181b;
+  --soluk: #71717a;
+  --uyari: #b91c1c;
+  font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  font-size: 14px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --zemin: #18181b;
+    --kenar-zemin: #1f1f23;
+    --cizgi: #2e2e33;
+    --metin: #e4e4e7;
+    --soluk: #a1a1aa;
+    --uyari: #f87171;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  background: var(--zemin);
+  color: var(--metin);
+}
+
+.tezgah {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  height: 100%;
+}
+
+.kenar {
+  display: flex;
+  flex-direction: column;
+  background: var(--kenar-zemin);
+  border-right: 1px solid var(--cizgi);
+}
+
+.kenar-baslik h1 {
+  margin: 0;
+  padding: 12px 16px;
+  font-size: 15px;
+}
+
+.baglantilar {
+  flex: 1;
+  overflow: auto;
+}
+
+.kenar-alt {
+  padding: 8px 16px;
+  color: var(--soluk);
+  font-size: 12px;
+}
+
+.calisma-alani {
+  padding: 16px;
+}
+
+.uyari {
+  margin: 0;
+  color: var(--uyari);
+}

@@ -1,1 +1,28 @@
 # Tezgah
+
+PostgreSQL için kişisel, yerel çalışan bir veritabanı yönetim aracı. Node.js 22 veya üstü gerekir.
+
+## Kullanım
+
+```sh
+npx tezgah            # rastgele port, tarayıcıyı açar
+npx tezgah --port 7000
+npx tezgah --no-open  # yalnızca adresi terminale yazar
+```
+
+Sunucu yalnızca `127.0.0.1`'de dinler. Her açılışta rastgele bir erişim anahtarı üretilir; tarayıcı terminalde yazan `http://127.0.0.1:<port>/?t=<anahtar>` adresiyle açılır. Tezgah yeniden başlatıldığında eski sekme geçersiz olur; terminaldeki yeni adresi açın.
+
+## Geliştirme
+
+```sh
+npm install
+npm run dev        # Vite (5173) + tsx watch sunucu (5174); terminaldeki 5173 adresini açın
+npm test           # core, server ve web testleri
+npm run typecheck
+npm run lint
+npm run build      # dist/web (Vite) + dist/server (tsup)
+```
+
+Sunucu kodu değişince `tsx watch` sunucuyu yeniden başlatır ve yeni bir erişim anahtarı üretir; terminaldeki yeni adresi açın.
+
+Gerçek Postgres'e karşı çalışan server testleri yalnızca `TEZGAH_TEST_PG_URL` tanımlıysa koşar.
