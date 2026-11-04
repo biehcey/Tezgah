@@ -229,12 +229,14 @@ export function App() {
     chooseTarget({ connectionId: connection.id, database });
   }
 
-  /** Paletteki gizli veritabanı: görünür yapılır ve hedef olur. */
-  function showHidden({ connectionId, database }: Target) {
-    const connection = connections?.find((c) => c.id === connectionId);
+  /** Paletten (gizli veritabanı, URL eşleşmesi): hedef olur; seçimde yoksa görünür yapılır. */
+  function chooseAndShow(next: Target) {
+    const connection = connections?.find((c) => c.id === next.connectionId);
     if (!connection) return;
-    chooseTarget({ connectionId, database });
-    void changeSelection(connection, setDatabaseVisible(connection.databaseSelection, database, true));
+    chooseTarget(next);
+    if (!connection.databaseSelection.some((d) => d.database === next.database)) {
+      void changeSelection(connection, setDatabaseVisible(connection.databaseSelection, next.database, true));
+    }
   }
 
   /** Alt+Enter: bağlantı seçilir (klasörü açılır), veritabanı panelde odaklanır. */
@@ -521,7 +523,7 @@ export function App() {
           target={target}
           commands={paletteCommands}
           onSelectTarget={chooseTarget}
-          onSelectHidden={showHidden}
+          onSelectAndShow={chooseAndShow}
           onReveal={revealInList}
           onNewFromUrl={(text) => open({ kind: 'yeni', url: { text, key: ++urlFormCount.current } })}
           onClose={closePalette}

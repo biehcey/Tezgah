@@ -99,14 +99,26 @@ export function searchHiddenDatabases(
   );
 }
 
-export type UrlMatchResult = { ok: true; fields: UrlFields; matches: TargetItem[] } | { ok: false; reason: string };
+/** URL'le aynı sunucuya giden bağlantının, URL'deki veritabanıyla hedef satırı. */
+export interface UrlMatch extends TargetItem {
+  /** Bağlantı bağlı ve veritabanı sunucunun listesinde yok; bağlı değilse bilinmez (`false`). */
+  missingOnServer: boolean;
+}
+
+export type UrlMatchResult = { ok: true; fields: UrlFields; matches: UrlMatch[] } | { ok: false; reason: string };
 
 /**
  * Palete yapıştırılan `postgres://` URL'i: aynı host (büyük/küçük harf duyarsız), port (yoksa 5432)
  * ve kullanıcıya giden mevcut bağlantılar; kullanıcı yazılmadıysa o sunucudaki tümü. Hedef URL'deki
  * veritabanıdır, yazılmadıysa bağlantının başlangıç veritabanı. Metin URL değilse `null`.
+ * `serverDatabases` yalnızca bağlı bağlantıları içerir (kimlik → `pg_database` listesi).
  */
-export function matchUrl(connections: readonly Connection[], text: string, target: Target | null): UrlMatchResult | null {
+export function matchUrl(
+  connections: readonly Connection[],
+  text: string,
+  target: Target | null,
+  serverDatabases: Readonly<Record<string, readonly string[]>> = {},
+): UrlMatchResult | null {
   if (!isConnectionUrl(text)) return null;
   const parsed = parseConnectionUrl(text);
   if (!parsed.ok) return { ok: false, reason: parsed.reason };
@@ -115,6 +127,10 @@ export function matchUrl(connections: readonly Connection[], text: string, targe
   const port = fields.port ?? DEFAULT_PORT;
   const matches = connections
     .filter((c) => c.host.toLowerCase() === host && c.port === port && (fields.user === undefined || c.user === fields.user))
-    .map((c) => item(c, fields.database ?? c.database, target));
+    .map((c) => {
+      const database = fields.database ?? c.database;
+      const known = serverDatabases[c.id];
+      return { ...item(c, database, target), missingOnServer: known !== undefined && !known.includes(database) };
+    });
   return { ok: true, fields, matches };
 }

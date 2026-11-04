@@ -26,8 +26,11 @@ interface Props {
   commands: readonly PaletteCommand[];
   /** Enter: mevcut editörün hedefi olur. */
   onSelectTarget: (target: Target) => void;
-  /** Enter, gizli veritabanında: görünür yapılır ve hedef olur. */
-  onSelectHidden: (target: Target) => void;
+  /**
+   * Enter, gizli veritabanında ya da URL eşleşmesinde: hedef olur ve Veritabanı seçiminde yoksa
+   * görünür yapılır (hedef her zaman panelde görünsün).
+   */
+  onSelectAndShow: (target: Target) => void;
   /** Alt+Enter: seçim kenar çubuğunda gösterilir. */
   onReveal: (target: Target) => void;
   /** "URL'den yeni bağlantı…": form URL'le dolu açılır. */
@@ -60,7 +63,7 @@ export function HizliGecis({
   target,
   commands,
   onSelectTarget,
-  onSelectHidden,
+  onSelectAndShow,
   onReveal,
   onNewFromUrl,
   onClose,
@@ -81,23 +84,24 @@ export function HizliGecis({
     };
   }, []);
 
-  const targetEntry = (item: TargetItem, select: (target: Target) => void): Entry => {
+  const targetEntry = (item: TargetItem, select: (target: Target) => void, hint?: string): Entry => {
     const chosen = { connectionId: item.connectionId, database: item.database };
     return {
       key: `${item.connectionId}/${item.database}`,
       label: item.label,
       item,
+      hint,
       run: () => select(chosen),
       reveal: () => onReveal(chosen),
     };
   };
 
-  const url = matchUrl(connections, query, target);
+  const url = matchUrl(connections, query, target, serverDatabases);
   const urlError = url && !url.ok ? url.reason : null;
   const groups: Group[] = [];
   if (url?.ok) {
     groups.push(
-      { title: 'Bu sunucuya giden mevcut bağlantı', entries: url.matches.map((m) => targetEntry(m, onSelectTarget)) },
+      { title: 'Bu sunucuya giden mevcut bağlantı', entries: url.matches.map((m) => targetEntry(m, onSelectAndShow, m.missingOnServer ? 'sunucuda yok' : undefined)) },
       { title: 'Komutlar', entries: [{ key: 'url', label: 'URL’den yeni bağlantı…', run: () => onNewFromUrl(query.trim()) }] },
     );
   } else if (!url) {
@@ -105,7 +109,7 @@ export function HizliGecis({
       { title: 'Hedefler', entries: searchTargets(connections, query, target).map((t) => targetEntry(t, onSelectTarget)) },
       {
         title: 'Gizli veritabanları',
-        entries: searchHiddenDatabases(connections, serverDatabases, query).map((t) => targetEntry(t, onSelectHidden)),
+        entries: searchHiddenDatabases(connections, serverDatabases, query).map((t) => targetEntry(t, onSelectAndShow)),
       },
       {
         title: 'Komutlar',

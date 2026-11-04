@@ -114,7 +114,9 @@ describe('matchUrl', () => {
     expect(result).toEqual({
       ok: true,
       fields: expect.objectContaining({ host: 'DB.prod', database: 'faturalar', password: 'gizli' }),
-      matches: [{ connectionId: 'b2', database: 'faturalar', label: 'Prod / faturalar', prod: true, current: false }],
+      matches: [
+        { connectionId: 'b2', database: 'faturalar', label: 'Prod / faturalar', prod: true, current: false, missingOnServer: false },
+      ],
     });
   });
 
@@ -131,6 +133,20 @@ describe('matchUrl', () => {
         { connectionId: 'b2', database: 'postgres', current: true },
         { connectionId: 'b3', database: 'postgres', current: false },
       ],
+    });
+  });
+
+  it('bağlı bağlantının sunucusunda olmayan veritabanı işaretlenir; bağlı değilse bilinmez', () => {
+    const servers = { b2: ['app', 'faturalar'] };
+    expect(matchUrl(all, 'postgres://postgres@db.prod/yok', null, servers)).toMatchObject({
+      ok: true,
+      matches: [{ connectionId: 'b2', missingOnServer: true }],
+    });
+    expect(matchUrl(all, 'postgres://postgres@db.prod/app', null, servers)).toMatchObject({
+      matches: [{ missingOnServer: false }],
+    });
+    expect(matchUrl(all, 'postgres://okuyucu@db.prod/yok', null, servers)).toMatchObject({
+      matches: [{ connectionId: 'b3', missingOnServer: false }],
     });
   });
 

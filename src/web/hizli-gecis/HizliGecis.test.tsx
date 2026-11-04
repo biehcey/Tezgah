@@ -193,6 +193,38 @@ describe('Cmd/Ctrl+K paleti: URL yapıştırma', () => {
     expect(within(header()).getByRole('heading')).toHaveTextContent('Prod / raporlar');
   });
 
+  it('seçimde olmayan veritabanı Veritabanı seçimine eklenir ve panelde hedef görünür', async () => {
+    const { user, fake } = await setup();
+    await user.keyboard('{Control>}k{/Control}');
+    await user.paste('postgres://postgres@db.prod/raporlar');
+    await user.keyboard('{Enter}');
+    expect(within(header()).getByRole('heading')).toHaveTextContent('Prod / raporlar');
+    await user.click(screen.getByRole('button', { name: /^Prod/ }));
+    expect(await within(panel()).findByRole('button', { name: 'raporlar' })).toHaveAttribute('aria-current', 'true');
+    expect(fake.connections[1]!.databaseSelection.map((d) => d.database)).toEqual(['faturalar', 'raporlar']);
+  });
+
+  it('seçimde olan veritabanında seçime dokunulmaz', async () => {
+    const { user, fake } = await setup();
+    await user.keyboard('{Control>}k{/Control}');
+    await user.paste('postgres://postgres@db.prod/faturalar');
+    await user.keyboard('{Enter}');
+    expect(within(header()).getByRole('heading')).toHaveTextContent('Prod / faturalar');
+    expect(fake.requests).toEqual([]);
+  });
+
+  it('bağlı sunucuda olmayan veritabanı “sunucuda yok” notuyla gösterilir', async () => {
+    const fake = twoConnections();
+    fake.servers.set('b2', { databases: { faturalar: ['public'] } });
+    const { user } = await setup(fake);
+    await user.click(screen.getByRole('button', { name: /^Prod/ }));
+    await user.click(within(panel()).getByRole('button', { name: 'Bağlan ve tüm veritabanlarını listele' }));
+    await within(panel()).findByRole('list', { name: 'Görünür veritabanları' });
+    await user.keyboard('{Control>}k{/Control}');
+    await user.paste('postgres://postgres@db.prod/raporlar');
+    expect(options('Bu sunucuya giden mevcut bağlantı')).toEqual(['Prod / raporlarprodsunucuda yok']);
+  });
+
   it('“URL’den yeni bağlantı…” formu dolu açar', async () => {
     const { user } = await setup();
     await user.keyboard('{Control>}k{/Control}');
