@@ -9,13 +9,14 @@ import { readCookie } from '../core/cookie';
 export interface AccessPolicy {
   token: string;
   cookieName: string;
-  /** `?t=` ile sunulan token doğruysa tarayıcıya yazılacak `Set-Cookie` değeri. */
-  exchange(offered: string): string | undefined;
-  /** İzin varsa `undefined`, yoksa döndürülecek HTTP durum kodu. */
-  check(req: IncomingMessage, options: { requireOrigin: boolean }): number | undefined;
-  /** Yalnızca `Host` denetimi (token değişimi cookie'den önce gelir). */
-  hostAllowed(req: IncomingMessage): boolean;
+  /** `?t=` ile sunulan token'ı değiştirir: başarıda tarayıcıya yazılacak `Set-Cookie` değeri. */
+  exchange(req: IncomingMessage, offered: string): Decision<{ setCookie: string }>;
+  /** Cookie ile gelen her istek (WS upgrade dahil). */
+  check(req: IncomingMessage, options: { requireOrigin: boolean }): Decision;
 }
+
+/** Erişim kararı: izin ya da döndürülecek HTTP durum kodu. */
+export type Decision<T = object> = ({ ok: true } & T) | { ok: false; status: 401 | 403 };
 
 export function createAccessPolicy(ports: number[]): AccessPolicy {
   const token = randomBytes(32).toString('base64url');
@@ -26,23 +27,25 @@ export function createAccessPolicy(ports: number[]): AccessPolicy {
   const isToken = (candidate: string | undefined) =>
     candidate !== undefined && timingSafeEqual(digest(candidate), tokenDigest);
 
+  // DNS rebinding: yalnızca bilinen yerel adlarla gelen istekler.
   const hostAllowed = (req: IncomingMessage) => allowedHosts.has(req.headers.host?.toLowerCase() ?? '');
 
   return {
     token,
     cookieName,
-    hostAllowed,
-    exchange: (offered) =>
-      isToken(offered) ? `${cookieName}=${token}; HttpOnly; SameSite=Strict; Path=/` : undefined,
+    exchange(req, offered) {
+      if (!hostAllowed(req)) return { ok: false, status: 403 };
+      if (!isToken(offered)) return { ok: false, status: 401 };
+      return { ok: true, setCookie: `${cookieName}=${token}; HttpOnly; SameSite=Strict; Path=/` };
+    },
     check(req, { requireOrigin }) {
-      // DNS rebinding: yalnızca bilinen yerel adlarla gelen istekler.
-      if (!hostAllowed(req)) return 403;
-      if (!isToken(readCookie(req.headers.cookie, cookieName))) return 401;
+      if (!hostAllowed(req)) return { ok: false, status: 403 };
+      if (!isToken(readCookie(req.headers.cookie, cookieName))) return { ok: false, status: 401 };
       // CSRF: `Origin`, doğrulanmış `Host` ile aynı origin olmalı.
       if (requireOrigin && req.headers.origin?.toLowerCase() !== `http://${req.headers.host?.toLowerCase()}`) {
-        return 403;
+        return { ok: false, status: 403 };
       }
-      return undefined;
+      return { ok: true };
     },
   };
 }

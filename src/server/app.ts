@@ -47,26 +47,33 @@ export async function startServer(options: ServerOptions): Promise<TezgahServer>
   const wss = new WebSocketServer({ noServer: true });
 
   async function handle(req: IncomingMessage, res: ServerResponse) {
-    const url = new URL(req.url ?? '/', 'http://x');
+    const url = requestUrl(req);
 
     const offered = url.searchParams.get('t');
     if (offered !== null && req.method === 'GET') {
-      if (!access.hostAllowed(req)) return reject(res, 403);
-      const cookie = access.exchange(offered);
-      if (!cookie) return reject(res, 401);
+      const exchanged = access.exchange(req, offered);
+      if (!exchanged.ok) return sendStatus(res, exchanged.status);
       url.searchParams.delete('t');
-      res.writeHead(302, { 'set-cookie': cookie, location: url.pathname + url.search }).end();
+      res
+        .writeHead(302, {
+          'set-cookie': exchanged.setCookie,
+          location: url.pathname + url.search,
+          // Token URL'de taşındığından ne önbelleğe ne de Referer'a düşmeli.
+          'cache-control': 'no-store',
+          'referrer-policy': 'no-referrer',
+        })
+        .end();
       return;
     }
 
-    const denied = access.check(req, { requireOrigin: !SAFE_METHODS.has(req.method ?? '') });
-    if (denied) return reject(res, denied);
+    const decision = access.check(req, { requireOrigin: !SAFE_METHODS.has(req.method ?? '') });
+    if (!decision.ok) return sendStatus(res, decision.status);
 
     if (url.pathname === '/api/durum' && req.method === 'GET') {
       return json(res, 200, { uygulama: 'tezgah', surum: pkg.version });
     }
     if (url.pathname === '/api' || url.pathname.startsWith('/api/')) return json(res, 404, { hata: 'Bulunamadı' });
-    if (req.method !== 'GET' && req.method !== 'HEAD') return reject(res, 405);
+    if (req.method !== 'GET' && req.method !== 'HEAD') return sendStatus(res, 405);
     await serveStatic(options.webRoot, url.pathname, res);
   }
 
@@ -79,9 +86,9 @@ export async function startServer(options: ServerOptions): Promise<TezgahServer>
   });
 
   http.on('upgrade', (req: IncomingMessage, socket: Duplex, head: Buffer) => {
-    const denied = access.check(req, { requireOrigin: true });
-    if (denied) return rejectUpgrade(socket, denied);
-    if (new URL(req.url ?? '/', 'http://x').pathname !== '/ws') return rejectUpgrade(socket, 404);
+    const decision = access.check(req, { requireOrigin: true });
+    if (!decision.ok) return rejectUpgrade(socket, decision.status);
+    if (requestUrl(req).pathname !== '/ws') return rejectUpgrade(socket, 404);
     wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
   });
 
@@ -101,8 +108,12 @@ export async function startServer(options: ServerOptions): Promise<TezgahServer>
   };
 }
 
-function reject(res: ServerResponse, status: number) {
-  res.writeHead(status, { 'content-type': 'text/plain; charset=utf-8' }).end('Erişim reddedildi');
+function requestUrl(req: IncomingMessage): URL {
+  return new URL(req.url ?? '/', 'http://127.0.0.1');
+}
+
+function sendStatus(res: ServerResponse, status: number) {
+  res.writeHead(status, { 'content-type': 'text/plain; charset=utf-8' }).end(STATUS_CODES[status]);
 }
 
 function rejectUpgrade(socket: Duplex, status: number) {

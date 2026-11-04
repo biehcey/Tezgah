@@ -1,3 +1,4 @@
+import { connect } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { startTestServer, type TestServer } from './test/sunucu';
 
@@ -185,5 +186,27 @@ describe('WebSocket upgrade', () => {
 
   it('token sorgu parametresi WS\'de cookie yerine geçmez', async () => {
     expect(await t.upgrade(`/ws?t=${t.server.token}`, { origin: t.origin })).toBe(401);
+  });
+});
+
+describe('dinleme adresi', () => {
+  it('yalnızca 127.0.0.1\'de dinler; ::1 üzerinden bağlantı kurulamaz', async () => {
+    const result = await new Promise<string>((resolve) => {
+      const socket = connect({ host: '::1', port: t.server.port });
+      socket.on('connect', () => {
+        socket.destroy();
+        resolve('bağlandı');
+      });
+      socket.on('error', () => resolve('reddedildi'));
+    });
+    expect(result).toBe('reddedildi');
+  });
+});
+
+describe('token değişimi yanıtı', () => {
+  it('token\'lı URL önbelleğe alınmaz ve Referer ile sızdırılmaz', async () => {
+    const res = await t.request(`/?t=${t.server.token}`);
+    expect(res.headers['cache-control']).toBe('no-store');
+    expect(res.headers['referrer-policy']).toBe('no-referrer');
   });
 });
