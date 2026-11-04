@@ -834,9 +834,237 @@ button.kucuk {
   font-weight: 600;
 }
 
+/* Script ekranı gövdesi: solda editör + çubuk, sağda ≈400px çalıştırma sütunu. */
+.script-govde {
+  display: grid;
+  flex: 1;
+  grid-template-columns: minmax(0, 1fr) 400px;
+  min-height: 0;
+}
+
+.script-sol {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
 .editor-alani {
   flex: 1;
   min-height: 200px;
+  overflow: hidden;
+}
+
+.script-editoru,
+.script-editoru .cm-editor {
+  height: 100%;
+}
+
+.script-editoru .cm-editor {
+  background: var(--zemin);
+  color: var(--metin);
+  font-size: 13px;
+}
+
+.script-editoru .cm-scroller {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.script-editoru .cm-gutters {
+  border-right: 1px solid var(--cizgi);
+  background: var(--kenar-zemin);
+  color: var(--soluk);
+}
+
+.script-editoru .cm-cursor {
+  border-left-color: var(--metin);
+}
+
+.cm-ifade-isaretleri .cm-gutterElement {
+  min-width: 16px;
+  padding: 0 2px 0 4px;
+  text-align: center;
+}
+
+.cm-ifade-bosluk {
+  visibility: hidden;
+}
+
+.cm-ifade-isareti.basarili,
+.ifade-isareti.basarili {
+  color: var(--basarili);
+}
+
+.cm-ifade-isareti.hatali,
+.ifade-isareti.hatali {
+  color: var(--uyari);
+}
+
+.cm-ifade-isareti.calisiyor,
+.ifade-isareti.calisiyor {
+  color: var(--vurgu);
+}
+
+.cm-hatali-satir {
+  background: color-mix(in srgb, var(--uyari) 14%, transparent);
+}
+
+.cm-hata-alti {
+  text-decoration: underline wavy var(--uyari);
+  text-decoration-skip-ink: none;
+  text-underline-offset: 3px;
+}
+
+.script-cubugu {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--cizgi);
+  background: var(--kenar-zemin);
+}
+
+.calistirma-sutunu {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-left: 1px solid var(--cizgi);
+}
+
+.karar-karti {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border-bottom: 1px solid var(--cizgi);
+}
+
+.karar-karti.bekliyor {
+  background: color-mix(in srgb, var(--dikkat) 10%, var(--zemin));
+}
+
+.karar-karti p {
+  margin: 0;
+}
+
+.karar-sorusu {
+  font-weight: 600;
+}
+
+.karar-dugmeleri {
+  display: flex;
+  gap: 8px;
+}
+
+.karar-sonucu.commit {
+  color: var(--basarili);
+}
+
+.karar-sonucu.hata {
+  color: var(--uyari);
+}
+
+.sekmeler {
+  display: flex;
+  gap: 4px;
+  padding: 6px 12px 0;
+  border-bottom: 1px solid var(--cizgi);
+}
+
+.sekme {
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: none;
+}
+
+.sekme.secili {
+  border-bottom-color: var(--vurgu);
+}
+
+.ifade-listesi {
+  flex: 1;
+  overflow: auto;
+  padding: 8px 12px;
+}
+
+.ifade-kartlari {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ifade-karti {
+  padding: 6px 8px;
+  border: 1px solid var(--cizgi);
+  border-radius: 6px;
+}
+
+.ifade-karti.hatali {
+  border-color: var(--uyari);
+}
+
+.ifade-karti p {
+  margin: 2px 0 0;
+}
+
+.ifade-karti-basligi {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: none;
+  text-align: left;
+}
+
+.komut-etiketi {
+  font-weight: 600;
+}
+
+.ifade-karti-basligi .sure {
+  margin-left: auto;
+}
+
+.ifade-hatasi {
+  color: var(--uyari);
+}
+
+.onizleme {
+  max-height: 220px;
+  margin-top: 6px;
+  overflow: auto;
+  border: 1px solid var(--cizgi);
+  border-radius: 4px;
+}
+
+.onizleme table {
+  border-collapse: collapse;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+
+.onizleme th,
+.onizleme td {
+  padding: 2px 8px;
+  border-bottom: 1px solid var(--cizgi);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.onizleme th {
+  position: sticky;
+  top: 0;
+  background: var(--kenar-zemin);
+}
+
+.onizleme .null {
+  color: var(--soluk);
+  font-style: italic;
 }
 
 /* Oturumluk şifre penceresi: başlıkta bağlantının renk noktası ve adı. */

@@ -12,10 +12,11 @@ import type {
   ValidationErrorResponse,
 } from '../../core/baglanti';
 import type { ConnectionTestRequest, ConnectionTestResponse } from '../../core/baglanti-testi';
-import type { DatabaseListResponse, SchemaListResponse, TargetErrorResponse } from '../../core/veritabani-secimi';
+import type { ClientMessage, ServerEvent } from '../../core/script-calistirma';
+import type { DatabaseListResponse, SchemaListResponse, Target, TargetErrorResponse } from '../../core/veritabani-secimi';
 
 /**
- * Web'in sunucuyla tek konuşma noktası (REST + ileride WS olay akışı).
+ * Web'in sunucuyla tek konuşma noktası (REST + WS olay akışı).
  * Bileşenler sunucuyu yalnızca bunun üzerinden görür; testlerde sahte implementasyon verilir.
  */
 export interface ApiClient {
@@ -44,7 +45,24 @@ export interface ApiClient {
   updateDatabaseSelection(id: string, selection: DatabaseSelection[]): Promise<Connection>;
   /** Bağlantının tüm pool'larını kapatır. */
   disconnect(id: string): Promise<void>;
+  /**
+   * Script'i hedefte çalıştırır; olaylar `onEvent`'e sırayla gelir. Transaction bu çalıştırmaya
+   * bağlıdır: `close` ya da sekmenin kapanması açık transaction'ı geri aldırır (ADR-0002).
+   */
+  runScript(target: Target, script: string, onEvent: (event: ServerEvent) => void): ScriptRunHandle;
 }
+
+export interface ScriptRunHandle {
+  send(message: Exclude<ClientMessage, { type: 'run' }>): void;
+  close(): void;
+}
+
+/** Sunucuyla bağlantı `bitti` gelmeden koparsa arayüzün gördüğü son olay. */
+export const CONNECTION_LOST: ServerEvent = {
+  type: 'bitti',
+  sonuc: 'hata',
+  mesaj: 'Tezgah sunucusuyla bağlantı koptu; açık transaction sunucuda geri alındı.',
+};
 
 /** Oluşturma/güncelleme gövdesi; `password` verilmezse kayıtlı şifreye dokunulmaz, boş dize siler. */
 export type ConnectionRequest = Omit<ConnectionInput, 'password'> & { password?: string };
@@ -107,6 +125,41 @@ export function createHttpApiClient(): ApiClient {
     updateDatabaseSelection: (id, selection) => send('PUT', `${connectionUrl(id)}/veritabani-secimi`, selection),
     disconnect: async (id) => {
       await send('POST', `${connectionUrl(id)}/baglantiyi-kes`);
+    },
+    runScript: (target, script, onEvent) => openScriptSocket(target, script, onEvent),
+  };
+}
+
+/** Çalıştırma başına bir WebSocket; erişim cookie'si upgrade isteğinde gider. */
+function openScriptSocket(target: Target, script: string, onEvent: (event: ServerEvent) => void): ScriptRunHandle {
+  const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const ws = new WebSocket(`${scheme}//${location.host}/ws`);
+  let finished = false;
+  /** Soket açılmadan istenenler (ör. hemen basılan İptal) açılınca `run`'dan sonra gider. */
+  const queued: ClientMessage[] = [];
+  ws.onopen = () => {
+    ws.send(JSON.stringify({ type: 'run', target, script } satisfies ClientMessage));
+    for (const message of queued.splice(0)) ws.send(JSON.stringify(message));
+  };
+  ws.onmessage = (message) => {
+    const event = JSON.parse(String(message.data)) as ServerEvent;
+    if (event.type === 'bitti') finished = true;
+    onEvent(event);
+    if (finished) ws.close();
+  };
+  ws.onclose = () => {
+    if (finished) return;
+    finished = true;
+    onEvent(CONNECTION_LOST);
+  };
+  return {
+    send: (message) => {
+      if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(message));
+      else if (ws.readyState === WebSocket.CONNECTING) queued.push(message);
+    },
+    close: () => {
+      finished = true;
+      ws.close();
     },
   };
 }

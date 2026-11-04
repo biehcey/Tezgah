@@ -16,6 +16,8 @@ export default defineConfig({
           name: 'server',
           include: ['src/server/**/*.test.ts'],
           environment: 'node',
+          // Gerçek Postgres testleri Tezgah oturumlarını sayar; dosyalar aynı sunucuda paralel koşmasın.
+          fileParallelism: false,
         },
       },
       {

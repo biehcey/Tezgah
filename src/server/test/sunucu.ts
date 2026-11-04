@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe } from 'vitest';
 import { WebSocket } from 'ws';
+import type { ServerEvent } from '../../core/script-calistirma';
 import { startServer, type ServerOptions, type TezgahServer } from '../app';
 import { createFakeKeychain, type FakeKeychain } from './sahte-keychain';
 
@@ -42,7 +43,59 @@ export interface TestServer {
   origin: string;
   /** WS upgrade dener; açılırsa `open`, reddedilirse HTTP durum kodunu döndürür. */
   upgrade(path: string, headers: Record<string, string>): Promise<'open' | number>;
+  /** Yetkili `/ws` bağlantısı açar; gelen olayları sırayla toplar. */
+  socket(): Promise<TestSocket>;
   close(): Promise<void>;
+}
+
+export interface TestSocket {
+  send(message: unknown): void;
+  /** Şimdiye kadar gelen olaylar. */
+  events: ServerEvent[];
+  /** Koşulu sağlayan ilk olayı (gelmişse hemen) bekler. */
+  waitFor<T extends ServerEvent['type']>(type: T, match?: (e: Extract<ServerEvent, { type: T }>) => boolean): Promise<Extract<ServerEvent, { type: T }>>;
+  close(): void;
+  /** Soketi el sıkışmasız düşürür (sekme çöktü / ağ koptu). */
+  terminate(): void;
+}
+
+function openSocket(port: number, headers: Record<string, string>): Promise<TestSocket> {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`, { headers });
+    const events: ServerEvent[] = [];
+    const waiters: (() => void)[] = [];
+    ws.on('message', (data) => {
+      events.push(JSON.parse(String(data)) as ServerEvent);
+      for (const w of [...waiters]) w();
+    });
+    ws.on('error', reject);
+    ws.on('open', () =>
+      resolve({
+        events,
+        send: (message) => ws.send(JSON.stringify(message)),
+        waitFor: (type, match) =>
+          new Promise((done, fail) => {
+            type Wanted = Extract<ServerEvent, { type: typeof type }>;
+            const check = () => {
+              const found = events.find((e): e is Wanted => e.type === type && (!match || match(e as Wanted)));
+              if (!found) return false;
+              waiters.splice(waiters.indexOf(check), 1);
+              clearTimeout(timer);
+              done(found);
+              return true;
+            };
+            const timer = setTimeout(() => {
+              waiters.splice(waiters.indexOf(check), 1);
+              fail(new Error(`"${type}" olayı gelmedi; gelenler: ${JSON.stringify(events)}`));
+            }, 8000);
+            waiters.push(check);
+            check();
+          }),
+        close: () => ws.close(),
+        terminate: () => ws.terminate(),
+      }),
+    );
+  });
 }
 
 /**
@@ -126,6 +179,7 @@ export async function startTestServer(options: Partial<ServerOptions> = {}): Pro
         });
         ws.on('error', reject);
       }),
+    socket: () => openSocket(server.port, { host, cookie, origin }),
     close: async () => {
       await server.close();
       await cleanup();

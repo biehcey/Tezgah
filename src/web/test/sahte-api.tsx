@@ -1,4 +1,6 @@
-import { render } from '@testing-library/react';
+import { act, render } from '@testing-library/react';
+import type { ServerEvent } from '../../core/script-calistirma';
+import type { Target } from '../../core/veritabani-secimi';
 import type { ReactElement } from 'react';
 import { deleteFolder, parseFolderName, type Folder } from '../../core/ayarlar';
 import {
@@ -34,8 +36,40 @@ export function createFakeApi(overrides: Partial<ApiClient> = {}): ApiClient {
     listSchemas: missing('listSchemas'),
     updateDatabaseSelection: missing('updateDatabaseSelection'),
     disconnect: missing('disconnect'),
+    runScript: () => {
+      throw new Error('Sahte API: runScript tanımlı değil');
+    },
     ...overrides,
   };
+}
+
+/** Sahte çalıştırma: testler sunucu olaylarını elle gönderir, istemcinin isteklerini okur. */
+export interface FakeRun {
+  target: Target;
+  script: string;
+  /** İstemcinin gönderdiği istekler (`commit`, `rollback`, `iptal`). */
+  sent: string[];
+  closed: boolean;
+  emit(...events: ServerEvent[]): void;
+}
+
+export function createFakeScriptRuns() {
+  const runs: FakeRun[] = [];
+  const runScript: ApiClient['runScript'] = (target, script, onEvent) => {
+    const run: FakeRun = {
+      target,
+      script,
+      sent: [],
+      closed: false,
+      emit: (...events) => act(() => events.forEach(onEvent)),
+    };
+    runs.push(run);
+    return {
+      send: (message) => run.sent.push(message.type),
+      close: () => (run.closed = true),
+    };
+  };
+  return { runs, runScript, last: () => runs.at(-1)! };
 }
 
 export function renderWithApi(ui: ReactElement, api: ApiClient = createFakeApi()) {

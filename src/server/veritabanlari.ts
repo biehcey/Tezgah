@@ -8,7 +8,7 @@ import {
   type TargetErrorResponse,
 } from '../core/veritabani-secimi';
 import type { SettingsStore } from './ayar-deposu';
-import { TargetError, type PoolManager } from './havuzlar';
+import { TargetError, catalogQuery, type PoolManager } from './havuzlar';
 import { json, methodNotAllowed, notFound, readJson } from './http';
 
 export interface DatabaseRouteDeps {
@@ -32,7 +32,7 @@ export function createDatabaseRoutes({ store, pools }: DatabaseRouteDeps) {
     try {
       return await pools.withClient(connection, database, async (client) => {
         try {
-          return (await client.query<{ ad: string }>(sql)).rows.map((r) => r.ad);
+          return (await catalogQuery<{ ad: string }>(client, sql)).map((r) => r.ad);
         } catch (err) {
           throw new TargetError(classifyListError(toDriverError(err)));
         }

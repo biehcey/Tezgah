@@ -21,6 +21,16 @@ const MAX_CLIENTS = 3;
 /** Hiç client kullanılmadan bu kadar beklenince pool kapanır. */
 export const POOL_IDLE_MS = 10 * 60_000;
 const TIMEOUT_MS = 10_000;
+
+/**
+ * Panelin ve çalıştırıcının kendi kısa sorguları; 10 sn'de zaman aşımına uğrar. Script ifadelerine
+ * süre konmaz (iptal edilebilirler), bu yüzden süre pool'da değil sorgu başına verilir.
+ */
+export async function catalogQuery<R extends pg.QueryResultRow>(client: pg.ClientBase, text: string, values?: unknown[]): Promise<R[]> {
+  // `query_timeout` sorgu başına desteklenir ama @types/pg'de tanımlı değil.
+  const config = { text, values, query_timeout: TIMEOUT_MS } as pg.QueryConfig;
+  return (await client.query<R>(config)).rows;
+}
 const APPLICATION_NAME = 'Tezgah';
 
 /** Sunucuya TCP ile ulaşılamadığını söyleyen kodlar; diğer hatalar el sıkışma ya da kimlik doğrulamadandır. */
@@ -78,8 +88,15 @@ export function createPoolManager({ keychain, sessionPasswords, clock, log }: Po
     }, POOL_IDLE_MS);
   }
 
-  /** Hedefin pool'undan bir client alır, `fn` bitince geri verir. */
-  async function withClient<T>(connection: Connection, database: string, fn: (client: pg.PoolClient) => Promise<T>): Promise<T> {
+  /**
+   * Hedefin pool'undan bir client alır, `fn` bitince geri verir. `fn` bağlantısı bozulan client'ı
+   * `discard` ile işaretlerse client pool'a dönmez, kapatılır.
+   */
+  async function withClient<T>(
+    connection: Connection,
+    database: string,
+    fn: (client: pg.PoolClient, discard: () => void) => Promise<T>,
+  ): Promise<T> {
     const key = keyOf(connection.id, database);
     let entry = entries.get(key);
     if (!entry) {
@@ -99,10 +116,11 @@ export function createPoolManager({ keychain, sessionPasswords, clock, log }: Po
       } catch (err) {
         throw new TargetError(authFailure(err, connection, database, { triedSsl: false, password: poolPasswords.get(pool) }));
       }
+      let discarded = false;
       try {
-        return await fn(client);
+        return await fn(client, () => (discarded = true));
       } finally {
-        client.release();
+        client.release(discarded || undefined);
       }
     } finally {
       entry.inUse--;
@@ -181,8 +199,6 @@ export function createPoolManager({ keychain, sessionPasswords, clock, log }: Po
       // Client'lar tek tek kapanmaz; pool bütün olarak boşta kalınca kapanır.
       idleTimeoutMillis: 0,
       connectionTimeoutMillis: TIMEOUT_MS,
-      // Yalnızca panelin katalog sorguları bu pool'u kullanıyor; script çalıştırma kendi süresini koyacak.
-      query_timeout: TIMEOUT_MS,
       application_name: APPLICATION_NAME,
       ...(isProd(connection.envTag) && { options: '-c default_transaction_read_only=on' }),
     });

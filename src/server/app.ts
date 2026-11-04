@@ -13,6 +13,7 @@ import { createFolderRoutes } from './klasorler';
 import { BodyError, json } from './http';
 import type { Keychain } from './keychain';
 import { systemClock, type Clock } from './saat';
+import { createScriptRunner } from './script-calistirici';
 import { serveStatic } from './statik';
 import { createDatabaseRoutes } from './veritabanlari';
 
@@ -75,6 +76,9 @@ export async function startServer(options: ServerOptions): Promise<TezgahServer>
     onChanged: (id) => void pools.disconnect(id),
   });
   const databaseRoutes = createDatabaseRoutes({ store, pools });
+  // Her `/ws` bağlantısı kendi çalıştırmasını taşır; koparsa transaction geri alınır (ADR-0002).
+  const attachScriptRunner = createScriptRunner({ store, pools, log: options.log });
+  wss.on('connection', attachScriptRunner);
 
   const connectionTestRoutes = createConnectionTestRoutes({ store, keychain: options.keychain, log: options.log });
 
