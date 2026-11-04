@@ -60,36 +60,52 @@ export type ParseResult =
 
 const COLOR = /^#[0-9a-f]{6}$/i;
 
+/**
+ * Bağlantı girdisi ile bağlantı testi girdisinin ortak alan okuyucuları. Geçersiz alanın
+ * hatası `errors`'a yazılır; dönen değer o zaman yalnızca yer tutucudur.
+ */
+export function connectionFieldReader(input: Record<string, unknown>, errors: Partial<Record<string, string>>) {
+  return {
+    text(field: string, label: string, fallback?: string): string {
+      const value = input[field];
+      if (value === undefined && fallback !== undefined) return fallback;
+      if (typeof value !== 'string' || value.trim() === '') {
+        errors[field] = `${label} gerekli`;
+        return '';
+      }
+      return value.trim();
+    },
+    port(): number {
+      const value = input.port;
+      if (value === undefined) return DEFAULT_PORT;
+      if (typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= 65535) return value;
+      errors.port = 'Port 1–65535 arasında bir tam sayı olmalı';
+      return DEFAULT_PORT;
+    },
+    password(): string | undefined {
+      const value = input.password;
+      if (value === undefined) return undefined;
+      if (typeof value !== 'string') errors.password = 'Geçersiz şifre';
+      else if (value.length > MAX_PASSWORD_LENGTH) errors.password = `Şifre en fazla ${MAX_PASSWORD_LENGTH} karakter olabilir`;
+      else return value;
+      return undefined;
+    },
+  };
+}
+
 export function parseConnectionInput(raw: unknown): ParseResult {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
     return { ok: false, errors: { name: 'Geçersiz bağlantı girdisi' } };
   }
   const input = raw as Record<string, unknown>;
   const errors: Partial<Record<ConnectionField, string>> = {};
+  const read = connectionFieldReader(input, errors);
 
-  const text = (field: ConnectionField, label: string, fallback?: string): string => {
-    const value = input[field];
-    if (value === undefined && fallback !== undefined) return fallback;
-    if (typeof value !== 'string' || value.trim() === '') {
-      errors[field] = `${label} gerekli`;
-      return '';
-    }
-    return value.trim();
-  };
-
-  const name = text('name', 'Ad');
-  const host = text('host', 'Host');
-  const user = text('user', 'Kullanıcı');
-  const database = text('database', 'Başlangıç veritabanı', DEFAULT_DATABASE);
-
-  let port = DEFAULT_PORT;
-  if (input.port !== undefined) {
-    if (typeof input.port === 'number' && Number.isInteger(input.port) && input.port >= 1 && input.port <= 65535) {
-      port = input.port;
-    } else {
-      errors.port = 'Port 1–65535 arasında bir tam sayı olmalı';
-    }
-  }
+  const name = read.text('name', 'Ad');
+  const host = read.text('host', 'Host');
+  const user = read.text('user', 'Kullanıcı');
+  const database = read.text('database', 'Başlangıç veritabanı', DEFAULT_DATABASE);
+  const port = read.port();
 
   let envTag: EnvTag | null = null;
   if (input.envTag !== undefined && input.envTag !== null) {
@@ -115,13 +131,7 @@ export function parseConnectionInput(raw: unknown): ParseResult {
     else errors.savePassword = 'Geçersiz değer';
   }
 
-  let password: string | undefined;
-  if (input.password !== undefined) {
-    if (typeof input.password !== 'string') errors.password = 'Geçersiz şifre';
-    else if (input.password.length > MAX_PASSWORD_LENGTH) {
-      errors.password = `Şifre en fazla ${MAX_PASSWORD_LENGTH} karakter olabilir`;
-    } else password = input.password;
-  }
+  const password = read.password();
 
   if (Object.keys(errors).length > 0) return { ok: false, errors };
   return {
@@ -176,9 +186,9 @@ export interface PasswordStatusResponse {
   password: PasswordStatus;
 }
 
-export interface ValidationErrorResponse {
+export interface ValidationErrorResponse<F extends string = ConnectionField> {
   hata: string;
-  alanlar: Partial<Record<ConnectionField, string>>;
+  alanlar: Partial<Record<F, string>>;
 }
 
 /** Kopyanın adı: `ad (kopya)`; o ad alınmışsa `ad (kopya 2)`, `ad (kopya 3)`… */

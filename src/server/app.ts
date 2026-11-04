@@ -4,6 +4,7 @@ import type { Duplex } from 'node:stream';
 import { WebSocketServer } from 'ws';
 import pkg from '../../package.json' with { type: 'json' };
 import { SettingsFileError, createSettingsStore } from './ayar-deposu';
+import { createConnectionTestRoutes } from './baglanti-testi';
 import { createConnectionRoutes } from './baglantilar';
 import { createAccessPolicy } from './erisim';
 import { createFolderRoutes } from './klasorler';
@@ -61,6 +62,8 @@ export async function startServer(options: ServerOptions): Promise<TezgahServer>
     log: options.log,
   });
 
+  const connectionTestRoutes = createConnectionTestRoutes({ store, keychain: options.keychain, log: options.log });
+
   async function handle(req: IncomingMessage, res: ServerResponse) {
     const url = requestUrl(req);
 
@@ -88,6 +91,7 @@ export async function startServer(options: ServerOptions): Promise<TezgahServer>
       return json(res, 200, { uygulama: 'tezgah', surum: pkg.version });
     }
     if (await connectionRoutes(req, res, url.pathname)) return;
+    if (await connectionTestRoutes(req, res, url.pathname)) return;
     if (await folderRoutes(req, res, url.pathname)) return;
     if (url.pathname === '/api' || url.pathname.startsWith('/api/')) return json(res, 404, { hata: 'Bulunamadı' });
     if (req.method !== 'GET' && req.method !== 'HEAD') return sendStatus(res, 405);

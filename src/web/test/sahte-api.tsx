@@ -22,6 +22,7 @@ export function createFakeApi(overrides: Partial<ApiClient> = {}): ApiClient {
     deleteConnection: missing('deleteConnection'),
     copyConnection: missing('copyConnection'),
     passwordStatus: missing('passwordStatus'),
+    testConnection: missing('testConnection'),
     listFolders: missing('listFolders'),
     createFolder: missing('createFolder'),
     renameFolder: missing('renameFolder'),

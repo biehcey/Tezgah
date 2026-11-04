@@ -9,6 +9,8 @@
   --prod: #dc2626;
   --secili: #e4e4e7;
   --vurgu: #2563eb;
+  --basarili: #15803d;
+  --dikkat: #b45309;
   font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
   font-size: 14px;
 }
@@ -24,6 +26,8 @@
     --prod: #ef4444;
     --secili: #2e2e33;
     --vurgu: #3b82f6;
+    --basarili: #4ade80;
+    --dikkat: #fbbf24;
   }
 }
 
@@ -505,4 +509,93 @@ button.tehlikeli {
 
 .calisma-alani > .uyari + .uyari {
   margin-top: 8px;
+}
+
+/* Bağlantıyı test et */
+
+.test-ozeti {
+  margin: 0 0 12px;
+  padding: 6px 10px;
+  border: 1px solid var(--cizgi);
+  border-radius: 6px;
+}
+
+.test-ozeti.basarili,
+.test-adimi.basarili .test-ikonu,
+.test-ikonu.basarili {
+  color: var(--basarili);
+}
+
+.test-ozeti.uyari,
+.test-adimi.uyari .test-ikonu,
+.test-ikonu.uyari {
+  color: var(--dikkat);
+}
+
+.test-ozeti.hata,
+.test-adimi.hata,
+.test-ikonu.hata {
+  color: var(--uyari);
+}
+
+.test-ozeti.calisiyor {
+  color: var(--soluk);
+}
+
+.test-adimlari {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 0 12px;
+  padding: 0;
+  list-style: none;
+  font-size: 13px;
+}
+
+.test-adimi {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.test-adimi.calistirilmadi {
+  color: var(--soluk);
+}
+
+.test-adimi code {
+  font-size: 12px;
+  color: var(--soluk);
+}
+
+.test-duzeltmeleri {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  flex-basis: 100%;
+  padding-left: 18px;
+}
+
+button.kucuk {
+  padding: 1px 8px;
+  font-size: 12px;
+  color: var(--metin);
+}
+
+.bolum.katlanir {
+  margin-bottom: 12px;
+}
+
+.bolum-acici {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-transform: inherit;
+}
+
+.bolum-ozeti {
+  font-weight: 400;
+  text-transform: none;
 }

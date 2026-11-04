@@ -12,8 +12,10 @@ import {
   type EnvTag,
   type PasswordWriteOutcome,
 } from '../../core/baglanti';
+import { parseConnectionTestInput, type FixId, type TestField } from '../../core/baglanti-testi';
 import { URL_SSL_KEYS, isConnectionUrl, parseConnectionUrl, type UrlSsl } from '../../core/baglanti-url';
-import { ApiError, useApi, type ConnectionRequest } from '../api/client';
+import { ApiError, useApi, type ConnectionRequest, type ConnectionTestBody } from '../api/client';
+import { TestAdimlari, TestOzeti, TlsDurumu, type TestState } from './TestSonucu';
 
 interface Props {
   /** Düzenlenen bağlantı; `null` ise yeni bağlantı. */
@@ -25,6 +27,21 @@ interface Props {
 }
 
 type Errors = Partial<Record<ConnectionField, string>> & { genel?: string };
+
+/** Düzeltme düğmesinin götürdüğü alan. */
+const FIX_FIELDS: Partial<Record<FixId, TestField>> = {
+  hostuDuzelt: 'host',
+  portuDuzelt: 'port',
+  kullaniciyiDuzelt: 'user',
+  sifreyiDuzelt: 'password',
+  sifreGir: 'password',
+  veritabaniniDuzelt: 'database',
+};
+
+const SSL_MODE_NOTES: Partial<Record<string, string>> = {
+  disable: 'SSL kullanılmaz; bağlantı şifresizdir.',
+  prefer: 'Önce SSL denenir (sertifika doğrulanmaz); sunucu desteklemiyorsa şifresiz bağlanılır.',
+};
 
 /** Son URL doldurmasında yok sayılan parametreler. */
 interface UrlNote {
@@ -68,6 +85,21 @@ export function BaglantiFormu({ connection, folders, onSaved, onCancel, onDelete
   const [changing, setChanging] = useState(false);
   const [errors, setErrors] = useState<Errors>({});
   const [saving, setSaving] = useState(false);
+  const [testState, setTestState] = useState<TestState | null>(null);
+  /** Son testin sorumlu tuttuğu alan; düzenlenince kırmızılığı kalkar. */
+  const [testField, setTestField] = useState<TestField | null>(null);
+  const [sslOpen, setSslOpen] = useState(false);
+  /** Düzeltme düğmesinin odaklayacağı alan (alan önce görünür olmalı, ör. şifre). */
+  const [focusField, setFocusField] = useState<TestField | null>(null);
+  useEffect(() => {
+    if (!focusField) return;
+    const input = document.getElementById(`${id}-${focusField}`);
+    if (input instanceof HTMLInputElement) {
+      input.focus();
+      input.select();
+    }
+    setFocusField(null);
+  }, [focusField, id]);
 
   const connectionId = connection?.id;
   const checkKeychain = connection?.savePassword ?? false;
@@ -128,6 +160,60 @@ export function BaglantiFormu({ connection, folders, onSaved, onCancel, onDelete
     setColor(tag ? DEFAULT_ENV_COLORS[tag] : null);
   }
 
+  const sslmode = ssl.sslmode ?? 'prefer';
+
+  /** Formdaki kaydedilmemiş değerlerle test; hiçbir şey kaydedilmez. */
+  async function runTest(overrides: Partial<ConnectionTestBody> = {}) {
+    const body: ConnectionTestBody = {
+      connectionId: connection?.id ?? null,
+      host,
+      port: /^\d+$/.test(port.trim()) ? Number(port.trim()) : Number.NaN,
+      user,
+      database,
+      savePassword,
+      sslmode,
+      ...overrides,
+    };
+    // Kaydet'teki gibi: boş alan kayıtlı şifreyi kullanır (sunucu keychain'den okur).
+    if (password !== '' && body.password === undefined) body.password = password;
+    const parsed = parseConnectionTestInput(body);
+    if (!parsed.ok) return setErrors(parsed.errors);
+    setErrors({});
+    setTestField(null);
+    setTestState({ durum: 'calisiyor' });
+    try {
+      const yanit = await api.testConnection(body);
+      setTestState({ durum: 'bitti', yanit });
+      const failed = yanit.adimlar.find((s) => s.sonuc === 'hata');
+      setTestField(failed?.alan ?? null);
+      if (failed?.id === 'tls') setSslOpen(true);
+    } catch (err) {
+      setTestState({ durum: 'basarisiz', hata: err instanceof ApiError && err.body?.hata ? err.body.hata : 'sunucuya ulaşılamadı' });
+    }
+  }
+
+  function canFix(fix: FixId): boolean {
+    if (fix === 'tekrarDene' || fix === 'postgresKullan') return true;
+    const target = FIX_FIELDS[fix];
+    // Şifre alanı "Keychain'e kaydet" kapalıyken yok (oturumluk şifre ayrı bir akış).
+    if (target === 'password') return savePassword;
+    return target !== undefined;
+  }
+
+  function applyFix(fix: FixId) {
+    if (fix === 'tekrarDene') return void runTest();
+    if (fix === 'postgresKullan') {
+      setDatabase(DEFAULT_DATABASE);
+      return void runTest({ database: DEFAULT_DATABASE });
+    }
+    const target = FIX_FIELDS[fix];
+    if (!target) return;
+    if (target === 'password') setChanging(true);
+    setFocusField(target);
+  }
+
+  const invalid = (key: ConnectionField) => (errors[key] || testField === key ? true : undefined);
+
   async function submit(event: FormEvent) {
     event.preventDefault();
     const request: ConnectionRequest = {
@@ -176,8 +262,11 @@ export function BaglantiFormu({ connection, folders, onSaved, onCancel, onDelete
       <input
         id={`${id}-${key}`}
         value={value}
-        onChange={(e) => set(e.target.value)}
-        aria-invalid={errors[key] ? true : undefined}
+        onChange={(e) => {
+          set(e.target.value);
+          if (testField === key) setTestField(null);
+        }}
+        aria-invalid={invalid(key)}
         aria-describedby={errors[key] ? `${id}-${key}-hata` : undefined}
         {...extra}
       />
@@ -202,6 +291,8 @@ export function BaglantiFormu({ connection, folders, onSaved, onCancel, onDelete
         <h2>{connection ? connection.name : 'Yeni bağlantı'}</h2>
         {envTag && <span className={`ortam-rozeti${isProd(envTag) ? ' prod' : ''}`}>{envTag}</span>}
       </header>
+
+      {testState && <TestOzeti state={testState} />}
 
       <fieldset className="bolum">
         <legend>Bağlantı</legend>
@@ -291,8 +382,11 @@ export function BaglantiFormu({ connection, folders, onSaved, onCancel, onDelete
                 autoComplete="new-password"
                 autoFocus={changing}
                 value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                aria-invalid={errors.password ? true : undefined}
+                onChange={(e) => {
+                  setPassword(e.target.value);
+                  if (testField === 'password') setTestField(null);
+                }}
+                aria-invalid={invalid('password')}
               />
               {errors.password && <span className="alan-hatasi">{errors.password}</span>}
             </>
@@ -340,6 +434,28 @@ export function BaglantiFormu({ connection, folders, onSaved, onCancel, onDelete
           {errors.envTag && <span className="alan-hatasi">{errors.envTag}</span>}
           {errors.color && <span className="alan-hatasi">{errors.color}</span>}
         </div>
+        <TestAdimlari state={testState} section="baglanti" onFix={applyFix} canFix={canFix} />
+      </fieldset>
+
+      <fieldset className="bolum katlanir" aria-label="SSL/TLS">
+        <legend>
+          <button
+            type="button"
+            className="bolum-acici"
+            aria-expanded={sslOpen}
+            onClick={() => setSslOpen((open) => !open)}
+          >
+            <span aria-hidden="true">{sslOpen ? '▾' : '▸'}</span> SSL/TLS
+            <span className="bolum-ozeti"> · {sslmode}</span>
+            <TlsDurumu state={testState} />
+          </button>
+        </legend>
+        {sslOpen && (
+          <>
+            <p className="soluk">{SSL_MODE_NOTES[sslmode] ?? `sslmode=${sslmode}`}</p>
+            <TestAdimlari state={testState} section="ssl" onFix={applyFix} canFix={canFix} />
+          </>
+        )}
       </fieldset>
 
       {(errors.genel || errors.folderId) && (
@@ -349,6 +465,9 @@ export function BaglantiFormu({ connection, folders, onSaved, onCancel, onDelete
       )}
 
       <footer className="form-alt">
+        <button type="button" onClick={() => void runTest()} disabled={testState?.durum === 'calisiyor'}>
+          Bağlantıyı test et
+        </button>
         {connection && (
           <button type="button" className="tehlikeli" onClick={() => onDelete(connection)}>
             Sil
@@ -365,3 +484,4 @@ export function BaglantiFormu({ connection, folders, onSaved, onCancel, onDelete
     </form>
   );
 }
+

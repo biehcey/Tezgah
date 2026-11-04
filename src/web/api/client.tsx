@@ -8,6 +8,7 @@ import type {
   SaveConnectionResponse,
   ValidationErrorResponse,
 } from '../../core/baglanti';
+import type { ConnectionTestRequest, ConnectionTestResponse } from '../../core/baglanti-testi';
 
 /**
  * Web'in sunucuyla tek konuşma noktası (REST + ileride WS olay akışı).
@@ -23,6 +24,8 @@ export interface ApiClient {
   copyConnection(id: string): Promise<SaveConnectionResponse>;
   /** Keychain'de kayıtlı şifre var mı; değer hiçbir zaman gelmez. */
   passwordStatus(id: string): Promise<PasswordStatusResponse>;
+  /** Formdaki kaydedilmemiş değerlerle bağlantıyı adım adım sınar; hiçbir şey kaydetmez. */
+  testConnection(input: ConnectionTestBody): Promise<ConnectionTestResponse>;
   listFolders(): Promise<Folder[]>;
   createFolder(name: string): Promise<Folder>;
   renameFolder(id: string, name: string): Promise<Folder>;
@@ -32,6 +35,9 @@ export interface ApiClient {
 
 /** Oluşturma/güncelleme gövdesi; `password` verilmezse kayıtlı şifreye dokunulmaz, boş dize siler. */
 export type ConnectionRequest = Omit<ConnectionInput, 'password'> & { password?: string };
+
+/** Test gövdesi; `password` verilmezse kayıtlı bağlantının keychain'deki şifresi kullanılır. */
+export type ConnectionTestBody = Omit<ConnectionTestRequest, 'password'> & { password?: string };
 
 /** Kayıtlı bağlantının alanlarıyla güncelleme gövdesi; şifreye dokunmaz. */
 export function connectionRequest({ id: _id, databaseSelection: _selection, ...fields }: Connection): ConnectionRequest {
@@ -77,6 +83,7 @@ export function createHttpApiClient(): ApiClient {
     deleteConnection: (id) => send('DELETE', connectionUrl(id)),
     copyConnection: (id) => send('POST', `${connectionUrl(id)}/kopya`),
     passwordStatus: (id) => request(`${connectionUrl(id)}/sifre`),
+    testConnection: (input) => send('POST', '/api/baglanti-testi', input),
     listFolders: () => request<Folder[]>('/api/klasorler'),
     createFolder: (name) => send('POST', '/api/klasorler', { name }),
     renameFolder: (id, name) => send('PUT', folderUrl(id), { name }),
