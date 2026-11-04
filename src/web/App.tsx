@@ -9,6 +9,7 @@ import {
 import { asksForSessionPassword, isPasswordRejected } from '../core/baglanti-testi';
 import { buildConnectionUrl } from '../core/baglanti-url';
 import { ApiError, connectionRequest, useApi } from './api/client';
+import { HizliGecis, type PaletteCommand } from './hizli-gecis/HizliGecis';
 import { BaglantiFormu } from './baglantilar/BaglantiFormu';
 import { BaglantiListesi } from './baglantilar/BaglantiListesi';
 import { KlasorAdi } from './baglantilar/KlasorAdi';
@@ -17,13 +18,26 @@ import { SilmeOnayi } from './baglantilar/SilmeOnayi';
 import { Menu, type MenuItem, type MenuPosition } from './ortak/Menu';
 import { Onay } from './ortak/Onay';
 import { ScriptEkrani } from './script/ScriptEkrani';
-import { changesServerSession, defaultTargetDatabase, type Target } from '../core/veritabani-secimi';
+import {
+  changesServerSession,
+  defaultTargetDatabase,
+  setDatabaseVisible,
+  type Target,
+} from '../core/veritabani-secimi';
 import type { ConnectionSession } from './veritabanlari/hedef';
 import { VeritabaniPaneli } from './veritabanlari/VeritabaniPaneli';
 
 type Status = { kind: 'loading' } | { kind: 'ok'; version: string } | { kind: 'error'; message: string };
-/** Çalışma alanında açık form: yeni bağlantı ya da düzenlenen bağlantının kimliği. */
-type Editing = { kind: 'yeni' } | { kind: 'duzenle'; id: string } | null;
+/**
+ * Çalışma alanında açık form: yeni bağlantı (paletten URL'le dolu açılabilir; `key` her URL'de yeni
+ * ki form baştan kurulsun) ya da düzenlenen bağlantının kimliği.
+ */
+type Editing = { kind: 'yeni'; url?: { text: string; key: number } } | { kind: 'duzenle'; id: string } | null;
+/** Alt+Enter ile kenar çubuğunda gösterilecek veritabanı; gösterilince temizlenir. */
+type Reveal = Target;
+
+/** Kısayolun platformdaki yazılışı. */
+const PALETTE_SHORTCUT = /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘K' : 'Ctrl K';
 /** Açık klasör penceresi. */
 type FolderDialog = { kind: 'yeni' } | { kind: 'yeniden-adlandir'; folder: Folder } | { kind: 'sil'; folder: Folder } | null;
 /** Açık menü; `key` her açılışta değişir ki menü (alt menü durumu dahil) baştan kurulsun. */
@@ -69,6 +83,22 @@ export function App() {
   const [sessions, setSessions] = useState<Record<string, ConnectionSession>>({});
   const [passwordPrompt, setPasswordPrompt] = useState<PasswordPrompt | null>(null);
   const promptCount = useRef(0);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [reveal, setReveal] = useState<Reveal | null>(null);
+  const urlFormCount = useRef(0);
+  /** Başka bir pencere (klasör, onay, şifre) açıkken kısayol paleti onun üstüne açmaz. */
+  const dialogOpen = useRef(false);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        if (!dialogOpen.current) setPaletteOpen(true);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -190,9 +220,41 @@ export function App() {
     }
   }
 
-  function selectTarget(connection: Connection, database: string) {
-    setTarget({ connectionId: connection.id, database });
+  /** Editörün hedefini değiştirmenin tek yolu (panel, menü, palet). */
+  function chooseTarget(next: Target) {
+    setTarget(next);
   }
+
+  function selectTarget(connection: Connection, database: string) {
+    chooseTarget({ connectionId: connection.id, database });
+  }
+
+  /** Paletteki gizli veritabanı: görünür yapılır ve hedef olur. */
+  function showHidden({ connectionId, database }: Target) {
+    const connection = connections?.find((c) => c.id === connectionId);
+    if (!connection) return;
+    chooseTarget({ connectionId, database });
+    void changeSelection(connection, setDatabaseVisible(connection.databaseSelection, database, true));
+  }
+
+  /** Alt+Enter: bağlantı seçilir (klasörü açılır), veritabanı panelde odaklanır. */
+  function revealInList(shown: Target) {
+    setSelectedId(shown.connectionId);
+    setReveal(shown);
+  }
+
+  const closePalette = useCallback(() => setPaletteOpen(false), []);
+  const revealed = useCallback(() => setReveal(null), []);
+  dialogOpen.current = folderDialog !== null || deleting !== null || passwordPrompt !== null;
+  const paletteCommands: PaletteCommand[] = [
+    { label: 'Yeni bağlantı', run: () => open({ kind: 'yeni' }) },
+    { label: 'Yeni klasör', run: () => setFolderDialog({ kind: 'yeni' }) },
+    { label: 'İçe aktar', disabled: true, hint: 'yakında', run: () => {} },
+    { label: 'Çalıştırma kayıtları klasörünü aç', disabled: true, hint: 'yakında', run: () => {} },
+  ];
+  const serverDatabases = Object.fromEntries(
+    Object.entries(sessions).flatMap(([id, s]) => (s.durum === 'bagli' ? [[id, s.veritabanlari]] : [])),
+  );
 
   function edit(id: string) {
     setSelectedId(id);
@@ -362,6 +424,15 @@ export function App() {
           <h1>Tezgah</h1>
           <button
             type="button"
+            className="ikon-dugme kisayol-dugmesi"
+            aria-label="Hızlı geçiş"
+            title={`Hızlı geçiş (${PALETTE_SHORTCUT})`}
+            onClick={() => setPaletteOpen(true)}
+          >
+            {PALETTE_SHORTCUT}
+          </button>
+          <button
+            type="button"
             className="ikon-dugme"
             aria-label="Yeni klasör"
             title="Yeni klasör"
@@ -391,6 +462,7 @@ export function App() {
               onConnectionMenu={connectionMenu}
               onFolderMenu={folderMenu}
               onMove={(connection, folderId) => void move(connection, folderId)}
+              revealId={reveal?.connectionId ?? null}
             />
           )}
         </nav>
@@ -400,6 +472,8 @@ export function App() {
             connection={selected}
             session={sessions[selected.id]}
             target={target}
+            reveal={reveal?.connectionId === selected.id ? reveal.database : null}
+            onRevealed={revealed}
             onConnect={() => void connect(selected)}
             onPasswordNeeded={async (err) => (await askPassword(selected, err)) !== null}
             onSelectTarget={(database) => selectTarget(selected, database)}
@@ -428,17 +502,31 @@ export function App() {
         )}
         {editing?.kind === 'yeni' || edited ? (
           <BaglantiFormu
-            key={edited?.id ?? 'yeni'}
+            key={edited?.id ?? (editing?.kind === 'yeni' && editing.url ? `url-${editing.url.key}` : 'yeni')}
             connection={edited ?? null}
+            initialUrl={editing?.kind === 'yeni' ? editing.url?.text : undefined}
             folders={folders}
             onSaved={saved}
             onCancel={() => setEditing(null)}
             onDelete={setDeleting}
           />
         ) : (
-          <ScriptEkrani target={targetView} />
+          <ScriptEkrani target={targetView} onChangeTarget={() => setPaletteOpen(true)} />
         )}
       </main>
+      {paletteOpen && (
+        <HizliGecis
+          connections={connections ?? []}
+          serverDatabases={serverDatabases}
+          target={target}
+          commands={paletteCommands}
+          onSelectTarget={chooseTarget}
+          onSelectHidden={showHidden}
+          onReveal={revealInList}
+          onNewFromUrl={(text) => open({ kind: 'yeni', url: { text, key: ++urlFormCount.current } })}
+          onClose={closePalette}
+        />
+      )}
       {menu && <Menu key={menu.key} x={menu.x} y={menu.y} label={menu.label} items={menu.items} onClose={closeMenu} />}
       {folderDialog && folderDialog.kind !== 'sil' && (
         <KlasorAdi

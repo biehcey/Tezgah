@@ -1,4 +1,4 @@
-import { useState, type DragEvent } from 'react';
+import { useEffect, useState, type DragEvent } from 'react';
 import type { Folder } from '../../core/ayarlar';
 import { connectionAddress, isProd, type Connection } from '../../core/baglanti';
 import { menuBelow, type MenuPosition } from '../ortak/Menu';
@@ -17,6 +17,8 @@ interface Props {
   onFolderMenu: (folder: Folder, at: MenuPosition) => void;
   /** Sürükle-bırakla klasör değişimi; `null` Klasörsüz. */
   onMove: (connection: Connection, folderId: string | null) => void;
+  /** Hızlı geçişte Alt+Enter ile gösterilen bağlantı: klasörü kapalıysa açılır. */
+  revealId?: string | null;
 }
 
 /** Sürüklenen bağlantının kimliğini taşıyan veri türü; başka sürüklemeler bırakılamaz. */
@@ -40,9 +42,22 @@ export function BaglantiListesi({
   onConnectionMenu,
   onFolderMenu,
   onMove,
+  revealId = null,
 }: Props) {
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   const [dropTarget, setDropTarget] = useState<string | null>(null);
+
+  const revealFolder = revealId === null ? undefined : connections.find((c) => c.id === revealId)?.folderId;
+  useEffect(() => {
+    if (revealFolder === undefined) return;
+    const key = revealFolder ?? UNFILED;
+    setCollapsed((prev) => {
+      if (!prev.has(key)) return prev;
+      const next = new Set(prev);
+      next.delete(key);
+      return next;
+    });
+  }, [revealFolder, revealId]);
 
   if (connections.length === 0 && folders.length === 0) {
     return <p className="bos-liste">Henüz bağlantı yok. Başlıktaki + ile ekleyin.</p>;

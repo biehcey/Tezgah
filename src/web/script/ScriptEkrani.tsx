@@ -3,13 +3,15 @@ import { isProd, type Connection } from '../../core/baglanti';
 interface Props {
   /** Hedefin bağlantısı ve veritabanı; hedef seçilmediyse `null`. */
   target: { connection: Connection; database: string } | null;
+  /** "hedefi değiştir ▾": hızlı geçiş paletini açar. */
+  onChangeTarget: () => void;
 }
 
 /**
  * Script ekranı iskeleti (ticket 23 varyant B): üstte büyük hedef başlığı, altında editör alanı.
  * prod hedefte başlık kırmızımsıdır; uygulamanın kırmızı çerçevesi kökte verilir.
  */
-export function ScriptEkrani({ target }: Props) {
+export function ScriptEkrani({ target, onChangeTarget }: Props) {
   const prod = target !== null && isProd(target.connection.envTag);
   return (
     <div className="script-ekrani">
@@ -37,6 +39,9 @@ export function ScriptEkrani({ target }: Props) {
             <span className="soluk kucuk">Soldaki Veritabanı panelinden bir veritabanı seçin.</span>
           </>
         )}
+        <button type="button" className="hedef-degistir" onClick={onChangeTarget}>
+          hedefi değiştir ▾
+        </button>
       </section>
       <section aria-label="Script editörü" className="editor-alani" />
     </div>

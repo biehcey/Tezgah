@@ -1,7 +1,8 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { Connection, DatabaseSelection } from '../../core/baglanti';
 import {
   databasePanel,
+  isTarget as isTargetOf,
   setDatabaseVisible,
   setSchemaVisible,
   visibleSchemas,
@@ -16,6 +17,10 @@ interface Props {
   /** Bağlantının sunucu oturumu; bağlanılmadıysa `undefined`. */
   session: ConnectionSession | undefined;
   target: Target | null;
+  /** Hızlı geçişte Alt+Enter: bu veritabanının satırı odaklanır. */
+  reveal?: string | null;
+  /** Gösterilecek satır odaklandı (ya da yok); gösterme bir kez yapılır. */
+  onRevealed?: () => void;
   onConnect: () => void;
   /** Hedef şifre istedi ya da reddetti: şifre penceresi açılır; şifre verilirse `true` (istek yeniden denenir). */
   onPasswordNeeded: (err: unknown) => Promise<boolean>;
@@ -35,6 +40,8 @@ export function VeritabaniPaneli({
   connection,
   session,
   target,
+  reveal = null,
+  onRevealed,
   onConnect,
   onPasswordNeeded,
   onSelectTarget,
@@ -46,9 +53,19 @@ export function VeritabaniPaneli({
   const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
   const [schemas, setSchemas] = useState<Record<string, SchemaState>>({});
 
+  const sectionRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (reveal === null) return;
+    const row = [...(sectionRef.current?.querySelectorAll<HTMLElement>('[data-veritabani]') ?? [])].find(
+      (el) => el.dataset.veritabani === reveal,
+    );
+    row?.querySelector<HTMLElement>('.veritabani-adi, .yildiz')?.focus();
+    onRevealed?.();
+  }, [reveal, onRevealed]);
+
   const connected = session?.durum === 'bagli';
   const model = databasePanel(connection.databaseSelection, connected ? session.veritabanlari : null);
-  const isTarget = (database: string) => target?.connectionId === connection.id && target.database === database;
+  const isTarget = (database: string) => isTargetOf(target, connection.id, database);
 
   function toggleSchemas(database: string) {
     const opening = !open.has(database);
@@ -87,7 +104,7 @@ export function VeritabaniPaneli({
 
   /** Görünür veritabanı satırı: ⭐, tıklayınca hedef olan ad, hedefse işaret; ardından ek içerik. */
   const visibleRow = (database: string, starControl: ReactNode, extra?: ReactNode) => (
-    <li key={database} className={`veritabani-satiri${isTarget(database) ? ' hedef' : ''}`}>
+    <li key={database} data-veritabani={database} className={`veritabani-satiri${isTarget(database) ? ' hedef' : ''}`}>
       {starControl}
       <button
         type="button"
@@ -130,7 +147,7 @@ export function VeritabaniPaneli({
   };
 
   return (
-    <section aria-label="Veritabanları" className="veritabani-paneli">
+    <section ref={sectionRef} aria-label="Veritabanları" className="veritabani-paneli">
       <header className="panel-basligi">
         <span className="ortam-noktasi" style={{ backgroundColor: connection.color ?? 'transparent' }} aria-hidden="true" />
         <span className="panel-adi">{connection.name}</span>
@@ -219,7 +236,7 @@ export function VeritabaniPaneli({
               <h3 className="gizli-basligi">Gizli ({model.hidden.length})</h3>
               <ul className="veritabani-listesi gizli" aria-label="Gizli veritabanları">
                 {model.hidden.map((database) => (
-                  <li key={database} className="veritabani-satiri">
+                  <li key={database} data-veritabani={database} className="veritabani-satiri">
                     {star(database, false)}
                     <span className="soluk">{database}</span>
                   </li>

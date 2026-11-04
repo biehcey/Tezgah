@@ -28,6 +28,8 @@ interface Props {
   onSaved: (connection: Connection, password: PasswordWriteOutcome) => void;
   onCancel: () => void;
   onDelete: (connection: Connection) => void;
+  /** Yeni bağlantıda: form bu URL'den doldurulmuş açılır (hızlı geçişteki "URL'den yeni bağlantı…"). */
+  initialUrl?: string;
 }
 
 type Errors = Partial<Record<ConnectionField, string>> & { genel?: string };
@@ -61,7 +63,7 @@ const STORED_PASSWORD_NOTES: Partial<Record<StoredPassword, string>> = {
 };
 
 /** Kısa tek sütun bağlantı formu (ticket 24 varyant C): Bağlantı ve katlanır SSL/TLS bölümleri. */
-export function BaglantiFormu({ connection, folders, onSaved, onCancel, onDelete }: Props) {
+export function BaglantiFormu({ connection, folders, onSaved, onCancel, onDelete, initialUrl }: Props) {
   const api = useApi();
   const id = useId();
   const [url, setUrl] = useState('');
@@ -148,6 +150,11 @@ export function BaglantiFormu({ connection, folders, onSaved, onCancel, onDelete
     setUrlNote({ ignored });
     return true;
   }
+
+  // Form her URL için yeniden kurulur (key); doldurma yalnızca açılışta. İki kez çalışsa da aynı sonuç.
+  useEffect(() => {
+    if (initialUrl !== undefined) fillFromUrl(initialUrl);
+  }, []);
 
   function pasteUrl(event: ClipboardEvent<HTMLInputElement>, { onlyUrls }: { onlyUrls: boolean }) {
     const text = event.clipboardData.getData('text/plain');

@@ -82,6 +82,11 @@ export interface Target {
   database: string;
 }
 
+/** `target`, bu bağlantının bu veritabanı mı. */
+export function isTarget(target: Target | null, connectionId: string, database: string): boolean {
+  return target?.connectionId === connectionId && target.database === database;
+}
+
 /** "Hedef yap": başlangıç veritabanı görünürse o, değilse ilk görünür veritabanı; hiç yoksa `null`. */
 export function defaultTargetDatabase(connection: Pick<Connection, 'database' | 'databaseSelection'>): string | null {
   const visible = connection.databaseSelection.map((d) => d.database);
