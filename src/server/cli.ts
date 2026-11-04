@@ -3,6 +3,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { startServer } from './app';
+import { defaultConfigDir } from './ayar-deposu';
+import { createOsKeychain } from './keychain';
 import { openBrowser } from './tarayici';
 
 const HELP = `Kullanım: tezgah [seçenekler]
@@ -53,6 +55,8 @@ async function main() {
       port: parsePort(values.port, '--port'),
       devWebPort: parsePort(values['dev-web-port'], '--dev-web-port'),
       webRoot,
+      configDir: defaultConfigDir(),
+      keychain: createOsKeychain(),
       log,
     });
   } catch (err) {

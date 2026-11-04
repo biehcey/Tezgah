@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { describe } from 'vitest';
 import { WebSocket } from 'ws';
 import { startServer, type ServerOptions, type TezgahServer } from '../app';
+import { createFakeKeychain, type FakeKeychain } from './sahte-keychain';
 
 /** Gerçek Postgres yalnızca `TEZGAH_TEST_PG_URL` tanımlıysa kullanılır; yoksa bu testler atlanır. */
 export const pgUrl = process.env.TEZGAH_TEST_PG_URL;
@@ -26,6 +27,9 @@ export interface RequestOptions {
 
 export interface TestServer {
   server: TezgahServer;
+  /** Geçici yapılandırma dizini (`tezgah.json` burada). */
+  configDir: string;
+  keychain: FakeKeychain;
   /** Doğru `Host` ile; `headers` ile üzerine yazılabilir. */
   request(path: string, options?: RequestOptions): Promise<Response>;
   /** Geçerli erişim cookie'si ve aynı-origin `Origin` ile. */
@@ -38,16 +42,27 @@ export interface TestServer {
   close(): Promise<void>;
 }
 
-/** Sunucuyu test içinde, geçici bir web köküyle ve rastgele portta başlatır. */
+/**
+ * Sunucuyu test içinde; geçici web kökü, geçici yapılandırma dizini, sahte keychain ve
+ * rastgele portla başlatır.
+ */
 export async function startTestServer(options: Partial<ServerOptions> = {}): Promise<TestServer> {
   const webRoot = await mkdtemp(join(tmpdir(), 'tezgah-web-'));
+  // Dizinin kendisi henüz yok: sunucu ilk yazmada oluşturmalı.
+  const configDir = join(await mkdtemp(join(tmpdir(), 'tezgah-config-')), 'Tezgah');
+  const keychain = createFakeKeychain();
+  const cleanup = () =>
+    Promise.all([
+      rm(webRoot, { recursive: true, force: true }),
+      rm(join(configDir, '..'), { recursive: true, force: true }),
+    ]);
   await writeFile(join(webRoot, 'index.html'), INDEX_HTML);
   await writeFile(join(webRoot, 'app.js'), 'console.log("tezgah")');
   let server: TezgahServer;
   try {
-    server = await startServer({ webRoot, log: () => {}, ...options });
+    server = await startServer({ webRoot, configDir, keychain, log: () => {}, ...options });
   } catch (err) {
-    await rm(webRoot, { recursive: true, force: true });
+    await cleanup();
     throw err;
   }
   const host = `127.0.0.1:${server.port}`;
@@ -77,6 +92,8 @@ export async function startTestServer(options: Partial<ServerOptions> = {}): Pro
 
   return {
     server,
+    configDir,
+    keychain,
     request,
     authed: (path, opts = {}) =>
       request(path, { ...opts, headers: { cookie, origin, ...opts.headers } }),
@@ -98,7 +115,7 @@ export async function startTestServer(options: Partial<ServerOptions> = {}): Pro
       }),
     close: async () => {
       await server.close();
-      await rm(webRoot, { recursive: true, force: true });
+      await cleanup();
     },
   };
 }

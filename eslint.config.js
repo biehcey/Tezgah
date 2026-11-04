@@ -11,6 +11,10 @@ export default tseslint.config(
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
+    // `const { password, ...fields } = input` ile alan ayıklamak serbest.
+    rules: { '@typescript-eslint/no-unused-vars': ['error', { ignoreRestSiblings: true }] },
+  },
+  {
     files: ['src/server/**/*.ts', '*.config.{ts,js}'],
     languageOptions: { globals: globals.node },
   },

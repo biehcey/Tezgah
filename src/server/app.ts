@@ -3,7 +3,11 @@ import type { AddressInfo } from 'node:net';
 import type { Duplex } from 'node:stream';
 import { WebSocketServer } from 'ws';
 import pkg from '../../package.json' with { type: 'json' };
+import { SettingsFileError, createSettingsStore } from './ayar-deposu';
+import { createConnectionRoutes } from './baglantilar';
 import { createAccessPolicy } from './erisim';
+import { BodyError, json } from './http';
+import type { Keychain } from './keychain';
 import { serveStatic } from './statik';
 
 export interface ServerOptions {
@@ -16,6 +20,9 @@ export interface ServerOptions {
   devWebPort?: number;
   /** Derlenmiş web arayüzünün dizini (`dist/web`). */
   webRoot: string;
+  /** `tezgah.json`'ın bulunduğu yapılandırma dizini; ilk yazmada oluşturulur. */
+  configDir: string;
+  keychain: Keychain;
   log: (line: string) => void;
 }
 
@@ -45,6 +52,11 @@ export async function startServer(options: ServerOptions): Promise<TezgahServer>
   const port = (http.address() as AddressInfo).port;
   const access = createAccessPolicy(options.devWebPort ? [port, options.devWebPort] : [port]);
   const wss = new WebSocketServer({ noServer: true });
+  const connectionRoutes = createConnectionRoutes({
+    store: createSettingsStore(options.configDir),
+    keychain: options.keychain,
+    log: options.log,
+  });
 
   async function handle(req: IncomingMessage, res: ServerResponse) {
     const url = requestUrl(req);
@@ -72,6 +84,7 @@ export async function startServer(options: ServerOptions): Promise<TezgahServer>
     if (url.pathname === '/api/durum' && req.method === 'GET') {
       return json(res, 200, { uygulama: 'tezgah', surum: pkg.version });
     }
+    if (await connectionRoutes(req, res, url.pathname)) return;
     if (url.pathname === '/api' || url.pathname.startsWith('/api/')) return json(res, 404, { hata: 'Bulunamadı' });
     if (req.method !== 'GET' && req.method !== 'HEAD') return sendStatus(res, 405);
     await serveStatic(options.webRoot, url.pathname, res);
@@ -79,9 +92,12 @@ export async function startServer(options: ServerOptions): Promise<TezgahServer>
 
   http.on('request', (req: IncomingMessage, res: ServerResponse) => {
     handle(req, res).catch((err: unknown) => {
+      if (err instanceof BodyError && !res.headersSent) return json(res, err.status, { hata: err.message });
       options.log(`İstek hatası: ${String(err)}`);
-      if (!res.headersSent) res.writeHead(500);
-      res.end();
+      if (res.headersSent) return res.end();
+      // Bozuk ya da daha yeni sürümlü ayar dosyası: kullanıcı nedenini görmeli; dosyaya dokunulmaz.
+      if (err instanceof SettingsFileError) return json(res, 500, { hata: err.message });
+      res.writeHead(500).end();
     });
   });
 
@@ -118,9 +134,4 @@ function sendStatus(res: ServerResponse, status: number) {
 
 function rejectUpgrade(socket: Duplex, status: number) {
   socket.end(`HTTP/1.1 ${status} ${STATUS_CODES[status]}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
-}
-
-function json(res: ServerResponse, status: number, body: unknown) {
-  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
-  res.end(JSON.stringify(body));
 }
