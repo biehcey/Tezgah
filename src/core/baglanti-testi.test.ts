@@ -10,6 +10,7 @@ import {
   testSummary,
   toDriverError,
   unsupportedSslMode,
+  type ExternalCode,
   type TestStep,
 } from './baglanti-testi';
 
@@ -217,7 +218,7 @@ describe('testPlan', () => {
 describe('TestRun', () => {
   it('ilk hatadan sonra kalan adımlar çalıştırılmadı olur', () => {
     const run = new TestRun(['ulasma', 'tls', 'kimlik']);
-    run.fail('ulasma', { kod: 'ECONNREFUSED', mesaj: 'reddetti', alan: 'port', oneriler: ['tekrarDene'] });
+    run.fail('ulasma', { kod: 'ECONNREFUSED' as ExternalCode, mesaj: 'reddetti', alan: 'port', oneriler: ['tekrarDene'] });
     expect(run.result()).toEqual({
       adimlar: [
         { id: 'ulasma', sonuc: 'hata', kod: 'ECONNREFUSED', mesaj: 'reddetti', alan: 'port', oneriler: ['tekrarDene'] },

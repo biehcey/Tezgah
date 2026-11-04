@@ -25,11 +25,34 @@ export type FixId =
 /** Bir adımın sorumlu tuttuğu form alanı (formda kırmızı gösterilir). */
 export type TestField = 'host' | 'port' | 'user' | 'password' | 'database';
 
+/** Tezgah'ın kendi yapısal kodları; sürücü ya da ağ bir kod vermediğinde ya da durum sürücü hatası değilse. */
+export const TEST_CODES = [
+  'sifreGerekli',
+  'sirYok',
+  'reddedildi',
+  'sifresizDusus',
+  'sslmodeDesteklenmiyor',
+  'tlsHatasi',
+  'ulasilamadi',
+  'baglanilamadi',
+  'listelenemedi',
+] as const;
+export type TestCode = (typeof TEST_CODES)[number];
+
+declare const externalBrand: unique symbol;
+/** Dışarıdan gelen kod: SQLSTATE (`28P01`) ya da Node ağ/TLS kodu (`ECONNREFUSED`). */
+export type ExternalCode = string & { readonly [externalBrand]: true };
+export type StepCode = TestCode | ExternalCode;
+
+/** Sürücünün kodu varsa onu, yoksa Tezgah'ın yapısal kodunu kullanır. */
+function codeOf(err: DriverError, fallback: TestCode): StepCode {
+  return err.code === undefined ? fallback : (err.code as ExternalCode);
+}
+
 export interface TestStep {
   id: TestStepId;
   sonuc: StepResult;
-  /** SQLSTATE (`28P01`), Node ağ kodu (`ECONNREFUSED`) ya da yapısal kod (`sifreGerekli`). */
-  kod: string | null;
+  kod: StepCode | null;
   mesaj: string;
   alan: TestField | null;
   oneriler: FixId[];
@@ -126,7 +149,7 @@ interface TestAddress {
 /** Sunucuya ulaşma (TCP) hatası. */
 export function classifyReachError(err: DriverError, { host, port }: TestAddress): StepFailure {
   const address = `${host}:${port}`;
-  const kod = err.code ?? 'ulasilamadi';
+  const kod = codeOf(err, 'ulasilamadi');
   switch (err.code) {
     case 'ECONNREFUSED':
       return {
@@ -154,7 +177,7 @@ export function classifyReachError(err: DriverError, { host, port }: TestAddress
 }
 
 /** Sunucu şifre istedi ama elde şifre yok; sürücüye verilen şifre fonksiyonu bu kodla hata fırlatır. */
-export const PASSWORD_REQUIRED = 'sifreGerekli';
+export const PASSWORD_REQUIRED = 'sifreGerekli' satisfies TestCode;
 
 const SQLSTATE = /^[0-9A-Z]{5}$/;
 
@@ -171,18 +194,18 @@ export function classifyConnectError(
   err: DriverError,
   { database, ssl }: TestAddress & { ssl: boolean },
 ): StepFailure & { adim: 'tls' | 'kimlik' } {
-  const kod = err.code ?? null;
-  if (kod === PASSWORD_REQUIRED) {
+  if (err.code === PASSWORD_REQUIRED) {
     return {
       adim: 'kimlik',
-      kod,
+      kod: PASSWORD_REQUIRED,
       mesaj: 'Sunucu şifre istedi ama şifre girilmedi.',
       alan: 'password',
       oneriler: ['sifreGir'],
     };
   }
-  if (kod && SQLSTATE.test(kod)) {
-    switch (kod) {
+  if (err.code !== undefined && SQLSTATE.test(err.code)) {
+    const kod = err.code as ExternalCode;
+    switch (err.code) {
       case '28P01':
         return {
           adim: 'kimlik',
@@ -212,9 +235,15 @@ export function classifyConnectError(
     }
   }
   if (ssl || isTlsError(err)) {
-    return { adim: 'tls', kod: kod ?? 'tlsHatasi', mesaj: `TLS kurulamadı: ${err.message}`, alan: null, oneriler: ['tekrarDene'] };
+    return {
+      adim: 'tls',
+      kod: codeOf(err, 'tlsHatasi'),
+      mesaj: `TLS kurulamadı: ${err.message}`,
+      alan: null,
+      oneriler: ['tekrarDene'],
+    };
   }
-  return { adim: 'kimlik', kod: kod ?? 'baglanilamadi', mesaj: err.message, alan: null, oneriler: ['tekrarDene'] };
+  return { adim: 'kimlik', kod: codeOf(err, 'baglanilamadi'), mesaj: err.message, alan: null, oneriler: ['tekrarDene'] };
 }
 
 /** `prefer`: doğrulamasız SSL denemesinden sonra yalnızca bu hatada bir kez düz bağlantı denenir. */
@@ -225,7 +254,7 @@ export function shouldRetryWithoutSsl(err: DriverError): boolean {
 /** `pg_database` sorgusunun hatası. */
 export function classifyListError(err: DriverError): StepFailure {
   return {
-    kod: err.code ?? 'listelenemedi',
+    kod: codeOf(err, 'listelenemedi'),
     mesaj: `Veritabanları listelenemedi: ${err.message}`,
     alan: null,
     oneriler: ['tekrarDene'],

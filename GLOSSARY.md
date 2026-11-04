@@ -24,6 +24,10 @@ _Avoid_: Ortam, environment, tag
 Bir bağlantının sunucuya bir SSH sunucusu üzerinden ulaşma yolu. Bağlantı başına en fazla bir tanedir; o bağlantının tüm hedefleri onu paylaşır.
 _Avoid_: SSH bağlantısı, port forward
 
+**Bağlantı testi**:
+Bir Bağlantının henüz kaydedilmemiş ayarlarıyla sunucuya ulaşılabildiğinin, giriş yapılabildiğinin ve veritabanlarının listelenebildiğinin adım adım sınanması. Hiçbir şey kaydetmez ve script çalıştırmaz; script'i geri alarak çalıştıran Deneme modundan ayrıdır.
+_Avoid_: Bağlantı denemesi, ping, sağlık kontrolü
+
 **İçe aktarma adayı**:
 İçe aktarma sırasında dış kaynaklardan (IntelliJ data source'ları, `.pgpass` satırları) çıkarılan, henüz kaydedilmemiş olası Bağlantı. Aynı sunucuya giden birden çok kaynak tek adayda birleşir; kullanıcı önizlemede seçtiği adayları Bağlantı olarak kaydeder.
 _Avoid_: Data source, kayıt, satır

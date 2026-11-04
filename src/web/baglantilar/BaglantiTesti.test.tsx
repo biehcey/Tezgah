@@ -8,10 +8,15 @@ import { connection, createFakeConnections, renderWithApi } from '../test/sahte-
 
 const form = () => screen.getByRole('form', { name: /bağlantı/i });
 
-const step = (id: TestStep['id'], sonuc: TestStep['sonuc'], extra: Partial<TestStep> = {}): TestStep => ({
+/** Sunucudan gelen JSON gibi: `kod` düz metin. */
+const step = (
+  id: TestStep['id'],
+  sonuc: TestStep['sonuc'],
+  { kod = null, ...extra }: Partial<Omit<TestStep, 'kod'>> & { kod?: string | null } = {},
+): TestStep => ({
   id,
   sonuc,
-  kod: null,
+  kod: kod as TestStep['kod'],
   mesaj: sonuc === 'calistirilmadi' ? '' : `${id} mesajı`,
   alan: null,
   oneriler: [],
