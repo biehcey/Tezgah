@@ -24,6 +24,7 @@ export function createFakeApi(overrides: Partial<ApiClient> = {}): ApiClient {
     deleteConnection: missing('deleteConnection'),
     copyConnection: missing('copyConnection'),
     passwordStatus: missing('passwordStatus'),
+    giveSessionPassword: missing('giveSessionPassword'),
     testConnection: missing('testConnection'),
     listFolders: missing('listFolders'),
     createFolder: missing('createFolder'),
@@ -76,12 +77,22 @@ export interface FakeConnections {
   servers: Map<string, FakeServer>;
   /** Veritabanı paneli istekleri (`listele`, `semalar/<db>`, `kes`), bağlantı kimliğiyle. */
   databaseRequests: string[];
+  /** Sunucunun bellekteki oturumluk şifreleri (bağlantı kimliği → şifre). */
+  sessionPasswords: Map<string, string>;
 }
 
 export interface FakeServer {
   /** Veritabanı → şemalar. */
   databases: Record<string, string[]>;
+  /** Verilirse sunucu şifre ister; keychain'e kaydedilmeyen bağlantıda oturumluk şifreyle karşılaştırılır. */
+  password?: string;
 }
+
+export const PASSWORD_REQUIRED = new ApiError(502, { hata: 'Sunucu şifre istedi ama şifre girilmedi.', kod: 'sifreGerekli' });
+export const PASSWORD_REJECTED = new ApiError(502, {
+  hata: 'Şifre kabul edilmedi: password authentication failed for user "postgres"',
+  kod: '28P01',
+});
 
 export const UNREACHABLE = new ApiError(502, {
   hata: 'localhost:5432 bağlantıyı reddetti; bu portta dinleyen bir sunucu yok.',
@@ -106,6 +117,7 @@ export function createFakeConnections(
     deny: false,
     servers: new Map(),
     databaseRequests: [],
+    sessionPasswords: new Map(),
     api: undefined as unknown as ApiClient,
   };
   let next = 1;
@@ -123,6 +135,16 @@ export function createFakeConnections(
     const found = state.connections.find((c) => c.id === id);
     if (!found) throw new ApiError(404, { hata: 'Bağlantı bulunamadı' });
     return found;
+  };
+  /** Sunucunun bağlanırken yaptığı şifre denetimi; `28P01`'de oturumluk şifre unutulur. */
+  const authenticate = (connection: Connection, server: FakeServer) => {
+    if (server.password === undefined) return;
+    const offered = connection.savePassword ? state.passwords.get(connection.id) : state.sessionPasswords.get(connection.id);
+    if (offered === undefined) throw PASSWORD_REQUIRED;
+    if (offered !== server.password) {
+      if (!connection.savePassword) state.sessionPasswords.delete(connection.id);
+      throw PASSWORD_REJECTED;
+    }
   };
 
   state.api = createFakeApi({
@@ -191,17 +213,20 @@ export function createFakeConnections(
       return { tasinan: deleteFolder(state, id) };
     },
     async listDatabases(id) {
-      find(id);
+      const found = find(id);
       state.databaseRequests.push(`${id}: listele`);
       const server = state.servers.get(id);
       if (!server) throw UNREACHABLE;
+      authenticate(found, server);
       return { veritabanlari: Object.keys(server.databases).sort() };
     },
     async listSchemas(id, database) {
-      find(id);
+      const found = find(id);
       state.databaseRequests.push(`${id}: semalar/${database}`);
-      const schemas = state.servers.get(id)?.databases[database];
-      if (!schemas) throw UNREACHABLE;
+      const server = state.servers.get(id);
+      const schemas = server?.databases[database];
+      if (!server || !schemas) throw UNREACHABLE;
+      authenticate(found, server);
       return { semalar: [...schemas].sort() };
     },
     async updateDatabaseSelection(id, selection) {
@@ -213,6 +238,18 @@ export function createFakeConnections(
     async disconnect(id) {
       find(id);
       state.databaseRequests.push(`${id}: kes`);
+    },
+    async giveSessionPassword(id, { password, saveToKeychain }) {
+      state.requests.push({ method: 'POST', id: `${id}/oturum-sifresi` });
+      const found = find(id);
+      if (saveToKeychain && !state.deny) {
+        state.passwords.set(id, password);
+        found.savePassword = true;
+        state.sessionPasswords.delete(id);
+        return { connection: structuredClone(found), password: 'kaydedildi' };
+      }
+      state.sessionPasswords.set(id, password);
+      return { connection: structuredClone(found), password: saveToKeychain ? 'reddedildi' : 'oturumda' };
     },
     async passwordStatus(id) {
       find(id);

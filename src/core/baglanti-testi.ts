@@ -4,6 +4,7 @@
  */
 import {
   DEFAULT_DATABASE,
+  type Connection,
   SSL_PATH_LABELS,
   connectionFieldReader,
   type SslMode,
@@ -179,6 +180,19 @@ export function classifyReachError(err: DriverError, { host, port }: TestAddress
 
 /** Sunucu şifre istedi ama elde şifre yok; sürücüye verilen şifre fonksiyonu bu kodla hata fırlatır. */
 export const PASSWORD_REQUIRED = 'sifreGerekli' satisfies TestCode;
+
+/** Sunucu şifreyi reddetti (SQLSTATE `invalid_password`). */
+export function isPasswordRejected(kod: string | null | undefined): boolean {
+  return kod === '28P01';
+}
+
+/**
+ * Bu hatada şifre penceresi açılır mı: yalnızca şifresi keychain'e kaydedilmeyen bağlantıda, sunucu
+ * şifre istediyse ya da reddettiyse.
+ */
+export function asksForSessionPassword(connection: Pick<Connection, 'savePassword'>, kod: string | null | undefined): boolean {
+  return !connection.savePassword && (kod === PASSWORD_REQUIRED || isPasswordRejected(kod));
+}
 
 const SQLSTATE = /^[0-9A-Z]{5}$/;
 

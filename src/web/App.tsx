@@ -1,11 +1,18 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Folder } from '../core/ayarlar';
-import { isProd, type Connection, type DatabaseSelection, type PasswordWriteOutcome } from '../core/baglanti';
+import {
+  isProd,
+  type Connection,
+  type DatabaseSelection,
+  type PasswordWriteOutcome,
+} from '../core/baglanti';
+import { asksForSessionPassword, isPasswordRejected } from '../core/baglanti-testi';
 import { buildConnectionUrl } from '../core/baglanti-url';
 import { ApiError, connectionRequest, useApi } from './api/client';
 import { BaglantiFormu } from './baglantilar/BaglantiFormu';
 import { BaglantiListesi } from './baglantilar/BaglantiListesi';
 import { KlasorAdi } from './baglantilar/KlasorAdi';
+import { SifrePenceresi } from './baglantilar/SifrePenceresi';
 import { SilmeOnayi } from './baglantilar/SilmeOnayi';
 import { Menu, type MenuItem, type MenuPosition } from './ortak/Menu';
 import { Onay } from './ortak/Onay';
@@ -21,6 +28,14 @@ type Editing = { kind: 'yeni' } | { kind: 'duzenle'; id: string } | null;
 type FolderDialog = { kind: 'yeni' } | { kind: 'yeniden-adlandir'; folder: Folder } | { kind: 'sil'; folder: Folder } | null;
 /** Açık menü; `key` her açılışta değişir ki menü (alt menü durumu dahil) baştan kurulsun. */
 type OpenMenu = MenuPosition & { key: number; label: string; items: MenuItem[] };
+/** Açık şifre penceresi; `resolve` şifre verilince güncel bağlantıyla, iptalde `null` ile çağrılır. */
+type PasswordPrompt = {
+  /** Her soruşta yeni: kapanıp hemen yeniden açılan pencere (28P01) baştan kurulsun. */
+  key: number;
+  connection: Connection;
+  rejection: string | null;
+  resolve: (next: Connection | null) => void;
+};
 
 function errorMessage(err: unknown): string {
   if (err instanceof ApiError && err.status === 401) {
@@ -52,6 +67,8 @@ export function App() {
   const [target, setTarget] = useState<Target | null>(null);
   /** Bağlantı kimliğine göre sunucu oturumu; olmayan bağlantı bağlı değildir. */
   const [sessions, setSessions] = useState<Record<string, ConnectionSession>>({});
+  const [passwordPrompt, setPasswordPrompt] = useState<PasswordPrompt | null>(null);
+  const promptCount = useRef(0);
 
   useEffect(() => {
     let active = true;
@@ -91,15 +108,67 @@ export function App() {
     });
   }
 
+  /**
+   * Sunucu şifre istediyse ya da reddettiyse (`28P01`) ve şifre keychain'de tutulmuyorsa şifre
+   * penceresini açar. Şifre verilince güncel bağlantıyı döndürür (istek yeniden denenir); pencere
+   * açılmadıysa ya da iptal edildiyse `null`.
+   */
+  function askPassword(connection: Connection, err: unknown): Promise<Connection | null> {
+    const kod = err instanceof ApiError ? err.body?.kod : undefined;
+    if (!asksForSessionPassword(connection, kod)) return Promise.resolve(null);
+    return new Promise((resolve) =>
+      setPasswordPrompt({
+        key: ++promptCount.current,
+        connection,
+        rejection: isPasswordRejected(kod) ? errorMessage(err) : null,
+        resolve,
+      }),
+    );
+  }
+
+  async function submitPassword(prompt: PasswordPrompt, password: string, saveToKeychain: boolean): Promise<string | null> {
+    try {
+      const result = await api.giveSessionPassword(prompt.connection.id, { password, saveToKeychain });
+      setConnections((list) => (list ?? []).map((c) => (c.id === result.connection.id ? result.connection : c)));
+      setNotice(
+        result.password === 'reddedildi'
+          ? `Şifre keychain'e kaydedilemedi: ${KEYCHAIN_UNREACHABLE}. Tezgah kapanana kadar bellekte tutuluyor.`
+          : null,
+      );
+      setPasswordPrompt(null);
+      prompt.resolve(result.connection);
+      return null;
+    } catch (err) {
+      return errorMessage(err);
+    }
+  }
+
+  const cancelPassword = useCallback(() => {
+    setPasswordPrompt((prompt) => {
+      prompt?.resolve(null);
+      return null;
+    });
+  }, []);
+
   /** Bağlan / yenile: başlangıç veritabanının pool'u üzerinden `pg_database` listesi. */
   async function connect(connection: Connection) {
     setSelectedId(connection.id);
     setSession(connection.id, { durum: 'baglaniyor' });
-    try {
-      const { veritabanlari } = await api.listDatabases(connection.id);
-      setSession(connection.id, { durum: 'bagli', veritabanlari });
-    } catch (err) {
-      setSession(connection.id, { durum: 'hata', hata: errorMessage(err) });
+    let current = connection;
+    for (;;) {
+      try {
+        const { veritabanlari } = await api.listDatabases(current.id);
+        setSession(current.id, { durum: 'bagli', veritabanlari });
+        return;
+      } catch (err) {
+        const next = await askPassword(current, err);
+        if (next) {
+          current = next;
+          continue;
+        }
+        setSession(current.id, { durum: 'hata', hata: errorMessage(err) });
+        return;
+      }
     }
   }
 
@@ -332,6 +401,7 @@ export function App() {
             session={sessions[selected.id]}
             target={target}
             onConnect={() => void connect(selected)}
+            onPasswordNeeded={async (err) => (await askPassword(selected, err)) !== null}
             onSelectTarget={(database) => selectTarget(selected, database)}
             onSelectionChange={(selection) => void changeSelection(selected, selection)}
             onEdit={() => edit(selected.id)}
@@ -388,6 +458,15 @@ export function App() {
           confirmLabel="Sil"
           onConfirm={() => confirmFolderDelete(folderDialog.folder)}
           onCancel={closeFolderDialog}
+        />
+      )}
+      {passwordPrompt && (
+        <SifrePenceresi
+          key={passwordPrompt.key}
+          connection={passwordPrompt.connection}
+          rejection={passwordPrompt.rejection}
+          onSubmit={(password, save) => submitPassword(passwordPrompt, password, save)}
+          onCancel={cancelPassword}
         />
       )}
       {deleting && <SilmeOnayi connection={deleting} onConfirm={() => confirmDelete(deleting)} onCancel={cancelDelete} />}

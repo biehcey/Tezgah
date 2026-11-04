@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  asksForSessionPassword,
   classifyConnectError,
   classifyListError,
   classifyReachError,
@@ -292,5 +293,19 @@ describe('toDriverError', () => {
 
   it('hata olmayan değeri mesaja çevirir', () => {
     expect(toDriverError('bozuk')).toEqual({ code: undefined, message: 'bozuk' });
+  });
+});
+
+describe('asksForSessionPassword', () => {
+  it("keychain'e kaydedilmeyen bağlantıda şifre istenince ya da reddedilince pencere açılır", () => {
+    expect(asksForSessionPassword({ savePassword: false }, 'sifreGerekli')).toBe(true);
+    expect(asksForSessionPassword({ savePassword: false }, '28P01')).toBe(true);
+  });
+
+  it("başka hatalarda ve şifresi keychain'de tutulan bağlantıda açılmaz", () => {
+    expect(asksForSessionPassword({ savePassword: false }, 'ECONNREFUSED')).toBe(false);
+    expect(asksForSessionPassword({ savePassword: false }, null)).toBe(false);
+    expect(asksForSessionPassword({ savePassword: true }, '28P01')).toBe(false);
+    expect(asksForSessionPassword({ savePassword: true }, 'sifreGerekli')).toBe(false);
   });
 });

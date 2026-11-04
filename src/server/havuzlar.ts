@@ -5,12 +5,14 @@ import { buildSslOptions, type PgSsl } from '../core/baglanti-ssl';
 import {
   PASSWORD_REQUIRED,
   classifyConnectError,
+  isPasswordRejected,
   classifyReachError,
   shouldRetryWithoutSsl,
   toDriverError,
   type StepFailure,
 } from '../core/baglanti-testi';
 import { passwordAccount, type Keychain } from './keychain';
+import type { SessionPasswords } from './oturum-sifreleri';
 import type { Clock } from './saat';
 import { readSslFiles } from './ssl-dosyalari';
 
@@ -42,6 +44,8 @@ interface Entry {
 
 export interface PoolManagerDeps {
   keychain: Keychain;
+  /** Keychain'e kaydedilmeyen bağlantıların oturumluk şifreleri (bağlantı kimliği → şifre). */
+  sessionPasswords: SessionPasswords;
   clock: Clock;
   log: (line: string) => void;
 }
@@ -50,8 +54,10 @@ export interface PoolManagerDeps {
  * Hedef (bağlantı + veritabanı) başına tembel `pg.Pool`. İlk kullanımda açılır, hiç client
  * kullanılmadan `POOL_IDLE_MS` geçince kapanır. Açılışta hiçbir yere bağlanmaz.
  */
-export function createPoolManager({ keychain, clock, log }: PoolManagerDeps) {
+export function createPoolManager({ keychain, sessionPasswords, clock, log }: PoolManagerDeps) {
   const entries = new Map<string, Entry>();
+  /** Pool'un sunucuya sunduğu şifre; ret (`28P01`) hangi şifreye geldi bilinsin. */
+  const poolPasswords = new WeakMap<pg.Pool, string | undefined>();
   const keyOf = (connectionId: string, database: string) => `${connectionId}\u0000${database}`;
 
   /** Pool'u listeden çıkarır ve kapatır; kullanımdaki client'lar geri verilince kapanış tamamlanır. */
@@ -91,7 +97,7 @@ export function createPoolManager({ keychain, clock, log }: PoolManagerDeps) {
       try {
         client = await pool.connect();
       } catch (err) {
-        throw new TargetError(classify(err, connection, database, { triedSsl: false }));
+        throw new TargetError(authFailure(err, connection, database, { triedSsl: false, password: poolPasswords.get(pool) }));
       }
       try {
         return await fn(client);
@@ -125,13 +131,13 @@ export function createPoolManager({ keychain, clock, log }: PoolManagerDeps) {
       pool = createPool(connection, database, password, ssl);
       probe = await tryConnect(pool);
     }
-    if (!probe.ok) throw new TargetError(classify(probe.error, connection, database, { triedSsl: ssl !== false }));
+    if (!probe.ok) throw new TargetError(authFailure(probe.error, connection, database, { triedSsl: ssl !== false, password }));
     return pool;
   }
 
   async function readPassword(connection: Connection): Promise<string | undefined> {
-    // Kaydedilmeyen şifre (oturumluk) henüz yok: sunucu isterse "şifre gerekli" döner.
-    if (!connection.savePassword) return undefined;
+    // Oturumluk şifre henüz verilmediyse sunucu isterse "şifre gerekli" döner.
+    if (!connection.savePassword) return sessionPasswords.get(connection.id);
     const read = await keychain.get(passwordAccount(connection.id));
     if (read.result === 'reddedildi') {
       log(`Keychain okuma reddedildi (${connection.id}): ${read.message}`);
@@ -143,6 +149,18 @@ export function createPoolManager({ keychain, clock, log }: PoolManagerDeps) {
       });
     }
     return read.result === 'bulundu' ? read.value : undefined;
+  }
+
+  /** Sunucu oturumluk şifreyi reddettiyse (`28P01`) şifre unutulur; arayüz yeniden sorar. */
+  function authFailure(
+    err: unknown,
+    connection: Connection,
+    database: string,
+    { triedSsl, password }: { triedSsl: boolean; password: string | undefined },
+  ): StepFailure {
+    const failure = classify(err, connection, database, { triedSsl });
+    if (isPasswordRejected(failure.kod) && !connection.savePassword) sessionPasswords.forgetRejected(connection.id, password);
+    return failure;
   }
 
   function createPool(connection: Connection, database: string, password: string | undefined, ssl: PgSsl): pg.Pool {
@@ -168,6 +186,7 @@ export function createPoolManager({ keychain, clock, log }: PoolManagerDeps) {
       application_name: APPLICATION_NAME,
       ...(isProd(connection.envTag) && { options: '-c default_transaction_read_only=on' }),
     });
+    poolPasswords.set(pool, password);
     // Boşta duran client'ın bağlantısı düşerse süreç çökmesin; pool o client'ı atar.
     pool.on('error', (err) => log(`Bağlantı düştü (${connection.name} / ${database}): ${err.message}`));
     return pool;

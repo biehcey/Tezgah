@@ -8,6 +8,7 @@ import { createConnectionTestRoutes } from './baglanti-testi';
 import { createConnectionRoutes } from './baglantilar';
 import { createAccessPolicy } from './erisim';
 import { createPoolManager } from './havuzlar';
+import { createSessionPasswords } from './oturum-sifreleri';
 import { createFolderRoutes } from './klasorler';
 import { BodyError, json } from './http';
 import type { Keychain } from './keychain';
@@ -61,11 +62,14 @@ export async function startServer(options: ServerOptions): Promise<TezgahServer>
   const wss = new WebSocketServer({ noServer: true });
   const store = createSettingsStore(options.configDir);
   const folderRoutes = createFolderRoutes({ store });
+  // Oturumluk şifreler yalnızca bu süreçte; diske yazılmaz.
+  const sessionPasswords = createSessionPasswords();
   // Pool'lar tembel: açılışta hiçbir sunucuya bağlanılmaz.
-  const pools = createPoolManager({ keychain: options.keychain, clock: options.clock ?? systemClock, log: options.log });
+  const pools = createPoolManager({ keychain: options.keychain, sessionPasswords, clock: options.clock ?? systemClock, log: options.log });
   const connectionRoutes = createConnectionRoutes({
     store,
     keychain: options.keychain,
+    sessionPasswords,
     log: options.log,
     // Ayarı değişen ya da silinen bağlantının pool'ları eski ayarla açık kalmasın.
     onChanged: (id) => void pools.disconnect(id),

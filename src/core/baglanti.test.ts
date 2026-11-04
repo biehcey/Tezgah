@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { copyConnection, copyName, newConnection, parseConnectionInput, passwordAction, type ConnectionInput } from './baglanti';
+import {
+  MAX_PASSWORD_LENGTH,
+  copyConnection,
+  copyName,
+  newConnection,
+  parseConnectionInput,
+  parseSessionPasswordInput,
+  passwordAction,
+  type ConnectionInput,
+} from './baglanti';
 
 const minimal = { name: 'Yerel', host: 'localhost', user: 'postgres' };
 
@@ -135,5 +144,27 @@ describe('copyConnection', () => {
     expect(copy).toEqual({ ...source, id: 'b', name: 'Yerel (kopya)' });
     copy.databaseSelection[0]!.schemas!.push('x');
     expect(source.databaseSelection[0]!.schemas).toEqual(['public']);
+  });
+});
+
+describe('parseSessionPasswordInput', () => {
+  it('keychain seçeneği verilmezse şifre yalnızca bellekte tutulur', () => {
+    expect(parseSessionPasswordInput({ password: 'gizli' })).toEqual({
+      ok: true,
+      value: { password: 'gizli', saveToKeychain: false },
+    });
+    expect(parseSessionPasswordInput({ password: 'gizli', saveToKeychain: true })).toEqual({
+      ok: true,
+      value: { password: 'gizli', saveToKeychain: true },
+    });
+  });
+
+  it('boş, çok uzun ya da dize olmayan şifreyi ve geçersiz gövdeyi reddeder', () => {
+    expect(parseSessionPasswordInput({ password: '' })).toEqual({ ok: false, error: 'Şifre gerekli' });
+    expect(parseSessionPasswordInput({ password: 42 })).toEqual({ ok: false, error: 'Şifre gerekli' });
+    expect(parseSessionPasswordInput({ password: 'x'.repeat(MAX_PASSWORD_LENGTH + 1) }).ok).toBe(false);
+    expect(parseSessionPasswordInput({ password: 'x', saveToKeychain: 'evet' }).ok).toBe(false);
+    expect(parseSessionPasswordInput(['gizli']).ok).toBe(false);
+    expect(parseSessionPasswordInput(null).ok).toBe(false);
   });
 });

@@ -28,6 +28,10 @@ _Avoid_: SSH bağlantısı, port forward
 Bir Bağlantının henüz kaydedilmemiş ayarlarıyla sunucuya ulaşılabildiğinin, giriş yapılabildiğinin ve veritabanlarının listelenebildiğinin adım adım sınanması. Hiçbir şey kaydetmez ve script çalıştırmaz; script'i geri alarak çalıştıran Deneme modundan ayrıdır.
 _Avoid_: Bağlantı denemesi, ping, sağlık kontrolü
 
+**Oturumluk şifre**:
+Keychain'e kaydedilmeyen bir Bağlantının, ilk bağlanmada şifre penceresinden sorulan ve Tezgah kapanana kadar yalnızca süreç belleğinde tutulan şifresi. Bağlantı kesilince ya da düşünce unutulmaz; yalnızca sunucu reddedince (`28P01`) unutulur ve yeniden sorulur.
+_Avoid_: Geçici şifre, önbellekteki şifre
+
 **İçe aktarma adayı**:
 İçe aktarma sırasında dış kaynaklardan (IntelliJ data source'ları, `.pgpass` satırları) çıkarılan, henüz kaydedilmemiş olası Bağlantı. Aynı sunucuya giden birden çok kaynak tek adayda birleşir; kullanıcı önizlemede seçtiği adayları Bağlantı olarak kaydeder.
 _Avoid_: Data source, kayıt, satır

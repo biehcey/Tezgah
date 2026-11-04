@@ -17,6 +17,8 @@ interface Props {
   session: ConnectionSession | undefined;
   target: Target | null;
   onConnect: () => void;
+  /** Hedef şifre istedi ya da reddetti: şifre penceresi açılır; şifre verilirse `true` (istek yeniden denenir). */
+  onPasswordNeeded: (err: unknown) => Promise<boolean>;
   onSelectTarget: (database: string) => void;
   onSelectionChange: (selection: DatabaseSelection[]) => void;
   onEdit: () => void;
@@ -29,7 +31,17 @@ type SchemaState = { kind: 'yukleniyor' } | { kind: 'tamam'; schemas: string[] }
  * Seçili bağlantının Veritabanı paneli: görünürler ⭐ ile üstte, şemaları açılıp kapanan çipler,
  * gizliler "Gizli (N)" altında. Bağlanmamışken kayıtlı seçim gösterilir; hedef yine seçilebilir.
  */
-export function VeritabaniPaneli({ connection, session, target, onConnect, onSelectTarget, onSelectionChange, onEdit, onMenu }: Props) {
+export function VeritabaniPaneli({
+  connection,
+  session,
+  target,
+  onConnect,
+  onPasswordNeeded,
+  onSelectTarget,
+  onSelectionChange,
+  onEdit,
+  onMenu,
+}: Props) {
   const api = useApi();
   const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
   const [schemas, setSchemas] = useState<Record<string, SchemaState>>({});
@@ -55,6 +67,7 @@ export function VeritabaniPaneli({ connection, session, target, onConnect, onSel
       const { semalar } = await api.listSchemas(connection.id, database);
       setSchemas((prev) => ({ ...prev, [database]: { kind: 'tamam', schemas: semalar } }));
     } catch (err) {
+      if (await onPasswordNeeded(err)) return loadSchemas(database);
       const message = err instanceof ApiError && err.body?.hata ? err.body.hata : 'Şemalar listelenemedi.';
       setSchemas((prev) => ({ ...prev, [database]: { kind: 'hata', message } }));
     }

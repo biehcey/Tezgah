@@ -838,3 +838,10 @@ button.kucuk {
   flex: 1;
   min-height: 200px;
 }
+
+/* Oturumluk şifre penceresi: başlıkta bağlantının renk noktası ve adı. */
+.sifre-basligi {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}

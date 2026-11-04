@@ -7,6 +7,8 @@ import type {
   DeleteConnectionResponse,
   PasswordStatusResponse,
   SaveConnectionResponse,
+  SessionPasswordRequest,
+  SessionPasswordResponse,
   ValidationErrorResponse,
 } from '../../core/baglanti';
 import type { ConnectionTestRequest, ConnectionTestResponse } from '../../core/baglanti-testi';
@@ -26,6 +28,8 @@ export interface ApiClient {
   copyConnection(id: string): Promise<SaveConnectionResponse>;
   /** Keychain'de kayıtlı şifre var mı; değer hiçbir zaman gelmez. */
   passwordStatus(id: string): Promise<PasswordStatusResponse>;
+  /** Şifre penceresinden: Tezgah kapanana kadar bellekte; istenirse keychain'e (bağlantı ayarı değişir). */
+  giveSessionPassword(id: string, input: SessionPasswordRequest): Promise<SessionPasswordResponse>;
   /** Formdaki kaydedilmemiş değerlerle bağlantıyı adım adım sınar; hiçbir şey kaydetmez. */
   testConnection(input: ConnectionTestBody): Promise<ConnectionTestResponse>;
   listFolders(): Promise<Folder[]>;
@@ -92,6 +96,7 @@ export function createHttpApiClient(): ApiClient {
     deleteConnection: (id) => send('DELETE', connectionUrl(id)),
     copyConnection: (id) => send('POST', `${connectionUrl(id)}/kopya`),
     passwordStatus: (id) => request(`${connectionUrl(id)}/sifre`),
+    giveSessionPassword: (id, input) => send('POST', `${connectionUrl(id)}/oturum-sifresi`, input),
     testConnection: (input) => send('POST', '/api/baglanti-testi', input),
     listFolders: () => request<Folder[]>('/api/klasorler'),
     createFolder: (name) => send('POST', '/api/klasorler', { name }),

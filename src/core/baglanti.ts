@@ -273,3 +273,30 @@ export function copyConnection(source: Connection, id: string, taken: readonly s
   const databaseSelection = source.databaseSelection.map((d) => ({ ...d, schemas: d.schemas && [...d.schemas] }));
   return { ...source, id, name: copyName(source.name, taken), databaseSelection };
 }
+
+// --- Oturumluk şifre: keychain'e kaydedilmeyen bağlantının şifresi Tezgah kapanana kadar bellekte. ---
+
+/** Şifre penceresinden gelen gövde. `saveToKeychain` bağlantı ayarını "Keychain'e kaydet"e çevirir. */
+export interface SessionPasswordRequest {
+  password: string;
+  saveToKeychain: boolean;
+}
+
+/** Şifre nereye kondu: yalnızca bellekte, keychain'de; ya da keychain reddetti ve bellekte kaldı. */
+export type SessionPasswordOutcome = 'oturumda' | 'kaydedildi' | 'reddedildi';
+
+export interface SessionPasswordResponse {
+  connection: Connection;
+  password: SessionPasswordOutcome;
+}
+
+export function parseSessionPasswordInput(
+  raw: unknown,
+): { ok: true; value: SessionPasswordRequest } | { ok: false; error: string } {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return { ok: false, error: 'Geçersiz şifre girdisi' };
+  const { password, saveToKeychain = false } = raw as Record<string, unknown>;
+  if (typeof password !== 'string' || password === '') return { ok: false, error: 'Şifre gerekli' };
+  if (password.length > MAX_PASSWORD_LENGTH) return { ok: false, error: `Şifre en fazla ${MAX_PASSWORD_LENGTH} karakter olabilir` };
+  if (typeof saveToKeychain !== 'boolean') return { ok: false, error: 'Geçersiz değer' };
+  return { ok: true, value: { password, saveToKeychain } };
+}

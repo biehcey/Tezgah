@@ -5,22 +5,26 @@ import {
   copyConnection,
   newConnection,
   parseConnectionInput,
+  parseSessionPasswordInput,
   passwordAction,
   type Connection,
   type ConnectionInput,
   type DeleteConnectionResponse,
   type PasswordStatusResponse,
   type SaveConnectionResponse,
+  type SessionPasswordResponse,
   type ValidationErrorResponse,
 } from '../core/baglanti';
 import { changesServerSession } from '../core/veritabani-secimi';
 import type { SettingsStore } from './ayar-deposu';
 import { json, methodNotAllowed, notFound as notFoundWith, readJson } from './http';
 import { passwordAccount, type Keychain, type SecretDelete, type SecretRead, type SecretWrite } from './keychain';
+import type { SessionPasswords } from './oturum-sifreleri';
 
 export interface ConnectionDeps {
   store: SettingsStore;
   keychain: Keychain;
+  sessionPasswords: SessionPasswords;
   log: (line: string) => void;
   /** Bağlantının sunucuya bağlanma ayarı ya da şifresi değişti, ya da bağlantı silindi. */
   onChanged?: (id: string) => void;
@@ -29,7 +33,7 @@ export interface ConnectionDeps {
 const COLLECTION = '/api/baglantilar';
 
 /** `/api/baglantilar` uçları. İsteği ele aldıysa `true` döner. */
-export function createConnectionRoutes({ store, keychain, log, onChanged }: ConnectionDeps) {
+export function createConnectionRoutes({ store, keychain, sessionPasswords, log, onChanged }: ConnectionDeps) {
   async function create(req: IncomingMessage, res: ServerResponse) {
     const parsed = parseConnectionInput(await readJson(req));
     if (!parsed.ok) return invalid(res, parsed.errors);
@@ -76,6 +80,7 @@ export function createConnectionRoutes({ store, keychain, log, onChanged }: Conn
       return settings.connections.length < before;
     });
     if (!removed) return notFound(res);
+    sessionPasswords.forget(id);
     onChanged?.(id);
     // Ayar silindikten sonra keychain: erişim reddedilse de bağlantı silinmiş kalır, sonuç bildirilir.
     const result = await keychain.delete(passwordAccount(id));
@@ -119,6 +124,40 @@ export function createConnectionRoutes({ store, keychain, log, onChanged }: Conn
     json(res, 200, body);
   }
 
+  /**
+   * Şifre penceresinden gelen şifre. Varsayılan: yalnızca bellekte. "Keychain'e kaydet" seçildiyse
+   * keychain'e yazılır ve bağlantı ayarı değişir; keychain reddederse şifre bellekte kalır, ayar değişmez.
+   */
+  async function giveSessionPassword(req: IncomingMessage, res: ServerResponse, id: string) {
+    const parsed = parseSessionPasswordInput(await readJson(req));
+    if (!parsed.ok) return json(res, 400, { hata: parsed.error });
+    let connection = (await store.read()).connections.find((c) => c.id === id);
+    if (!connection) return notFound(res);
+    const { password, saveToKeychain } = parsed.value;
+    let outcome: SessionPasswordResponse['password'] = 'oturumda';
+    if (saveToKeychain) {
+      const written = await keychain.set(passwordAccount(id), password);
+      logDenied('yazma', id, written);
+      outcome = written.result;
+    }
+    if (outcome === 'kaydedildi') {
+      const updated = await store.update((settings) => {
+        const found = settings.connections.find((c) => c.id === id);
+        if (found) found.savePassword = true;
+        return found;
+      });
+      if (!updated) return notFound(res);
+      connection = updated;
+      sessionPasswords.forget(id);
+    } else {
+      sessionPasswords.remember(id, password);
+    }
+    // Açık pool'lar eski (reddedilen) şifreyle kalmasın.
+    onChanged?.(id);
+    const body: SessionPasswordResponse = { connection, password: outcome };
+    json(res, 200, body);
+  }
+
   async function writePassword(
     id: string,
     input: Pick<ConnectionInput, 'savePassword' | 'password'>,
@@ -153,11 +192,14 @@ export function createConnectionRoutes({ store, keychain, log, onChanged }: Conn
       else methodNotAllowed(res);
       return true;
     }
-    const match = /^\/api\/baglantilar\/([^/]+)(?:\/(sifre|kopya))?$/.exec(pathname);
+    const match = /^\/api\/baglantilar\/([^/]+)(?:\/(sifre|kopya|oturum-sifresi))?$/.exec(pathname);
     if (!match) return false;
     const id = decodeURIComponent(match[1]!);
     if (match[2] === 'sifre') {
       if (req.method === 'GET') await passwordStatus(res, id);
+      else methodNotAllowed(res);
+    } else if (match[2] === 'oturum-sifresi') {
+      if (req.method === 'POST') await giveSessionPassword(req, res, id);
       else methodNotAllowed(res);
     } else if (match[2] === 'kopya') {
       if (req.method === 'POST') await copy(res, id);
