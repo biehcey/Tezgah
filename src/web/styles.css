@@ -909,6 +909,69 @@ button.kucuk {
   background: color-mix(in srgb, var(--uyari) 14%, transparent);
 }
 
+.cm-transaction-disi {
+  background: color-mix(in srgb, var(--dikkat) 16%, transparent);
+}
+
+.cm-reddedilen {
+  background: color-mix(in srgb, var(--uyari) 10%, transparent);
+}
+
+.cm-ifade-isareti.transactionDisi {
+  color: var(--dikkat);
+}
+
+.cm-ifade-isareti.reddedilen {
+  color: var(--uyari);
+}
+
+.mod-rozeti {
+  align-self: center;
+  margin-right: auto;
+  padding: 2px 8px;
+  border: 1px solid var(--cizgi);
+  border-radius: 999px;
+  color: var(--soluk);
+  font-size: 12px;
+}
+
+.mod-rozeti.autocommit {
+  border-color: var(--dikkat);
+  background: color-mix(in srgb, var(--dikkat) 14%, var(--zemin));
+  color: var(--dikkat);
+}
+
+.mod-rozeti.karisik {
+  border-color: var(--uyari);
+  background: color-mix(in srgb, var(--uyari) 14%, var(--zemin));
+  color: var(--uyari);
+}
+
+.uyari-seridi {
+  padding: 6px 16px;
+  border-bottom: 1px solid var(--cizgi);
+  font-size: 13px;
+}
+
+.uyari-seridi.autocommit {
+  background: color-mix(in srgb, var(--dikkat) 14%, var(--zemin));
+  color: var(--dikkat);
+}
+
+.analiz-sorunlari {
+  margin: 0;
+  padding: 6px 12px 0 28px;
+  color: var(--uyari);
+}
+
+.ifade-ipucu {
+  color: var(--dikkat);
+}
+
+.karar-sonucu.autocommit {
+  color: var(--dikkat);
+}
+
 .cm-hata-alti {
   text-decoration: underline wavy var(--uyari);
   text-decoration-skip-ink: none;
@@ -961,6 +1024,7 @@ button.kucuk {
 }
 
 .karar-sonucu.hata,
+.karar-sonucu.reddedildi,
 .karar-sonucu.sureDoldu {
   color: var(--uyari);
 }

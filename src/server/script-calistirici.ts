@@ -12,9 +12,11 @@ import {
   startDecision,
   type DecisionTimer,
 } from '../core/karar-suresi';
+import { analyzeScript, blockReasons, type RunMode } from '../core/calistirma-modu';
 import { splitStatements, type Statement } from '../core/ifade-bolme';
 import {
   PREVIEW_ROWS,
+  autocommitSummary,
   parseClientMessage,
   type ClientMessage,
   type Preview,
@@ -75,9 +77,14 @@ type StatementResult =
   | { ok: false; error: unknown; /** Hata konumundan düşülecek önek (imleç sarmalı). */ prefix: number };
 
 /**
- * Script çalıştırma WebSocket'i (Transaction modu). İfadeler tek client'ta, `BEGIN` ile açılan tek
- * transaction'da sırayla çalışır; ilk hatada durulur; sonda istemciden commit/rollback beklenir.
- * Soket koparsa açık transaction geri alınır.
+ * Script çalıştırma WebSocket'i. Sunucu script'i istemciye güvenmeden analiz eder; reddedilen
+ * ifade varsa ya da script Karışık'sa hiçbir şey çalışmaz.
+ *
+ * - Transaction modu: ifadeler tek client'ta, `BEGIN` ile açılan tek transaction'da sırayla
+ *   çalışır; ilk hatada durulur; sonda istemciden commit/rollback beklenir. Soket koparsa açık
+ *   transaction geri alınır.
+ * - Autocommit modu: ifadeler transaction'sız, sırayla ve her biri anında kalıcı çalışır; ilk
+ *   hatada durulur; karar beklenmez. Soket koparsa çalışan ifade iptal edilir, kalanlar çalışmaz.
  */
 export function createScriptRunner({ store, pools, clock, log }: ScriptRunnerDeps) {
   return function attach(ws: WebSocket) {
@@ -114,9 +121,18 @@ export function createScriptRunner({ store, pools, clock, log }: ScriptRunnerDep
         case 'run': {
           if (run) return warn('mesgul', 'Bu sekmede zaten bir çalıştırma var');
           expired = false;
+          const statements = splitStatements(message.script);
+          const analysis = analyzeScript(statements);
+          send({ type: 'analiz', ...analysis });
+          const [blocked] = blockReasons(message.script, statements, analysis);
+          if (blocked) {
+            const mesaj = blocked.satir === null ? blocked.mesaj : `Satır ${blocked.satir}: ${blocked.mesaj}`;
+            return send({ type: 'bitti', sonuc: 'reddedildi', mesaj });
+          }
           const current: Run = { phase: 'calisiyor', stopping: null, commitAllowed: false };
           run = current;
-          execute(current, message.target, message.script)
+          // Engellenmeyen script Karışık değildir.
+          execute(current, message.target, message.script, analysis.mod as Exclude<RunMode, 'karisik'>)
             .catch((err: unknown) => {
               log(`Script çalıştırma hatası: ${String(err)}`);
               send({ type: 'bitti', sonuc: 'hata', mesaj: 'Beklenmeyen bir hata oluştu' });
@@ -154,13 +170,14 @@ export function createScriptRunner({ store, pools, clock, log }: ScriptRunnerDep
       }
     }
 
-    async function execute(current: Run, target: Target, script: string) {
+    async function execute(current: Run, target: Target, script: string, mode: Exclude<RunMode, 'karisik'>) {
       const connection = (await store.read()).connections.find((c) => c.id === target.connectionId);
       if (!connection) return send({ type: 'bitti', sonuc: 'hata', mesaj: 'Bağlantı bulunamadı' });
       try {
-        await pools.withClient(connection, target.database, (client, discard) =>
-          inTransaction(current, { client, discard, connection, database: target.database }, script),
-        );
+        await pools.withClient(connection, target.database, (client, discard) => {
+          const session = { client, discard, connection, database: target.database };
+          return mode === 'autocommit' ? inAutocommit(current, session, script) : inTransaction(current, session, script);
+        });
       } catch (err) {
         if (!(err instanceof TargetError)) throw err;
         send({ type: 'bitti', sonuc: 'hata', mesaj: err.failure.mesaj });
@@ -214,7 +231,7 @@ export function createScriptRunner({ store, pools, clock, log }: ScriptRunnerDep
         const sureMs = decisionDurationMs(connection.envTag);
         // Yedek: Node zamanlayıcısı işlemezken (uyku) uzak sunucuda transaction açık kalmasın.
         await client.query(`SET LOCAL idle_in_transaction_session_timeout = ${serverIdleTimeoutMs(sureMs)}`);
-        const outcome = await runStatements(current, client, script);
+        const { outcome } = await runStatements(current, client, script);
         if (outcome === 'baglantiKoptu') broken = true;
         if (broken) return lost();
         const failed = outcome === 'hata';
@@ -289,25 +306,71 @@ export function createScriptRunner({ store, pools, clock, log }: ScriptRunnerDep
       }
     }
 
-    /** İfadeleri sırayla çalıştırır; ilk hatada ya da iptal/kopmada durur. */
-    async function runStatements(current: Run, client: pg.PoolClient, script: string): Promise<'tamam' | 'hata' | 'baglantiKoptu'> {
+    /**
+     * Transaction'sız çalıştırma: her ifade kendi örtük transaction'ında anında kalıcıdır. Karar
+     * beklenmez; özet uygulanan, hatalı ve çalıştırılmayan ifadeleri sayar.
+     */
+    async function inAutocommit(current: Run, session: Session, script: string) {
+      const { client, discard, connection, database } = session;
+      const where = `${connection.name} / ${database}`;
+      const total = splitStatements(script).length;
+      let broken = false;
+      /** Gönderilen iptal sinyali; geç varabilir, client bu yüzden pool'a dönmez. */
+      let cancelSent: Promise<void> | null = null;
+      const onError = (err: Error) => {
+        log(`Script bağlantısı düştü (${where}): ${err.message}`);
+        broken = true;
+      };
+      client.on('error', onError);
+      try {
+        if (current.stopping) {
+          return send({ type: 'bitti', sonuc: 'iptal', ozet: { uygulandi: 0, hatali: 0, calistirilmadi: total } });
+        }
+        // Sunucu süreç kimliği (BackendKeyData); @types/pg'de tanımlı değil.
+        const pid = (client as unknown as { processID: number }).processID;
+        current.cancel = () => (cancelSent ??= cancelBackend(session, pid));
+        const { outcome, applied } = await runStatements(current, client, script);
+        const ozet = autocommitSummary(total, applied, outcome !== 'tamam');
+        if (outcome === 'baglantiKoptu' || broken) {
+          return send({ type: 'bitti', sonuc: 'hata', mesaj: 'Bağlantı koptu; çalışan ifadenin sonucu bilinmiyor.', ozet });
+        }
+        if (current.stopping) {
+          await cancelSent;
+          if (current.stopping === 'kopma') log(`Soket koptu; autocommit durduruldu (${where}): ${applied} ifade uygulandı.`);
+          return send({ type: 'bitti', sonuc: 'iptal', ozet });
+        }
+        send({ type: 'bitti', sonuc: 'autocommit', ozet });
+      } finally {
+        client.off('error', onError);
+        if (broken || cancelSent) discard();
+      }
+    }
+
+    /** İfadeleri sırayla çalıştırır; ilk hatada ya da iptal/kopmada durur. `applied`: başarılı ifade sayısı. */
+    async function runStatements(
+      current: Run,
+      client: pg.PoolClient,
+      script: string,
+    ): Promise<{ outcome: 'tamam' | 'hata' | 'baglantiKoptu'; applied: number }> {
+      let applied = 0;
       for (const [i, statement] of splitStatements(script).entries()) {
-        if (current.stopping) return 'tamam';
+        if (current.stopping) return { outcome: 'tamam', applied };
         send({ type: 'started', i });
         const started = performance.now();
         const result = await runStatement(client, statement);
         const ms = Math.round(performance.now() - started);
         if (result.ok) {
           send({ type: 'done', i, ms, rowCount: result.rowCount, komut: result.komut, onizleme: result.onizleme });
+          applied++;
           continue;
         }
         const e = result.error as Partial<pg.DatabaseError>;
         const position = e.position ? Number(e.position) - result.prefix : undefined;
         const location = errorLocation(script, statement, position !== undefined && position >= 1 ? position : undefined);
         send({ type: 'error', i, ms, sqlstate: e.code ?? null, mesaj: e.message ?? String(result.error), ...location });
-        return result.error instanceof pg.DatabaseError ? 'hata' : 'baglantiKoptu';
+        return { outcome: result.error instanceof pg.DatabaseError ? 'hata' : 'baglantiKoptu', applied };
       }
-      return 'tamam';
+      return { outcome: 'tamam', applied };
     }
 
     async function cancelBackend({ connection, database }: Session, pid: number): Promise<void> {

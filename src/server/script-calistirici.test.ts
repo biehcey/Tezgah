@@ -19,8 +19,8 @@ afterEach(async () => {
   await t.close();
 });
 
-/** Olay dizisinin özeti: tür ve (varsa) ifade indeksi. */
-const sequence = (events: ServerEvent[]) => events.map((e) => ('i' in e ? `${e.type}:${e.i}` : e.type));
+/** Olay dizisinin özeti: tür ve (varsa) ifade indeksi. Her çalıştırmanın başındaki `analiz` ayrıca sınanır. */
+const sequence = (events: ServerEvent[]) => events.filter((e) => e.type !== 'analiz').map((e) => ('i' in e ? `${e.type}:${e.i}` : e.type));
 
 describe('script çalıştırma: istek doğrulama', () => {
   it('tanınmayan mesaj reddedilir, soket açık kalır', async () => {
@@ -31,6 +31,28 @@ describe('script çalıştırma: istek doğrulama', () => {
   it('bilinmeyen bağlantıda çalıştırma başlamadan biter', async () => {
     ws.send({ type: 'run', target: { connectionId: 'yok', database: 'postgres' }, script: 'SELECT 1' });
     expect(await ws.waitFor('bitti')).toMatchObject({ sonuc: 'hata', mesaj: 'Bağlantı bulunamadı' });
+    expect(sequence(ws.events)).toEqual(['bitti']);
+  });
+
+  it('sunucu script’i istemciye güvenmeden analiz eder; reddedilen ifade varsa hiçbir şey çalışmaz', async () => {
+    ws.send({ type: 'run', target: { connectionId: 'yok', database: 'postgres' }, script: 'BEGIN;\nSELECT 1;\nCOMMIT' });
+    expect(await ws.waitFor('analiz')).toEqual({
+      type: 'analiz',
+      mod: 'transaction',
+      transactionDisi: [],
+      reddedilenler: [
+        { i: 0, neden: 'transaction' },
+        { i: 2, neden: 'transaction' },
+      ],
+    });
+    // Bağlantıya bakılmadan reddedilir.
+    expect(await ws.waitFor('bitti')).toMatchObject({ sonuc: 'reddedildi' });
+  });
+
+  it('Karışık script çalıştırılmadan reddedilir', async () => {
+    ws.send({ type: 'run', target: { connectionId: 'yok', database: 'postgres' }, script: 'INSERT INTO t VALUES (1);\nVACUUM t' });
+    expect(await ws.waitFor('analiz')).toMatchObject({ mod: 'karisik', transactionDisi: [1] });
+    expect(await ws.waitFor('bitti')).toMatchObject({ sonuc: 'reddedildi', mesaj: expect.stringContaining('ayrı çalıştır') });
     expect(sequence(ws.events)).toEqual(['bitti']);
   });
 
@@ -216,6 +238,88 @@ describePg('script çalıştırma: Transaction modu, gerçek Postgres', () => {
     ws.events.length = 0;
     run('SELECT 2');
     expect(await ws.waitFor('kararBekleniyor')).toMatchObject({ commitEdilebilir: true });
+  });
+
+  describe('Autocommit', () => {
+    const INDEX = 'tezgah_test_script_ix';
+    afterEach(async () => {
+      await admin.query(`DROP INDEX IF EXISTS ${INDEX}`);
+    });
+
+    /** İndeks var ve geçerli mi; yoksa `null`. */
+    async function indexValid(): Promise<boolean | null> {
+      const { rows } = await admin.query<{ valid: boolean }>(
+        `SELECT indisvalid AS valid FROM pg_index WHERE indexrelid = to_regclass($1)`,
+        [INDEX],
+      );
+      return rows[0]?.valid ?? null;
+    }
+
+    it('VACUUM ve CREATE INDEX CONCURRENTLY ifade ifade ve kalıcı çalışır; karar beklenmez', async () => {
+      run(`VACUUM ${TABLE};
+CREATE INDEX CONCURRENTLY ${INDEX} ON ${TABLE} (id)`);
+      expect(await ws.waitFor('analiz')).toMatchObject({ mod: 'autocommit', transactionDisi: [0, 1], reddedilenler: [] });
+      expect(await ws.waitFor('bitti')).toEqual({
+        type: 'bitti',
+        sonuc: 'autocommit',
+        ozet: { uygulandi: 2, hatali: 0, calistirilmadi: 0 },
+      });
+      expect(sequence(ws.events)).toEqual(['started:0', 'done:0', 'started:1', 'done:1', 'bitti']);
+      expect(ws.events.filter((e) => e.type === 'done').map((e) => e.komut)).toEqual(['VACUUM', 'CREATE']);
+      expect(await indexValid()).toBe(true);
+      // Client transaction'sız döndü.
+      await eventually(async () => (await tezgahStates()).every((s) => s === 'idle'));
+    });
+
+    it('hatada durulur; önceki ifade kalıcıdır, kalanlar çalışmaz; özet', async () => {
+      run(`CREATE INDEX CONCURRENTLY ${INDEX} ON ${TABLE} (id);
+VACUUM yok_tablo;
+VACUUM ${TABLE}`);
+      expect(await ws.waitFor('error')).toMatchObject({ i: 1, sqlstate: '42P01', satir: 2 });
+      expect(await ws.waitFor('bitti')).toMatchObject({
+        sonuc: 'autocommit',
+        ozet: { uygulandi: 1, hatali: 1, calistirilmadi: 1 },
+      });
+      expect(sequence(ws.events)).toEqual(['started:0', 'done:0', 'started:1', 'error:1', 'bitti']);
+      expect(await indexValid()).toBe(true);
+    });
+
+    it('bitince commit isteği karar bekleyen transaction olmadığından reddedilir', async () => {
+      run(`VACUUM ${TABLE}`);
+      await ws.waitFor('bitti');
+      ws.send({ type: 'commit' });
+      expect(await ws.waitFor('uyari')).toMatchObject({ tur: 'gecersizIstek' });
+    });
+
+    it('çalışırken soket koparsa çalışan ifade iptal edilir ve kalanlar çalışmaz', async () => {
+      // Çalışan ifade, başka oturumun tuttuğu kilidi bekleyen VACUUM.
+      await admin.query('BEGIN');
+      await admin.query(`LOCK TABLE ${TABLE} IN ACCESS EXCLUSIVE MODE`);
+      try {
+        run(`VACUUM ${TABLE};
+CREATE INDEX CONCURRENTLY ${INDEX} ON ${TABLE} (id)`);
+        await ws.waitFor('started', (e) => e.i === 0);
+        await eventually(async () => (await tezgahStates()).includes('active'));
+        ws.terminate();
+        await eventually(async () => !(await tezgahStates()).includes('active'));
+      } finally {
+        await admin.query('ROLLBACK');
+      }
+      await settle();
+      expect(await indexValid()).toBeNull();
+    });
+
+    it('listede olmayan transaction dışı komut 25001 ile düşer; hatalı satır işaretlenir', async () => {
+      // DISCARD ALL desende yok; Transaction modunda çalışır ve Postgres reddeder.
+      run(`INSERT INTO ${TABLE} VALUES (1);
+DISCARD ALL`);
+      expect(await ws.waitFor('analiz')).toMatchObject({ mod: 'transaction' });
+      expect(await ws.waitFor('error')).toMatchObject({ i: 1, sqlstate: '25001', satir: 2, sutun: 1 });
+      expect(await ws.waitFor('kararBekleniyor')).toMatchObject({ commitEdilebilir: false });
+      ws.send({ type: 'rollback' });
+      await ws.waitFor('bitti');
+      expect(await ids()).toEqual([]);
+    });
   });
 
   describe('Karar süresi', () => {

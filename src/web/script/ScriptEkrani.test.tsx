@@ -1,6 +1,7 @@
-import { act, screen, within } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { CONNECTION_LOST } from '../api/client';
 import { editorCursorLine, editorScript, gutterMarks, setEditorScript } from '../test/eylemler';
 import { connection, createFakeApi, createFakeScriptRuns, renderWithApi } from '../test/sahte-api';
 import { ScriptEkrani } from './ScriptEkrani';
@@ -234,5 +235,95 @@ describe('Script ekranı: Karar süresi', () => {
     expect(within(decision()).queryByRole('button')).not.toBeInTheDocument();
     expect(cards()).toHaveLength(1);
     expect(cards()[0]).toHaveTextContent('INSERT');
+  });
+});
+
+describe('Script ekranı: Çalıştırma modu', () => {
+  const badge = () => screen.getByTitle('Çalıştırma modu');
+  const strip = () => screen.queryByRole('note', { name: 'Autocommit uyarısı' });
+
+  it('rozet script yazılırken Transaction, Autocommit ya da Karışık olur', async () => {
+    setup();
+    expect(badge()).toHaveTextContent('Transaction');
+    setEditorScript('VACUUM t;\nCREATE INDEX CONCURRENTLY ix ON t (a)');
+    await waitFor(() => expect(badge()).toHaveTextContent('Autocommit'));
+    expect(badge()).toHaveClass('autocommit');
+    setEditorScript('INSERT INTO t VALUES (1);\nVACUUM t');
+    await waitFor(() => expect(badge()).toHaveTextContent('Karışık'));
+    expect(badge()).toHaveClass('karisik');
+  });
+
+  it('Karışık script\'te Çalıştır devre dışı; transaction dışı ifadeler ⚠ ve turuncu zeminle işaretli', async () => {
+    setup();
+    setEditorScript('INSERT INTO t VALUES (1);\nVACUUM t;\nSELECT 1');
+    await waitFor(() => expect(runButton()).toBeDisabled());
+    expect(screen.getByText(/ayrı çalıştır/)).toBeInTheDocument();
+    expect(gutterMarks()).toEqual({ 2: '⚠' });
+    expect(document.querySelectorAll('.cm-transaction-disi')).toHaveLength(1);
+    expect(document.querySelector('.cm-transaction-disi')).toHaveTextContent('VACUUM t;');
+  });
+
+  it('reddedilen ifadeler işaretli, nedeni yazılı ve Çalıştır devre dışı', async () => {
+    setup();
+    setEditorScript('BEGIN;\nSELECT 1;\n\\set x 1');
+    await waitFor(() => expect(runButton()).toBeDisabled());
+    expect(screen.getByText(/Satır 1: Transaction'ı Tezgah yönetir/)).toBeInTheDocument();
+    expect(screen.getByText(/Satır 3: psql meta komutları desteklenmez/)).toBeInTheDocument();
+    expect(gutterMarks()).toEqual({ 1: '⛔', 3: '⛔' });
+    expect(document.querySelectorAll('.cm-reddedilen')).toHaveLength(2);
+  });
+
+  it('Autocommit\'te başlığın altında kalıcı uyarı şeridi var; Transaction\'da yok', async () => {
+    setup();
+    setEditorScript('VACUUM t;\nVACUUM u');
+    await waitFor(() => expect(strip()).toHaveTextContent('2 ifade anında kalıcı uygulanır, geri alınamaz'));
+    setEditorScript('SELECT 1');
+    await waitFor(() => expect(strip()).not.toBeInTheDocument());
+  });
+
+  it('Autocommit çalıştırması onaysız başlar; karar kartı yok, sonda özet gösterilir', async () => {
+    const { run } = await startRun('VACUUM t;\nVACUUM yok;\nVACUUM u');
+    expect(run.script).toBe('VACUUM t;\nVACUUM yok;\nVACUUM u');
+    run.emit(
+      { type: 'analiz', mod: 'autocommit', transactionDisi: [0, 1, 2], reddedilenler: [] },
+      { type: 'started', i: 0 },
+      { type: 'done', i: 0, rowCount: null, ms: 3, komut: 'VACUUM' },
+      { type: 'started', i: 1 },
+      { type: 'error', i: 1, ms: 1, sqlstate: '42P01', mesaj: 'relation "yok" does not exist', satir: 2, sutun: 8, bas: 17, bit: 20 },
+      { type: 'bitti', sonuc: 'autocommit', ozet: { uygulandi: 1, hatali: 1, calistirilmadi: 1 } },
+    );
+    expect(within(decision()).getByText('1 ifade kalıcı uygulandı · 1 hatalı · 1 çalıştırılmadı')).toBeInTheDocument();
+    expect(within(decision()).queryByRole('button')).not.toBeInTheDocument();
+    expect(gutterMarks()).toEqual({ 1: '✓', 2: '✗', 3: '–' });
+  });
+
+  it('Autocommit iptal edilince "geri alındı" denmez; özet gösterilir', async () => {
+    const { run } = await startRun('VACUUM t;\nVACUUM u');
+    run.emit(
+      { type: 'analiz', mod: 'autocommit', transactionDisi: [0, 1], reddedilenler: [] },
+      { type: 'bitti', sonuc: 'iptal', ozet: { uygulandi: 1, hatali: 1, calistirilmadi: 0 } },
+    );
+    expect(within(decision()).getByText(/İptal edildi/)).toHaveTextContent('İptal edildi · 1 ifade kalıcı uygulandı · 1 hatalı');
+    expect(within(decision()).queryByText(/geri alındı/)).not.toBeInTheDocument();
+  });
+
+  it('25001 hatasında kart "tek başına autocommit" ipucunu gösterir', async () => {
+    const { run } = await startRun('INSERT INTO t VALUES (1);\nDISCARD ALL');
+    run.emit({ type: 'error', i: 1, ms: 1, sqlstate: '25001', mesaj: 'DISCARD ALL cannot run inside a transaction block', satir: 2, sutun: 1, bas: 26, bit: 37 });
+    expect(cards()[1]).toHaveTextContent('Bu komut tek başına autocommit olarak çalıştırılmalı.');
+    expect(gutterMarks()[2]).toBe('✗');
+  });
+
+  it('Autocommit’te sunucuyla bağlantı koparsa "geri alındı" denmez', async () => {
+    const { run } = await startRun('VACUUM t');
+    run.emit(CONNECTION_LOST);
+    expect(within(decision()).getByText(/bağlantı koptu/)).toHaveTextContent('çalışan ifade iptal edildi');
+    expect(within(decision()).queryByText(/geri alındı/)).not.toBeInTheDocument();
+  });
+
+  it('sunucu reddederse nedeni gösterilir', async () => {
+    const { run } = await startRun('SELECT 1');
+    run.emit({ type: 'bitti', sonuc: 'reddedildi', mesaj: 'Satır 1: olmaz' });
+    expect(within(decision()).getByText('Satır 1: olmaz')).toBeInTheDocument();
   });
 });

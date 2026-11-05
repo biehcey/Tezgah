@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { applyEvent, parseClientMessage, startRunView, targetLock, type RunView, type ServerEvent } from './script-calistirma';
+import { applyEvent, autocommitSummary, formatSummary, parseClientMessage, startRunView, targetLock, type RunView, type ServerEvent } from './script-calistirma';
 
 describe('parseClientMessage', () => {
   it.each([
@@ -71,6 +71,40 @@ describe('çalıştırma görünümü', () => {
   it('uyarı mesajı gösterilir ve bekleyen istek yeniden gönderilebilir', () => {
     const view = applyEvent({ ...play(), bekleyenIstek: 'commit' }, { type: 'uyari', tur: 'commitReddedildi', mesaj: 'olmaz' });
     expect(view).toMatchObject({ uyari: 'olmaz', bekleyenIstek: null, evre: 'calisiyor' });
+  });
+});
+
+describe('çalıştırma görünümü: Çalıştırma modu', () => {
+  it('analiz modu ve reddedilenleri yazar', () => {
+    const view = play({ type: 'analiz', mod: 'autocommit', transactionDisi: [0, 1, 2], reddedilenler: [] });
+    expect(view).toMatchObject({ mod: 'autocommit', reddedilenler: [] });
+  });
+
+  it('autocommit sonu özeti taşır', () => {
+    const ozet = { uygulandi: 1, hatali: 1, calistirilmadi: 1 };
+    expect(play({ type: 'bitti', sonuc: 'autocommit', ozet })).toMatchObject({ evre: 'bitti', sonuc: 'autocommit', ozet });
+  });
+
+  it('25001 hatasına "tek başına autocommit" ipucu eklenir; diğer hatalara eklenmez', () => {
+    const error = (sqlstate: string): ServerEvent => ({ type: 'error', i: 0, ms: 1, sqlstate, mesaj: 'x', satir: 1, sutun: 1, bas: 0, bit: 1 });
+    expect(play(error('25001')).ifadeler[0]!.hata?.ipucu).toBe('Bu komut tek başına autocommit olarak çalıştırılmalı.');
+    expect(play(error('42P01')).ifadeler[0]!.hata?.ipucu).toBeUndefined();
+  });
+
+  it.each([
+    ['hepsi uygulandı', 3, 3, false, { uygulandi: 3, hatali: 0, calistirilmadi: 0 }],
+    ['ortada hata', 4, 1, true, { uygulandi: 1, hatali: 1, calistirilmadi: 2 }],
+    ['hatasız durduruldu', 4, 2, false, { uygulandi: 2, hatali: 0, calistirilmadi: 2 }],
+  ])('özet: %s', (_, total, applied, failed, ozet) => {
+    expect(autocommitSummary(total, applied, failed)).toEqual(ozet);
+  });
+
+  it.each([
+    [{ uygulandi: 3, hatali: 0, calistirilmadi: 0 }, '3 ifade kalıcı uygulandı'],
+    [{ uygulandi: 2, hatali: 1, calistirilmadi: 4 }, '2 ifade kalıcı uygulandı · 1 hatalı · 4 çalıştırılmadı'],
+    [{ uygulandi: 0, hatali: 1, calistirilmadi: 0 }, '0 ifade kalıcı uygulandı · 1 hatalı'],
+  ])('özet metni %o', (ozet, text) => {
+    expect(formatSummary(ozet)).toBe(text);
   });
 });
 

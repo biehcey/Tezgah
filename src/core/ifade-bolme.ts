@@ -13,6 +13,8 @@ export interface Statement {
   text: string;
   /** Baştaki çıplak kelimeler, büyük harfle; ilk kelime olmayan simgede durur (en fazla 8). */
   keywords: string[];
+  /** İfadedeki tüm çıplak kelimeler, büyük harfle (dizge, yorum, tırnaklı ad ve dollar-quote dışı). */
+  words: string[];
   /** psql `\` meta komutu (satır sonuna kadar sürer). */
   meta: boolean;
 }
@@ -28,20 +30,23 @@ export function splitStatements(script: string): Statement[] {
   let start = -1;
   let end = -1;
   let keywords: string[] = [];
+  let words: string[] = [];
   /** Kelime dizisi bir kelime olmayan simgeyle kesildi mi. */
   let keywordsClosed = false;
 
   const finish = () => {
-    if (start !== -1) statements.push({ start, end, text: script.slice(start, end), keywords, meta: false });
+    if (start !== -1) statements.push({ start, end, text: script.slice(start, end), keywords, words, meta: false });
     start = -1;
     end = -1;
     keywords = [];
+    words = [];
     keywordsClosed = false;
   };
   /** `from`..`to` aralığı anlamlı bir simge; ifadeyi başlatır ya da uzatır. */
   const token = (from: number, to: number, word?: string) => {
     if (start === -1) start = from;
     end = to;
+    if (word !== undefined) words.push(word.toUpperCase());
     if (keywordsClosed) return;
     if (word !== undefined && keywords.length < MAX_KEYWORDS) keywords.push(word.toUpperCase());
     else keywordsClosed = true;
@@ -74,7 +79,7 @@ export function splitStatements(script: string): Statement[] {
       const lineEnd = nl === -1 ? n : nl;
       const metaEnd = i + script.slice(i, lineEnd).trimEnd().length;
       const text = script.slice(i, metaEnd);
-      statements.push({ start: i, end: metaEnd, text, keywords: [], meta: true });
+      statements.push({ start: i, end: metaEnd, text, keywords: [], words: [], meta: true });
       i = lineEnd;
     } else if (c === "'") {
       const to = skipQuoted(script, i, "'", false);

@@ -1,18 +1,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { isProd, type Connection } from '../../core/baglanti';
-import { splitStatements } from '../../core/ifade-bolme';
+import { analyzeScript, blockReasons, type RunMode, type ScriptAnalysis } from '../../core/calistirma-modu';
+import { positionOf, splitStatements, type Statement } from '../../core/ifade-bolme';
 import { decisionStatus, formatRemaining, startDecision, type DecisionPhase, type DecisionTimer } from '../../core/karar-suresi';
 import {
   PREVIEW_ROWS,
   applyEvent,
+  formatSummary,
   startRunView,
   targetLock,
   type RunView,
   type StatementStatus,
   type StatementView,
 } from '../../core/script-calistirma';
-import { useApi, type ScriptRunHandle } from '../api/client';
-import { STATUS_LABELS, STATUS_SYMBOLS } from './durum';
+import { CONNECTION_LOST, useApi, type ScriptRunHandle } from '../api/client';
+import type { ServerEvent } from '../../core/script-calistirma';
+import { STATUS_LABELS, STATUS_SYMBOLS, type AnalysisMark } from './durum';
 import { ScriptEditoru, type EditorMarks, type ScriptEditoruHandle } from './ScriptEditoru';
 
 interface Props {
@@ -28,6 +31,43 @@ interface Props {
 const PRIORITY: Record<StatementStatus, number> = { hatali: 4, calisiyor: 3, calistirilmadi: 2, basarili: 1, sirada: 0 };
 
 const NO_MARKS: EditorMarks = { lines: new Map(), error: null };
+
+const AUTOCOMMIT_CONNECTION_LOST: ServerEvent = {
+  type: 'bitti',
+  sonuc: 'hata',
+  mesaj: 'Tezgah sunucusuyla bağlantı koptu; çalışan ifade iptal edildi, uygulanmış ifadeler kalıcıdır.',
+};
+
+/** Yazarken analiz bu kadar duraklamadan sonra yenilenir. */
+const ANALYSIS_DELAY_MS = 200;
+
+const MODE_LABELS: Record<RunMode, string> = { transaction: 'Transaction', autocommit: 'Autocommit', karisik: 'Karışık' };
+
+/** Script analizden geçmedi: reddedilen ifade var ya da script Karışık. */
+const isBlocked = (analysis: ScriptAnalysis) => analysis.reddedilenler.length > 0 || analysis.mod === 'karisik';
+
+function useDebounced<T>(value: T, ms: number): T {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const id = setTimeout(() => setDebounced(value), ms);
+    return () => clearTimeout(id);
+  }, [value, ms]);
+  return debounced;
+}
+
+/** Analizin editör süsleri: reddedilen ifadeler her zaman, transaction dışılar yalnızca Karışık'ta. */
+function analysisMarks(script: string, statements: Statement[], analysis: ScriptAnalysis): EditorMarks {
+  const marked: { i: number; tur: AnalysisMark }[] = analysis.reddedilenler.map(({ i }) => ({ i, tur: 'reddedilen' }));
+  if (analysis.mod === 'karisik') marked.push(...analysis.transactionDisi.map((i) => ({ i, tur: 'transactionDisi' as const })));
+  if (marked.length === 0) return NO_MARKS;
+  const lines = new Map<number, AnalysisMark>();
+  const ranges = marked.map(({ i, tur }) => {
+    const s = statements[i]!;
+    lines.set(positionOf(script, s.start).satir, tur);
+    return { bas: s.start, bit: s.end, tur };
+  });
+  return { lines, error: null, analysis: ranges };
+}
 
 /**
  * Script ekranı (ticket 23 varyant B): üstte büyük hedef başlığı, solda editör ve çalıştırma çubuğu,
@@ -56,13 +96,23 @@ export function ScriptEkrani({ target, onChangeTarget, onTargetLockChange }: Pro
   const running = run?.evre === 'calisiyor';
   const busy = run !== null && run.evre !== 'bitti';
   const hasStatements = useMemo(() => splitStatements(script).length > 0, [script]);
+  /** Analiz edilen metin; yazarken `script`'in gerisinde kalır. */
+  const analyzed = useDebounced(script, ANALYSIS_DELAY_MS);
+  const statements = useMemo(() => splitStatements(analyzed), [analyzed]);
+  const analysis = useMemo(() => analyzeScript(statements), [statements]);
+  const blocked = isBlocked(analysis);
 
   function start() {
     if (!target || busy) return;
+    // Analiz yazmanın gerisinde kalabilir; çalıştırmadan önce güncel metinle yeniden bakılır.
+    const current = analyzeScript(splitStatements(script));
+    if (isBlocked(current)) return;
     handle.current?.close();
     setRun(startRunView(script));
     setDeadline(null);
-    handle.current = api.runScript({ connectionId: target.connection.id, database: target.database }, script, (event) => {
+    handle.current = api.runScript({ connectionId: target.connection.id, database: target.database }, script, (received) => {
+      // Autocommit'te geri alınacak transaction yok; sunucu çalışan ifadeyi iptal eder.
+      const event = received === CONNECTION_LOST && current.mod === 'autocommit' ? AUTOCOMMIT_CONNECTION_LOST : received;
       setRun((current) => (current ? applyEvent(current, event) : current));
       if (event.type === 'kararBekleniyor' || event.type === 'uzatildi') setDeadline(startDecision(event.kalanMs, Date.now()));
     });
@@ -75,7 +125,7 @@ export function ScriptEkrani({ target, onChangeTarget, onTargetLockChange }: Pro
 
   // Satır işaretleri yalnızca editördeki metin çalıştırılanla aynıyken anlamlı.
   const marks = useMemo((): EditorMarks => {
-    if (!run || run.script !== script) return NO_MARKS;
+    if (!run || run.script !== script) return analyzed === script ? analysisMarks(script, statements, analysis) : NO_MARKS;
     const lines = new Map<number, StatementStatus>();
     for (const s of run.ifadeler) {
       const existing = lines.get(s.satir);
@@ -83,7 +133,7 @@ export function ScriptEkrani({ target, onChangeTarget, onTargetLockChange }: Pro
     }
     const failed = run.ifadeler.find((s) => s.hata);
     return { lines, error: failed?.hata ? { bas: failed.hata.bas, bit: failed.hata.bit } : null };
-  }, [run, script]);
+  }, [run, script, analyzed, statements, analysis]);
 
   const goToLine = useCallback((line: number) => editor.current?.goToLine(line), []);
 
@@ -117,18 +167,27 @@ export function ScriptEkrani({ target, onChangeTarget, onTargetLockChange }: Pro
           hedefi değiştir ▾
         </button>
       </section>
+      {analysis.mod === 'autocommit' && (
+        <div role="note" aria-label="Autocommit uyarısı" className="uyari-seridi autocommit">
+          ⚠ {analysis.transactionDisi.length} ifade anında kalıcı uygulanır, geri alınamaz
+        </div>
+      )}
       <div className="script-govde">
         <div className="script-sol">
           <section aria-label="Script editörü" className="editor-alani">
             <ScriptEditoru ref={editor} value={script} onChange={setScript} readOnly={busy} marks={marks} />
           </section>
+          {!busy && blocked && <BlockReasons reasons={blockReasons(analyzed, statements, analysis)} />}
           <div className="script-cubugu">
+            <span title="Çalıştırma modu" className={`mod-rozeti ${analysis.mod}`}>
+              {MODE_LABELS[analysis.mod]}
+            </span>
             {running ? (
               <button type="button" className="tehlikeli" onClick={() => request('iptal')} disabled={run.bekleyenIstek === 'iptal'}>
                 ■ İptal
               </button>
             ) : (
-              <button type="button" className="birincil" onClick={start} disabled={!target || busy || !hasStatements}>
+              <button type="button" className="birincil" onClick={start} disabled={!target || busy || !hasStatements || blocked}>
                 ▶ Çalıştır
               </button>
             )}
@@ -155,6 +214,17 @@ export function ScriptEkrani({ target, onChangeTarget, onTargetLockChange }: Pro
         </aside>
       </div>
     </div>
+  );
+}
+
+/** Script neden çalıştırılamıyor: reddedilen ifadeler ve Karışık script. */
+function BlockReasons({ reasons }: { reasons: ReturnType<typeof blockReasons> }) {
+  return (
+    <ul className="analiz-sorunlari kucuk">
+      {reasons.map(({ satir, mesaj }) => (
+        <li key={`${satir}:${mesaj}`}>{satir === null ? mesaj : `Satır ${satir}: ${mesaj}`}</li>
+      ))}
+    </ul>
   );
 }
 
@@ -245,12 +315,16 @@ function resultText(run: RunView): string {
       return 'Commit edildi';
     case 'rollback':
       return 'Geri alındı (rollback)';
+    case 'autocommit':
+      return run.ozet ? formatSummary(run.ozet) : 'Autocommit tamamlandı';
     case 'iptal':
-      return 'İptal edildi; transaction geri alındı';
+      return run.ozet ? `İptal edildi · ${formatSummary(run.ozet)}` : 'İptal edildi; transaction geri alındı';
     case 'sureDoldu':
       return run.mesaj ?? 'Süre doldu; transaction geri alındı';
-    default:
-      return run.mesaj ?? 'Çalıştırma başarısız';
+    default: {
+      const mesaj = run.mesaj ?? 'Çalıştırma başarısız';
+      return run.ozet ? `${mesaj} · ${formatSummary(run.ozet)}` : mesaj;
+    }
   }
 }
 
@@ -278,9 +352,12 @@ function StatementDetail({ statement: s }: { statement: StatementView }) {
       return <p className="soluk kucuk">{STATUS_LABELS[s.durum]}</p>;
     case 'hatali':
       return (
-        <p className="ifade-hatasi kucuk">
-          {s.hata?.sqlstate && <code>{s.hata.sqlstate}</code>} {s.hata?.mesaj}
-        </p>
+        <>
+          <p className="ifade-hatasi kucuk">
+            {s.hata?.sqlstate && <code>{s.hata.sqlstate}</code>} {s.hata?.mesaj}
+          </p>
+          {s.hata?.ipucu && <p className="ifade-ipucu kucuk">{s.hata.ipucu}</p>}
+        </>
       );
     case 'basarili':
       if (s.onizleme) {

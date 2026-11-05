@@ -71,6 +71,16 @@ describe('splitStatements: ilk anahtar kelimeler', () => {
   });
 });
 
+describe('splitStatements: tüm kelimeler', () => {
+  it.each([
+    ['noktalama ve tırnaklı adlar durdurmaz', 'ALTER TABLE "s".t DETACH PARTITION p1 concurrently', ['ALTER', 'TABLE', 'T', 'DETACH', 'PARTITION', 'P1', 'CONCURRENTLY']],
+    ['dizge, yorum ve dollar-quote içi kelime değildir', "SELECT 'a b' /* c */ , $$ d $$, E'e' -- f\n FROM g", ['SELECT', 'FROM', 'G']],
+    ['sekizden fazla kelime', 'a b c d e f g h i j', ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J']],
+  ])('%s', (_, script, expected) => {
+    expect(splitStatements(script)[0]!.words).toEqual(expected);
+  });
+});
+
 describe('splitStatements: psql meta komutları', () => {
   it.each([
     ['tek başına satır', 'SELECT 1;\n\\set x 1\nSELECT 2', [['SELECT 1', false], ['\\set x 1', true], ['SELECT 2', false]]],

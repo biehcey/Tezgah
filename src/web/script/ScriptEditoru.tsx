@@ -5,14 +5,16 @@ import { Compartment, EditorState, RangeSet, StateEffect, StateField, type Exten
 import { Decoration, EditorView, GutterMarker, gutter, keymap, lineNumbers, type DecorationSet } from '@codemirror/view';
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
 import type { StatementStatus } from '../../core/script-calistirma';
-import { STATUS_LABELS, STATUS_SYMBOLS } from './durum';
+import { ANALYSIS_MARKS, STATUS_LABELS, STATUS_SYMBOLS, isAnalysisMark, type AnalysisMark } from './durum';
 
-/** Editörün süsleri: ifade başına satır işareti ve hatalı ifadenin vurgusu. */
+/** Editörün süsleri: ifade başına satır işareti, hatalı ifadenin vurgusu ve analiz işaretleri. */
 export interface EditorMarks {
-  /** 1 tabanlı satır → o satırda başlayan ifadenin durumu. */
-  lines: Map<number, StatementStatus>;
+  /** 1 tabanlı satır → o satırda başlayan ifadenin durumu ya da analiz işareti. */
+  lines: Map<number, StatementStatus | AnalysisMark>;
   /** Hatanın betik offset aralığı. */
   error: { bas: number; bit: number } | null;
+  /** Analizin işaretlediği ifadelerin betik offset aralıkları. */
+  analysis?: { bas: number; bit: number; tur: AnalysisMark }[];
 }
 
 export interface ScriptEditoruHandle {
@@ -30,7 +32,7 @@ interface Props {
 
 class StatusMarker extends GutterMarker {
   constructor(
-    readonly status: StatementStatus,
+    readonly status: StatementStatus | AnalysisMark,
     readonly line: number,
   ) {
     super();
@@ -43,8 +45,9 @@ class StatusMarker extends GutterMarker {
     // Satır 0: sütun genişliğini ayıran görünmez yer tutucu.
     el.className = this.line === 0 ? 'cm-ifade-bosluk' : `cm-ifade-isareti ${this.status}`;
     el.dataset.satir = String(this.line);
-    el.title = STATUS_LABELS[this.status];
-    el.textContent = STATUS_SYMBOLS[this.status];
+    const status = this.status;
+    el.title = isAnalysisMark(status) ? ANALYSIS_MARKS[status].label : STATUS_LABELS[status];
+    el.textContent = isAnalysisMark(status) ? ANALYSIS_MARKS[status].symbol : STATUS_SYMBOLS[status];
     return el;
   }
 }
@@ -76,6 +79,21 @@ const errorDecorations = EditorView.decorations.compute([marksField], (state): D
   return Decoration.set(ranges, true);
 });
 
+/** Analizin işaretlediği ifadelerin her satırı kendi zeminiyle. */
+const analysisDecorations = EditorView.decorations.compute([marksField], (state): DecorationSet => {
+  const { analysis } = state.field(marksField);
+  const length = state.doc.length;
+  const ranges: Range<Decoration>[] = [];
+  for (const { bas, bit, tur } of analysis ?? []) {
+    if (bas > length) continue;
+    const last = state.doc.lineAt(Math.min(Math.max(bas, bit - 1), length)).number;
+    for (let n = state.doc.lineAt(bas).number; n <= last; n++) {
+      ranges.push(Decoration.line({ class: ANALYSIS_MARKS[tur].lineClass }).range(state.doc.line(n).from));
+    }
+  }
+  return Decoration.set(ranges, true);
+});
+
 const statusGutter = gutter({
   class: 'cm-ifade-isaretleri',
   markers: (view) => {
@@ -100,6 +118,7 @@ const baseExtensions: Extension[] = [
   syntaxHighlighting(defaultHighlightStyle),
   marksField,
   errorDecorations,
+  analysisDecorations,
   EditorView.lineWrapping,
 ];
 

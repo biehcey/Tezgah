@@ -3,6 +3,7 @@
  * kurduğu çalıştırma görünümü. Olaylar ifade indeksiyle gelir; indeksler `splitStatements`'in
  * aynı betik için verdiği sıradır.
  */
+import { ACTIVE_SQL_TRANSACTION, NON_TRANSACTIONAL_FALLBACK, type ScriptAnalysis } from './calistirma-modu';
 import { splitStatements, positionOf, type Statement } from './ifade-bolme';
 import type { Target } from './veritabani-secimi';
 
@@ -39,11 +40,36 @@ export interface Preview {
 
 /**
  * Çalıştırmanın sonu. `sureDoldu`: Karar süresi doldu, transaction geri alındı. `hata`: çalıştırma
- * başlayamadı, bağlantı koptu ya da commit başarısız oldu.
+ * başlayamadı, bağlantı koptu ya da commit başarısız oldu. `autocommit`: Autocommit script'i bitti
+ * ya da hatada durdu (ayrıntı `ozet`'te). `reddedildi`: script analizden geçmedi, hiçbir şey
+ * çalışmadı.
  */
-export type RunResult = 'commit' | 'rollback' | 'sureDoldu' | 'iptal' | 'hata';
+export type RunResult = 'commit' | 'rollback' | 'sureDoldu' | 'iptal' | 'hata' | 'autocommit' | 'reddedildi';
+
+/** Autocommit çalıştırmasının sonu: uygulananlar kalıcıdır. */
+export interface AutocommitSummary {
+  uygulandi: number;
+  hatali: number;
+  calistirilmadi: number;
+}
+
+/** `total` ifadeden `applied` tanesi uygulandı; `failed`: sonraki ifade hatayla (iptal dahil) durdu. */
+export function autocommitSummary(total: number, applied: number, failed: boolean): AutocommitSummary {
+  const hatali = failed ? 1 : 0;
+  return { uygulandi: applied, hatali, calistirilmadi: total - applied - hatali };
+}
+
+/** "X ifade kalıcı uygulandı · 1 hatalı · Y çalıştırılmadı"; sıfır olan ekler yazılmaz. */
+export function formatSummary({ uygulandi, hatali, calistirilmadi }: AutocommitSummary): string {
+  const parts = [`${uygulandi} ifade kalıcı uygulandı`];
+  if (hatali > 0) parts.push(`${hatali} hatalı`);
+  if (calistirilmadi > 0) parts.push(`${calistirilmadi} çalıştırılmadı`);
+  return parts.join(' · ');
+}
 
 export type ServerEvent =
+  /** Sunucunun script analizi; her çalıştırmanın ilk olayı. */
+  | ({ type: 'analiz' } & ScriptAnalysis)
   | { type: 'started'; i: number }
   | { type: 'done'; i: number; rowCount: number | null; ms: number; komut: string; onizleme?: Preview }
   | { type: 'error'; i: number; sqlstate: string | null; mesaj: string; satir: number; sutun: number; bas: number; bit: number; ms: number }
@@ -51,7 +77,8 @@ export type ServerEvent =
   | { type: 'kararBekleniyor'; commitEdilebilir: boolean; kalanMs: number }
   /** "Uzat" sunucuda işlendi; Karar süresi baştan başladı. */
   | { type: 'uzatildi'; kalanMs: number }
-  | { type: 'bitti'; sonuc: RunResult; mesaj?: string }
+  /** `ozet` yalnızca Autocommit'te. */
+  | { type: 'bitti'; sonuc: RunResult; mesaj?: string; ozet?: AutocommitSummary }
   /** İstek reddedildi; çalıştırma sürüyor. */
   | { type: 'uyari'; tur: 'commitReddedildi' | 'mesgul' | 'gecersizIstek'; mesaj: string };
 
@@ -69,13 +96,25 @@ export interface StatementView {
   ms?: number;
   rowCount?: number | null;
   onizleme?: Preview;
-  hata?: { sqlstate: string | null; mesaj: string; satir: number; sutun: number; bas: number; bit: number };
+  hata?: {
+    sqlstate: string | null;
+    mesaj: string;
+    satir: number;
+    sutun: number;
+    bas: number;
+    bit: number;
+    /** Hatanın nasıl giderileceği; ör. desende olmayan transaction dışı komut (`25001`). */
+    ipucu?: string;
+  };
 }
 
 export type RunPhase = 'calisiyor' | 'karar' | 'bitti';
 
 export interface RunView {
   script: string;
+  /** Sunucunun analizinden; `analiz` gelene kadar yok. */
+  mod?: ScriptAnalysis['mod'];
+  reddedilenler?: ScriptAnalysis['reddedilenler'];
   ifadeler: StatementView[];
   evre: RunPhase;
   commitEdilebilir: boolean;
@@ -88,6 +127,7 @@ export interface RunView {
   kararSuresi?: { kalanMs: number; surum: number };
   sonuc?: RunResult;
   mesaj?: string;
+  ozet?: AutocommitSummary;
   /** Son reddedilen istek ya da uyarı. */
   uyari?: string;
 }
@@ -112,6 +152,8 @@ export function applyEvent(view: RunView, event: ServerEvent): RunView {
     ifadeler: view.ifadeler.map((s) => (s.i === i ? { ...s, ...patch } : s)),
   });
   switch (event.type) {
+    case 'analiz':
+      return { ...view, mod: event.mod, reddedilenler: event.reddedilenler };
     case 'started':
       return update(event.i, { durum: 'calisiyor' });
     case 'done':
@@ -124,7 +166,8 @@ export function applyEvent(view: RunView, event: ServerEvent): RunView {
       });
     case 'error': {
       const { type: _t, i, ms, ...hata } = event;
-      const next = update(i, { durum: 'hatali', ms, hata });
+      const ipucu = hata.sqlstate === ACTIVE_SQL_TRANSACTION ? NON_TRANSACTIONAL_FALLBACK : undefined;
+      const next = update(i, { durum: 'hatali', ms, hata: ipucu ? { ...hata, ipucu } : hata });
       return { ...next, ifadeler: next.ifadeler.map((s) => (s.durum === 'sirada' ? { ...s, durum: 'calistirilmadi' } : s)) };
     }
     case 'kararBekleniyor':
@@ -138,6 +181,7 @@ export function applyEvent(view: RunView, event: ServerEvent): RunView {
         bekleyenIstek: null,
         sonuc: event.sonuc,
         mesaj: event.mesaj,
+        ozet: event.ozet,
         ifadeler: view.ifadeler.map((s) =>
           s.durum === 'sirada' || s.durum === 'calisiyor' ? { ...s, durum: 'calistirilmadi' } : s,
         ),
