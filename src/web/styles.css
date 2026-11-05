@@ -788,6 +788,10 @@ button.kucuk {
 }
 
 /* Script ekranı (ticket 23 varyant B): üstte hedef başlığı, altında editör */
+.script-ekrani[hidden] {
+  display: none;
+}
+
 .script-ekrani {
   display: flex;
   flex: 1;

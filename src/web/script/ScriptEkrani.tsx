@@ -31,6 +31,11 @@ interface Props {
   writable: WritableTargets;
   /** 🔒/🔓 düğmesi: hedefin yazma modunu tek tıkla açar ya da kapatır. */
   onToggleWriteMode: (target: Target) => void;
+  /**
+   * Ekran gizli (ör. bağlantı formu açık). Kapanmaz: script, log ve açık transaction korunur;
+   * kapanmak transaction'ı geri aldırırdı (ADR-0002).
+   */
+  hidden?: boolean;
 }
 
 /** Aynı satırda başlayan birden çok ifadede satır işareti en önemli durumu gösterir. */
@@ -77,7 +82,7 @@ function analysisMarks(script: string, statements: Statement[], analysis: Script
  * sağda karar kartı ve ifade kartları. prod hedefte başlık kırmızımsıdır; uygulamanın kırmızı
  * çerçevesi kökte verilir.
  */
-export function ScriptEkrani({ target, onChangeTarget, onTargetLockChange, writable, onToggleWriteMode }: Props) {
+export function ScriptEkrani({ target, onChangeTarget, onTargetLockChange, writable, onToggleWriteMode, hidden = false }: Props) {
   const api = useApi();
   const prod = target !== null && isProd(target.connection.envTag);
   const [script, setScript] = useState('');
@@ -153,7 +158,7 @@ export function ScriptEkrani({ target, onChangeTarget, onTargetLockChange, writa
   const goToLine = useCallback((line: number) => editor.current?.goToLine(line), []);
 
   return (
-    <div className="script-ekrani">
+    <div className="script-ekrani" hidden={hidden}>
       <section aria-label="Hedef" className={`hedef-basligi${prod ? ' prod' : ''}`}>
         {target ? (
           <>

@@ -127,6 +127,7 @@ export function App() {
   }, [api]);
 
   const edited = editing?.kind === 'duzenle' ? connections?.find((c) => c.id === editing.id) : undefined;
+  const formOpen = editing?.kind === 'yeni' || edited !== undefined;
   const selected = connections?.find((c) => c.id === selectedId);
   const targetConnection = target ? connections?.find((c) => c.id === target.connectionId) : undefined;
   const targetView = target && targetConnection ? { connection: targetConnection, database: target.database } : null;
@@ -510,7 +511,7 @@ export function App() {
             {info}
           </p>
         )}
-        {editing?.kind === 'yeni' || edited ? (
+        {formOpen && (
           <BaglantiFormu
             key={edited?.id ?? (editing?.kind === 'yeni' && editing.url ? `url-${editing.url.key}` : 'yeni')}
             connection={edited ?? null}
@@ -520,15 +521,16 @@ export function App() {
             onCancel={() => setEditing(null)}
             onDelete={setDeleting}
           />
-        ) : (
-          <ScriptEkrani
-            target={targetView}
-            onChangeTarget={() => setPaletteOpen(true)}
-            onTargetLockChange={setTargetLock}
-            writable={writable}
-            onToggleWriteMode={toggleWriteMode}
-          />
         )}
+        {/* Form açıkken gizlenir ama kapanmaz: script, log ve karar bekleyen transaction korunur. */}
+        <ScriptEkrani
+          target={targetView}
+          onChangeTarget={() => setPaletteOpen(true)}
+          onTargetLockChange={setTargetLock}
+          writable={writable}
+          onToggleWriteMode={toggleWriteMode}
+          hidden={formOpen}
+        />
       </main>
       {paletteOpen && (
         <HizliGecis
