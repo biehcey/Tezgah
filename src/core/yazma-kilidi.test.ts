@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { splitStatements } from './ifade-bolme';
 import {
+  DENEME_NON_TRANSACTIONAL_MESSAGE,
   READ_ONLY_AUTOCOMMIT_MESSAGE,
   beginStatement,
   isWritable,
@@ -68,6 +69,29 @@ describe('runBlockReasons: çalıştırma engelleri', () => {
     ['INSERT INTO t VALUES (1)', 'yazma-acik'],
   ] as const)('%s, %s kilidinde engellenmez', (script, lock) => {
     expect(reasons(script, lock)).toEqual([]);
+  });
+
+  describe('Deneme modu', () => {
+    const dene = (script: string, lock: WriteLockState = null) =>
+      runBlockReasons(script, splitStatements(script), lock, { deneme: true });
+
+    it('transaction dışı her ifade satırıyla engellenir; Autocommit kilit nedeni eklenmez', () => {
+      expect(dene('VACUUM t;\nCREATE INDEX CONCURRENTLY i ON t (a)', 'salt-okunur')).toEqual([
+        { satir: 1, mesaj: DENEME_NON_TRANSACTIONAL_MESSAGE },
+        { satir: 2, mesaj: DENEME_NON_TRANSACTIONAL_MESSAGE },
+      ]);
+    });
+
+    it('Karışık script’te Karışık nedeninin ardından transaction dışı ifadeler gelir', () => {
+      expect(dene('INSERT INTO t VALUES (1);\nVACUUM t')).toEqual([
+        { satir: null, mesaj: expect.stringContaining('Karışık script') },
+        { satir: 2, mesaj: DENEME_NON_TRANSACTIONAL_MESSAGE },
+      ]);
+    });
+
+    it('Transaction script’i salt okunur prod’da da denenebilir', () => {
+      expect(dene('UPDATE t SET a = 1', 'salt-okunur')).toEqual([]);
+    });
   });
 
   it('analiz engelleri kilitten bağımsız ve önce gelir', () => {

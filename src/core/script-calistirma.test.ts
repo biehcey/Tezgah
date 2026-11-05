@@ -3,10 +3,12 @@ import { applyEvent, autocommitSummary, formatSummary, parseClientMessage, start
 
 describe('parseClientMessage', () => {
   it.each([
-    ['run', { type: 'run', target: { connectionId: 'b1', database: 'app' }, script: 'SELECT 1', fazla: 1 }, { type: 'run', target: { connectionId: 'b1', database: 'app' }, script: 'SELECT 1', yazmaModu: false }],
-    ['yazma modunda run', { type: 'run', target: { connectionId: 'b1', database: 'app' }, script: 'SELECT 1', yazmaModu: true }, { type: 'run', target: { connectionId: 'b1', database: 'app' }, script: 'SELECT 1', yazmaModu: true }],
+    ['run', { type: 'run', target: { connectionId: 'b1', database: 'app' }, script: 'SELECT 1', fazla: 1 }, { type: 'run', target: { connectionId: 'b1', database: 'app' }, script: 'SELECT 1', yazmaModu: false, deneme: false }],
+    ['yazma modunda run', { type: 'run', target: { connectionId: 'b1', database: 'app' }, script: 'SELECT 1', yazmaModu: true }, { type: 'run', target: { connectionId: 'b1', database: 'app' }, script: 'SELECT 1', yazmaModu: true, deneme: false }],
+    ['deneme', { type: 'run', target: { connectionId: 'b1', database: 'app' }, script: 'SELECT 1', deneme: true }, { type: 'run', target: { connectionId: 'b1', database: 'app' }, script: 'SELECT 1', yazmaModu: false, deneme: true }],
+    ['deneme metin', { type: 'run', target: { connectionId: 'b1', database: 'app' }, script: 'SELECT 1', deneme: 'evet' }, { type: 'run', target: { connectionId: 'b1', database: 'app' }, script: 'SELECT 1', yazmaModu: false, deneme: false }],
     // Yalnızca açıkça `true` yazma modudur; belirsiz değer salt okunur kalır.
-    ['yazmaModu metin', { type: 'run', target: { connectionId: 'b1', database: 'app' }, script: 'SELECT 1', yazmaModu: 'true' }, { type: 'run', target: { connectionId: 'b1', database: 'app' }, script: 'SELECT 1', yazmaModu: false }],
+    ['yazmaModu metin', { type: 'run', target: { connectionId: 'b1', database: 'app' }, script: 'SELECT 1', yazmaModu: 'true' }, { type: 'run', target: { connectionId: 'b1', database: 'app' }, script: 'SELECT 1', yazmaModu: false, deneme: false }],
     ['commit', { type: 'commit' }, { type: 'commit' }],
     ['rollback', { type: 'rollback' }, { type: 'rollback' }],
     ['iptal', { type: 'iptal' }, { type: 'iptal' }],
@@ -40,6 +42,17 @@ describe('çalıştırma görünümü', () => {
     const view = play({ type: 'started', i: 0 }, { type: 'done', i: 0, rowCount: 1, ms: 4, komut: 'INSERT' }, { type: 'started', i: 1 });
     expect(states(view)).toEqual(['basarili', 'calisiyor', 'sirada']);
     expect(view.ifadeler[0]).toMatchObject({ komut: 'INSERT', rowCount: 1, ms: 4 });
+  });
+
+  it('Deneme: görünüm denemeyi bilir; done DML’in değişiklik önizlemesini taşır; bitti deneme', () => {
+    const degisiklik = { kolonlar: ['id'], satirlar: [['1']] };
+    const view = [
+      { type: 'done', i: 0, rowCount: 1, ms: 4, komut: 'INSERT', degisiklik },
+      { type: 'bitti', sonuc: 'deneme' },
+    ].reduce((v, e) => applyEvent(v, e as ServerEvent), startRunView(SCRIPT, { deneme: true }));
+    expect(view).toMatchObject({ deneme: true, evre: 'bitti', sonuc: 'deneme' });
+    expect(view.ifadeler[0]).toMatchObject({ rowCount: 1, degisiklik });
+    expect(startRunView(SCRIPT).deneme).toBe(false);
   });
 
   it('hata ifadeyi hatalı, kalanları çalıştırılmadı yapar', () => {

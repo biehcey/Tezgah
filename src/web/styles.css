@@ -1046,6 +1046,10 @@ button.kucuk {
   gap: 8px;
 }
 
+.karar-sonucu.deneme {
+  color: var(--vurgu);
+}
+
 .karar-sonucu.commit {
   color: var(--basarili);
 }
@@ -1140,6 +1144,24 @@ button.kucuk {
 
 .ifade-hatasi {
   color: var(--uyari);
+}
+
+/* Deneme modunun Değişiklikler sekmesi. */
+.deneme-hatasi {
+  margin: 0 0 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--uyari);
+  border-radius: 4px;
+  color: var(--uyari);
+}
+
+.degisiklik + .degisiklik {
+  margin-top: 12px;
+}
+
+.degisiklik-basligi {
+  margin: 0;
+  font-weight: 600;
 }
 
 .onizleme {

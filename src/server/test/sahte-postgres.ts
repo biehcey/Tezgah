@@ -2,8 +2,8 @@ import { createServer, type AddressInfo, type Socket } from 'node:net';
 
 /**
  * Şifre doğrulamasını ve basit sorgu protokolünü konuşan küçük bir Postgres taklidi (wire protokolü
- * v3, düz metin şifre): her sorgu tek kolonlu ad listesi döner ya da `failOn`'un verdiği hatayla
- * düşer. Gerçek Postgres olmadan `28P01` akışını ve script çalıştırmanın kayıtlarını sınamak için.
+ * v3, düz metin şifre): her sorgu `resultFor`'un verdiği sonucu (yoksa tek kolonlu ad listesini)
+ * döner ya da `failOn`'un verdiği hatayla düşer. Gerçek Postgres olmadan `28P01` akışını ve script çalıştırmanın kayıtlarını sınamak için.
  */
 export interface FakePostgres {
   port: number;
@@ -17,9 +17,18 @@ export interface FakePostgres {
   queries: string[];
   /** Sorgu bu hatayla düşsün mü; `undefined` dönerse sorgu başarılıdır. */
   failOn: (sql: string) => { code: string; message: string; position?: number } | undefined;
+  /** Sorgunun sonucu; `undefined` dönerse `names` listesi döner. Değerler metindir, NULL `null`. */
+  resultFor: (sql: string) => FakeResult | undefined;
   /** Açık oturumları düşürür (bağlantı koptu). */
   dropSessions(): void;
   close(): Promise<void>;
+}
+
+export interface FakeResult {
+  columns: string[];
+  rows: (string | null)[][];
+  /** Komut etiketi, ör. `UPDATE 3`. */
+  command: string;
 }
 
 const SSL_REQUEST = 80877103;
@@ -33,6 +42,7 @@ export async function startFakePostgres({ password }: { password: string }): Pro
     attempts: [],
     queries: [],
     failOn: () => undefined,
+    resultFor: () => undefined,
     dropSessions: () => {
       for (const socket of sockets) socket.destroy();
     },
@@ -94,18 +104,20 @@ export async function startFakePostgres({ password }: { password: string }): Pro
         socket.write(Buffer.concat([errorResponse(failure.code, failure.message, 'ERROR', failure.position), ready()]));
         return;
       }
-      const rows = fake.names.map((name) => {
-        const value = Buffer.from(name, 'utf8');
-        return message('D', Buffer.concat([int16(1), int32(value.length), value]));
-      });
-      socket.write(
-        Buffer.concat([
-          message('T', Buffer.concat([int16(1), cstring('ad'), int32(0), int16(0), int32(25), int16(-1), int32(-1), int16(0)])),
-          ...rows,
-          message('C', cstring(`SELECT ${rows.length}`)),
-          ready(),
-        ]),
-      );
+      const result = fake.resultFor(sql) ?? {
+        columns: ['ad'],
+        rows: fake.names.map((name) => [name]),
+        command: `SELECT ${fake.names.length}`,
+      };
+      const column = (name: string) => Buffer.concat([cstring(name), int32(0), int16(0), int32(25), int16(-1), int32(-1), int16(0)]);
+      const cell = (value: string | null) => {
+        if (value === null) return int32(-1);
+        const bytes = Buffer.from(value, 'utf8');
+        return Buffer.concat([int32(bytes.length), bytes]);
+      };
+      const rows = result.rows.map((row) => message('D', Buffer.concat([int16(row.length), ...row.map(cell)])));
+      const description = result.columns.length > 0 ? [message('T', Buffer.concat([int16(result.columns.length), ...result.columns.map(column)]))] : [];
+      socket.write(Buffer.concat([...description, ...rows, message('C', cstring(result.command)), ready()]));
     } else if (type === 'X') socket.end();
   }
 

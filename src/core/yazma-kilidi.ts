@@ -6,7 +6,7 @@
  */
 import { isProd, type EnvTag } from './baglanti';
 import { analyzeScript, blockReasons, type ScriptAnalysis } from './calistirma-modu';
-import type { Statement } from './ifade-bolme';
+import { positionOf, type Statement } from './ifade-bolme';
 import { isTarget, type Target } from './veritabani-secimi';
 
 /** Yazma kilidi: prod hedef salt okunur ya da yazma modunda; prod olmayan hedefte `null`. */
@@ -50,19 +50,28 @@ export function toggleWritable(writable: WritableTargets, target: Target): Writa
 export const READ_ONLY_AUTOCOMMIT_MESSAGE =
   "Salt okunur prod'da Autocommit script'i çalıştırılamaz; çalıştırmak için yazma modunu açın.";
 
+export const DENEME_NON_TRANSACTIONAL_MESSAGE = 'Transaction dışı komut Deneme modunda çalıştırılamaz; geri alınamaz.';
+
 /**
  * Script'in bu yazma kilidiyle neden çalıştırılamadığı: önce analiz engelleri (reddedilen
  * ifadeler, Karışık script), sonra kilit. Salt okunur prod'da Autocommit script'i (her ifadesi
- * anında kalıcıdır) sunucuya hiç gitmeden reddedilir. Boşsa script çalıştırılabilir; sunucu da
- * arayüz de aynı metni gösterir.
+ * anında kalıcıdır) sunucuya hiç gitmeden reddedilir. Deneme modunda (wayfinder 15) transaction
+ * dışı her ifade engeldir: geri alınamaz, atlamak da sonraki ifadelerin sonucunu yanıltır. Boşsa
+ * script çalıştırılabilir; sunucu da arayüz de aynı metni gösterir.
  */
 export function runBlockReasons(
   script: string,
   statements: Statement[],
   lock: WriteLockState,
-  analysis: ScriptAnalysis = analyzeScript(statements),
+  { deneme = false, analysis = analyzeScript(statements) }: { deneme?: boolean; analysis?: ScriptAnalysis } = {},
 ): { satir: number | null; mesaj: string }[] {
   const reasons = blockReasons(script, statements, analysis);
-  if (analysis.mod === 'autocommit' && lock === 'salt-okunur') reasons.push({ satir: null, mesaj: READ_ONLY_AUTOCOMMIT_MESSAGE });
+  if (deneme) {
+    for (const i of analysis.transactionDisi) {
+      reasons.push({ satir: positionOf(script, statements[i]!.start).satir, mesaj: DENEME_NON_TRANSACTIONAL_MESSAGE });
+    }
+  } else if (analysis.mod === 'autocommit' && lock === 'salt-okunur') {
+    reasons.push({ satir: null, mesaj: READ_ONLY_AUTOCOMMIT_MESSAGE });
+  }
   return reasons;
 }

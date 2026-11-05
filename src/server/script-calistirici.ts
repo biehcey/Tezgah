@@ -14,6 +14,7 @@ import {
   type DecisionTimer,
 } from '../core/karar-suresi';
 import { analyzeScript, type RunMode } from '../core/calistirma-modu';
+import { withReturning } from '../core/deneme';
 import { splitStatements, type Statement } from '../core/ifade-bolme';
 import {
   PREVIEW_ROWS,
@@ -42,9 +43,18 @@ export interface ScriptRunnerDeps {
 /** Değerler metin olarak gelir: önizleme JSON'a kayıpsız girer (bigint, numeric, tarih). */
 const RAW_TYPES = { getTypeParser: () => (value: string) => value };
 
-/** Önizleme imleci; satırların 100'den fazlası sunucudan çekilmez. */
-const CURSOR = 'tezgah_onizleme';
-const CURSOR_PREFIX = `DECLARE ${CURSOR} NO SCROLL CURSOR FOR `;
+/**
+ * Önizleme sarmalının adı: savepoint, imleç ve CTE aynı adı taşır. Sarmallar satırların 100'den
+ * fazlasını sunucudan çekmez.
+ */
+const WRAPPER = 'tezgah_onizleme';
+const CURSOR_PREFIX = `DECLARE ${WRAPPER} NO SCROLL CURSOR FOR `;
+/**
+ * Deneme modunda DML'in değişiklik sarmalı: veri değiştiren CTE her durumda sonuna kadar çalışır,
+ * `LIMIT` yalnızca istemciye aktarılan satırları sınırlar; ilk kolon toplam satır sayısıdır.
+ */
+const CHANGES_PREFIX = `WITH ${WRAPPER} AS (`;
+const CHANGES_SUFFIX = `) SELECT count(*) OVER (), * FROM ${WRAPPER} LIMIT ${PREVIEW_ROWS}`;
 /** İmleçle çalıştırılmaya çalışılan ifade türleri; olmazsa (ör. `SELECT … INTO`) düz çalışır. */
 const CURSOR_COMMANDS = new Set(['SELECT', 'VALUES', 'TABLE', 'WITH']);
 
@@ -83,7 +93,7 @@ type Finished = Extract<ServerEvent, { type: 'bitti' }>;
 type Finish = (event: Omit<Finished, 'type'>, sonuc: RecordResult) => Promise<void>;
 
 type StatementResult =
-  | { ok: true; rowCount: number | null; komut: string; onizleme?: Preview }
+  | { ok: true; rowCount: number | null; komut: string; onizleme?: Preview; degisiklik?: Preview }
   | { ok: false; error: unknown; /** Hata konumundan düşülecek önek (imleç sarmalı). */ prefix: number };
 
 /**
@@ -93,6 +103,8 @@ type StatementResult =
  * - Transaction modu: ifadeler tek client'ta, `BEGIN` ile açılan tek transaction'da sırayla
  *   çalışır; ilk hatada durulur; sonda istemciden commit/rollback beklenir. Soket koparsa açık
  *   transaction geri alınır.
+ * - Deneme modu: Transaction modu gibi çalışır, DML'in değiştirdiği satırlar ifade başına önizlenir;
+ *   son ifadeden ya da hatadan hemen sonra, karar beklenmeden geri alınır.
  * - Autocommit modu: ifadeler transaction'sız, sırayla ve her biri anında kalıcı çalışır; ilk
  *   hatada durulur; karar beklenmez. Soket koparsa çalışan ifade iptal edilir, kalanlar çalışmaz.
  */
@@ -177,21 +189,21 @@ export function createScriptRunner({ store, pools, clock, history, log }: Script
      * kaydedilmez. Kilit bağlantının kayıtlı ortam etiketinden hesaplanır; istemciden yalnızca
      * yazma modunun açık olup olmadığı gelir.
      */
-    async function start(current: Run, { target, script, yazmaModu }: Extract<ClientMessage, { type: 'run' }>) {
+    async function start(current: Run, { target, script, yazmaModu, deneme }: Extract<ClientMessage, { type: 'run' }>) {
       const statements = splitStatements(script);
       const analysis = analyzeScript(statements);
       send({ type: 'analiz', ...analysis });
       const connection = (await store.read()).connections.find((c) => c.id === target.connectionId);
       const lock = writeLockState(connection?.envTag, yazmaModu);
-      const [blocked] = runBlockReasons(script, statements, lock, analysis);
+      const [blocked] = runBlockReasons(script, statements, lock, { deneme, analysis });
       if (blocked) {
         const mesaj = blocked.satir === null ? blocked.mesaj : `Satır ${blocked.satir}: ${blocked.mesaj}`;
         return send({ type: 'bitti', sonuc: 'reddedildi', mesaj });
       }
       // Hedefi olmayan çalıştırma kaydedilmez: hiçbir şey çalışmadı.
       if (!connection) return send({ type: 'bitti', sonuc: 'hata', mesaj: 'Bağlantı bulunamadı' });
-      // Engellenmeyen script Karışık değildir.
-      await execute(current, connection, target.database, script, analysis.mod as Exclude<RunMode, 'karisik'>, lock);
+      // Engellenmeyen script Karışık değildir; denemede transaction dışı ifade de yoktur.
+      await execute(current, connection, target.database, script, analysis.mod as Exclude<RunMode, 'karisik'>, lock, deneme);
     }
 
     async function execute(
@@ -201,12 +213,13 @@ export function createScriptRunner({ store, pools, clock, history, log }: Script
       script: string,
       mode: Exclude<RunMode, 'karisik'>,
       lock: WriteLockState,
+      deneme: boolean,
     ) {
       const recorder = history.begin({
         script,
         hedef: { baglantiId: connection.id, ad: connection.name, veritabani: database, ortam: connection.envTag },
         mod: mode,
-        deneme: false,
+        deneme,
         yazmaKilidi: lock,
       });
       // Kayıt yazılamazsa çalıştırma sürer; uyarı bir kez gider.
@@ -225,7 +238,7 @@ export function createScriptRunner({ store, pools, clock, history, log }: Script
       };
       try {
         await pools.withClient(connection, database, (client, discard) => {
-          const session = { client, discard, connection, database, lock };
+          const session = { client, discard, connection, database, lock, deneme };
           return mode === 'autocommit' ? inAutocommit(current, session, script, finish) : inTransaction(current, session, script, finish);
         });
       } catch (err) {
@@ -288,7 +301,7 @@ export function createScriptRunner({ store, pools, clock, history, log }: Script
         const sureMs = decisionDurationMs(connection.envTag);
         // Yedek: Node zamanlayıcısı işlemezken (uyku) uzak sunucuda transaction açık kalmasın.
         await client.query(`SET LOCAL idle_in_transaction_session_timeout = ${serverIdleTimeoutMs(sureMs)}`);
-        const { outcome } = await runStatements(current, client, script);
+        const { outcome } = await runStatements(current, client, script, session.deneme);
         if (outcome === 'baglantiKoptu') broken = true;
         if (broken) return await lost();
         const failed = outcome === 'hata';
@@ -296,6 +309,12 @@ export function createScriptRunner({ store, pools, clock, history, log }: Script
           await cancelSent;
           await rolledBack(current.stopping);
           return await stopped(current.stopping);
+        }
+        if (session.deneme) {
+          // Hata da olsa sonuç aynı: karar beklenmez, her şey geri alınır.
+          current.phase = 'bitiyor';
+          clean = await rollback(client);
+          return await finish({ sonuc: 'deneme' }, 'deneme-rollback');
         }
 
         current.phase = 'karar';
@@ -397,7 +416,7 @@ export function createScriptRunner({ store, pools, clock, history, log }: Script
           unlocked = true;
           await client.query('SET default_transaction_read_only = off');
         }
-        const { outcome, applied } = await runStatements(current, client, script);
+        const { outcome, applied } = await runStatements(current, client, script, false);
         const ozet = autocommitSummary(total, applied, outcome !== 'tamam');
         if (outcome === 'baglantiKoptu' || broken) {
           return await finish({ sonuc: 'hata', mesaj: 'Bağlantı koptu; çalışan ifadenin sonucu bilinmiyor.', ozet }, 'hata');
@@ -416,21 +435,26 @@ export function createScriptRunner({ store, pools, clock, history, log }: Script
       }
     }
 
-    /** İfadeleri sırayla çalıştırır; ilk hatada ya da iptal/kopmada durur. `applied`: başarılı ifade sayısı. */
+    /**
+     * İfadeleri sırayla çalıştırır; ilk hatada ya da iptal/kopmada durur. `applied`: başarılı ifade
+     * sayısı. `deneme`: DML'in değiştirdiği satırlar önizlenir.
+     */
     async function runStatements(
       current: Run,
       client: pg.PoolClient,
       script: string,
+      deneme: boolean,
     ): Promise<{ outcome: 'tamam' | 'hata' | 'baglantiKoptu'; applied: number }> {
       let applied = 0;
       for (const [i, statement] of splitStatements(script).entries()) {
         if (current.stopping) return { outcome: 'tamam', applied };
         send({ type: 'started', i });
         const started = performance.now();
-        const result = await runStatement(client, statement);
+        const result = await runStatement(client, statement, deneme);
         const ms = Math.round(performance.now() - started);
         if (result.ok) {
-          send({ type: 'done', i, ms, rowCount: result.rowCount, komut: result.komut, onizleme: result.onizleme });
+          const { rowCount, komut, onizleme, degisiklik } = result;
+          send({ type: 'done', i, ms, rowCount, komut, onizleme, degisiklik });
           current.ifadeler.push({ offset: statement.start, ms, komut: result.komut, satirSayisi: result.rowCount });
           applied++;
           continue;
@@ -464,6 +488,7 @@ interface Session {
   connection: Connection;
   database: string;
   lock: WriteLockState;
+  deneme: boolean;
 }
 
 /** Geri alındıysa `true`; alınamayan client pool'a dönmemeli. */
@@ -476,57 +501,97 @@ async function rollback(client: pg.PoolClient): Promise<boolean> {
   }
 }
 
-async function runStatement(client: pg.PoolClient, statement: Statement): Promise<StatementResult> {
-  if (CURSOR_COMMANDS.has(statement.keywords[0] ?? '')) {
-    const viaCursor = await runWithCursor(client, statement);
-    if (viaCursor) return viaCursor;
-  }
+async function runStatement(client: pg.PoolClient, statement: Statement, deneme: boolean): Promise<StatementResult> {
+  const viaCursor = CURSOR_COMMANDS.has(statement.keywords[0] ?? '') ? await runWithCursor(client, statement) : null;
+  if (viaCursor) return viaCursor;
+  const changes = deneme && withReturning(statement);
+  const viaChanges = changes && changes.degistirir ? await runWithChanges(client, statement, changes.text) : null;
+  if (viaChanges) return viaChanges;
   try {
+    // Sarmalı kabul etmeyen DML kullanıcının yazdığı gibi çalışır: eklenen RETURNING * ifadeyi
+    // (ör. kurallı tabloda) gerçek çalıştırmada olmayan bir hatayla düşürebilir. Kendi RETURNING'i
+    // varsa satırların tamamı çekilir, ilk 100'ü gösterilir.
     const raw = await client.query({ text: statement.text, rowMode: 'array', types: RAW_TYPES });
     const result = Array.isArray(raw) ? (raw.at(-1) as pg.QueryArrayResult) : raw;
-    const onizleme = result.fields.length > 0 ? preview(result) : undefined;
-    return { ok: true, rowCount: result.rowCount, komut: result.command ?? statement.keywords[0] ?? '', onizleme };
+    const rows = result.fields.length > 0 ? preview(result) : undefined;
+    const komut = result.command ?? statement.keywords[0] ?? '';
+    return { ok: true, rowCount: result.rowCount, komut, ...(changes && changes.degistirir ? { degisiklik: rows } : { onizleme: rows }) };
   } catch (error) {
     return { ok: false, error, prefix: 0 };
   }
 }
 
 /**
- * SELECT benzeri ifadeyi bir savepoint içinde imleçle çalıştırır: ilk 100 satır çekilir, kalanı
- * `MOVE` ile sayılır ama istemciye aktarılmaz. İmleç bu ifadeyi kabul etmezse `null` döner ve
- * transaction savepoint'e geri sarılır (ifade düz çalıştırılır).
+ * `wrapper`'ı bir savepoint içinde çalıştırır. Sarmal ifadeyi kabul etmezse transaction savepoint'e
+ * geri sarılır ve `null` döner (ifade düz çalıştırılır). Hata konumundan sarmalın öneki düşülür.
  */
-async function runWithCursor(client: pg.PoolClient, statement: Statement): Promise<StatementResult | null> {
-  /** Sorgu metni artık imleç önekli; hata konumundan önek düşülür. */
+async function withWrapper(
+  client: pg.PoolClient,
+  prefix: string,
+  wrapper: () => Promise<StatementResult>,
+): Promise<StatementResult | null> {
   let wrapped = false;
   try {
-    await client.query(`SAVEPOINT ${CURSOR}`);
+    await client.query(`SAVEPOINT ${WRAPPER}`);
     wrapped = true;
+    let result: StatementResult;
     try {
-      await client.query(CURSOR_PREFIX + statement.text);
+      result = await wrapper();
     } catch (error) {
-      if (!rejectedByDeclare(error)) throw error;
-      await client.query(`ROLLBACK TO SAVEPOINT ${CURSOR}`);
-      await client.query(`RELEASE SAVEPOINT ${CURSOR}`);
+      if (!rejectedByWrapper(error)) throw error;
+      await client.query(`ROLLBACK TO SAVEPOINT ${WRAPPER}`);
+      await client.query(`RELEASE SAVEPOINT ${WRAPPER}`);
       return null;
     }
-    const fetched = await client.query({ text: `FETCH ${PREVIEW_ROWS} FROM ${CURSOR}`, rowMode: 'array', types: RAW_TYPES });
-    const rest = await client.query(`MOVE FORWARD ALL IN ${CURSOR}`);
-    await client.query(`CLOSE ${CURSOR}`);
-    await client.query(`RELEASE SAVEPOINT ${CURSOR}`);
-    return { ok: true, rowCount: (fetched.rowCount ?? 0) + (rest.rowCount ?? 0), komut: 'SELECT', onizleme: preview(fetched) };
+    await client.query(`RELEASE SAVEPOINT ${WRAPPER}`);
+    return result;
   } catch (error) {
-    return { ok: false, error, prefix: wrapped ? CURSOR_PREFIX.length : 0 };
+    return { ok: false, error, prefix: wrapped ? prefix.length : 0 };
   }
 }
 
 /**
- * DECLARE ayrıştırma ya da çözümlemede (sınıf 42 ve 0A) düştü: imlecin kabul etmediği ifade
- * (`SELECT … INTO` → 42601, WITH içinde veri değiştiren → 0A000) ya da kullanıcının yazım hatası.
- * Bu aşamanın yan etkisi yoktur; ifade düz çalıştırılır ve gerçek hata konumu oradan gelir.
- * İptal, kilit zaman aşımı gibi hatalarda ifade yeniden çalıştırılmaz.
+ * Deneme modunda DML'i değişiklik sarmalıyla çalıştırır: ilk 100 satır çekilir, toplam sayı
+ * sunucuda sayılır. Sarmal ifadeyi kabul etmezse (ör. kurallı tablo → 0A000) `null` döner.
  */
-function rejectedByDeclare(error: unknown): boolean {
+function runWithChanges(client: pg.PoolClient, statement: Statement, text: string): Promise<StatementResult | null> {
+  return withWrapper(client, CHANGES_PREFIX, async () => {
+    const result = await client.query({ text: CHANGES_PREFIX + text + CHANGES_SUFFIX, rowMode: 'array', types: RAW_TYPES });
+    const first = result.rows[0];
+    return {
+      ok: true,
+      rowCount: first ? Number(first[0]) : 0,
+      komut: statement.keywords[0] ?? '',
+      degisiklik: {
+        kolonlar: result.fields.slice(1).map((f) => f.name),
+        satirlar: result.rows.map((row) => row.slice(1).map((v) => (v === null ? null : String(v)))),
+      },
+    };
+  });
+}
+
+/**
+ * SELECT benzeri ifadeyi imleçle çalıştırır: ilk 100 satır çekilir, kalanı `MOVE` ile sayılır ama
+ * istemciye aktarılmaz. İmleç bu ifadeyi kabul etmezse `null` döner.
+ */
+function runWithCursor(client: pg.PoolClient, statement: Statement): Promise<StatementResult | null> {
+  return withWrapper(client, CURSOR_PREFIX, async () => {
+    await client.query(CURSOR_PREFIX + statement.text);
+    const fetched = await client.query({ text: `FETCH ${PREVIEW_ROWS} FROM ${WRAPPER}`, rowMode: 'array', types: RAW_TYPES });
+    const rest = await client.query(`MOVE FORWARD ALL IN ${WRAPPER}`);
+    await client.query(`CLOSE ${WRAPPER}`);
+    return { ok: true, rowCount: (fetched.rowCount ?? 0) + (rest.rowCount ?? 0), komut: 'SELECT', onizleme: preview(fetched) };
+  });
+}
+
+/**
+ * Sarmal (imleç ya da değişiklik CTE'si) ayrıştırma ya da çözümlemede (sınıf 42 ve 0A) düştü:
+ * sarmalın kabul etmediği ifade (`SELECT … INTO` → 42601, WITH içinde veri değiştiren ya da
+ * kurallı tabloya DML → 0A000) ya da kullanıcının yazım hatası. Savepoint'e geri sarılır, ifade
+ * düz çalıştırılır ve gerçek hata konumu oradan gelir. İptal, kilit zaman aşımı, kısıt ihlali
+ * gibi hatalarda ifade yeniden çalıştırılmaz.
+ */
+function rejectedByWrapper(error: unknown): boolean {
   const code = error instanceof pg.DatabaseError ? (error.code ?? '') : '';
   return code.startsWith('42') || code.startsWith('0A');
 }

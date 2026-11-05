@@ -7,14 +7,17 @@ import { ACTIVE_SQL_TRANSACTION, NON_TRANSACTIONAL_FALLBACK, type ScriptAnalysis
 import { splitStatements, positionOf, type Statement } from './ifade-bolme';
 import type { Target } from './veritabani-secimi';
 
-/** SELECT önizlemesinde sunucudan çekilen en fazla satır. */
+/** SELECT önizlemesinde ve Deneme modunun değişiklik önizlemesinde sunucudan çekilen en fazla satır. */
 export const PREVIEW_ROWS = 100;
 
 // ---------- İstemci → sunucu ----------
 
 export type ClientMessage =
-  /** `yazmaModu`: prod hedefte yazma kilidi açık; prod olmayan hedefte etkisizdir. */
-  | { type: 'run'; target: Target; script: string; yazmaModu: boolean }
+  /**
+   * `yazmaModu`: prod hedefte yazma kilidi açık; prod olmayan hedefte etkisizdir. `deneme`: Deneme
+   * modu; transaction sonunda karar beklenmeden her zaman geri alınır.
+   */
+  | { type: 'run'; target: Target; script: string; yazmaModu: boolean; deneme: boolean }
   | { type: 'commit' }
   | { type: 'rollback' }
   /** Karar süresini baştan başlatır. */
@@ -34,6 +37,8 @@ export function parseClientMessage(raw: unknown): ClientMessage | null {
     script: m.script,
     // Yalnızca açıkça `true` yazma modudur; eksik ya da belirsiz değer salt okunur kalır.
     yazmaModu: m.yazmaModu === true,
+    // Belirsiz değer Deneme sayılmaz; normal çalıştırma da karar bekler, kendiliğinden commit etmez.
+    deneme: m.deneme === true,
   };
 }
 
@@ -49,9 +54,9 @@ export interface Preview {
  * Çalıştırmanın sonu. `sureDoldu`: Karar süresi doldu, transaction geri alındı. `hata`: çalıştırma
  * başlayamadı, bağlantı koptu ya da commit başarısız oldu. `autocommit`: Autocommit script'i bitti
  * ya da hatada durdu (ayrıntı `ozet`'te). `reddedildi`: script analizden geçmedi, hiçbir şey
- * çalışmadı.
+ * çalışmadı. `deneme`: Deneme modu bitti ya da hatada durdu; transaction her durumda geri alındı.
  */
-export type RunResult = 'commit' | 'rollback' | 'sureDoldu' | 'iptal' | 'hata' | 'autocommit' | 'reddedildi';
+export type RunResult = 'commit' | 'rollback' | 'sureDoldu' | 'iptal' | 'hata' | 'autocommit' | 'reddedildi' | 'deneme';
 
 /** Autocommit çalıştırmasının sonu: uygulananlar kalıcıdır. */
 export interface AutocommitSummary {
@@ -78,7 +83,11 @@ export type ServerEvent =
   /** Sunucunun script analizi; her çalıştırmanın ilk olayı. */
   | ({ type: 'analiz' } & ScriptAnalysis)
   | { type: 'started'; i: number }
-  | { type: 'done'; i: number; rowCount: number | null; ms: number; komut: string; onizleme?: Preview }
+  /**
+   * `onizleme`: ifadenin döndürdüğü satırlar (SELECT). `degisiklik`: yalnızca Deneme modunda, DML'in
+   * `RETURNING` satırları (ilk 100); `rowCount` her durumda etkilenen satırların tamamıdır.
+   */
+  | { type: 'done'; i: number; rowCount: number | null; ms: number; komut: string; onizleme?: Preview; degisiklik?: Preview }
   | { type: 'error'; i: number; sqlstate: string | null; mesaj: string; satir: number; sutun: number; bas: number; bit: number; ms: number }
   /** Script bitti, transaction açık; hatadan sonra commit edilemez. `kalanMs`: Karar süresi. */
   | { type: 'kararBekleniyor'; commitEdilebilir: boolean; kalanMs: number }
@@ -103,6 +112,8 @@ export interface StatementView {
   ms?: number;
   rowCount?: number | null;
   onizleme?: Preview;
+  /** Deneme modunda DML'in değişiklik önizlemesi. */
+  degisiklik?: Preview;
   hata?: {
     sqlstate: string | null;
     mesaj: string;
@@ -119,6 +130,8 @@ export type RunPhase = 'calisiyor' | 'karar' | 'bitti';
 
 export interface RunView {
   script: string;
+  /** Deneme modu: karar beklenmez, sonuç her zaman geri alınır. */
+  deneme: boolean;
   /** Sunucunun analizinden; `analiz` gelene kadar yok. */
   mod?: ScriptAnalysis['mod'];
   reddedilenler?: ScriptAnalysis['reddedilenler'];
@@ -141,9 +154,10 @@ export interface RunView {
   kayitUyarisi?: string;
 }
 
-export function startRunView(script: string): RunView {
+export function startRunView(script: string, { deneme = false }: { deneme?: boolean } = {}): RunView {
   return {
     script,
+    deneme,
     ifadeler: splitStatements(script).map((s, i) => statementView(script, s, i)),
     evre: 'calisiyor',
     commitEdilebilir: false,
@@ -172,6 +186,7 @@ export function applyEvent(view: RunView, event: ServerEvent): RunView {
         ms: event.ms,
         rowCount: event.rowCount,
         onizleme: event.onizleme,
+        degisiklik: event.degisiklik,
       });
     case 'error': {
       const { type: _t, i, ms, ...hata } = event;

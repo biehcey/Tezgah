@@ -464,3 +464,111 @@ describe('Script ekranı: prod yazma kilidi', () => {
     expect(lockButton()).toBeEnabled();
   });
 });
+
+describe('Script ekranı: Deneme modu', () => {
+  const tryButton = () => screen.getByRole('button', { name: '⟲ Dene' });
+  const tabs = () => within(column()).getAllByRole('tab').map((t) => [t.textContent, t.getAttribute('aria-selected')]);
+  const changes = () => within(column()).getByRole('tabpanel', { name: 'Değişiklikler' });
+  const DML = 'UPDATE t SET a = 1;\nSELECT a FROM t;\nINSERT INTO t VALUES (9);\nDELETE FROM t WHERE id = 2';
+
+  async function startTry(script = DML) {
+    const ctx = setup();
+    setEditorScript(script);
+    await ctx.user.click(tryButton());
+    return { ...ctx, run: ctx.fake.last() };
+  }
+
+  it('normal çalıştırmada yalnızca Log sekmesi var', async () => {
+    const { run } = await startRun();
+    expect(run.deneme).toBe(false);
+    expect(tabs()).toEqual([['Log', 'true']]);
+  });
+
+  it('Dene denemeyi başlatır; Değişiklikler varsayılan, Log da var', async () => {
+    const { user, run } = await startTry();
+    expect(run).toMatchObject({ deneme: true, script: DML });
+    expect(tabs()).toEqual([
+      ['Değişiklikler', 'true'],
+      ['Log', 'false'],
+    ]);
+    await user.click(within(column()).getByRole('tab', { name: 'Log' }));
+    expect(tabs()).toEqual([
+      ['Değişiklikler', 'false'],
+      ['Log', 'true'],
+    ]);
+    expect(cards()).toHaveLength(4);
+  });
+
+  it('Değişiklikler ifade başına DML önizlemesini ve satır sayısını gösterir; SELECT Log’da', async () => {
+    const { user, run } = await startTry();
+    run.emit(
+      { type: 'done', i: 0, rowCount: 250, ms: 3, komut: 'UPDATE', degisiklik: { kolonlar: ['id', 'a'], satirlar: [['1', '1'], ['2', null]] } },
+      { type: 'done', i: 1, rowCount: 1, ms: 1, komut: 'SELECT', onizleme: { kolonlar: ['a'], satirlar: [['secilen']] } },
+      { type: 'done', i: 2, rowCount: 1, ms: 1, komut: 'INSERT', degisiklik: { kolonlar: ['id', 'a'], satirlar: [['9', null]] } },
+      { type: 'done', i: 3, rowCount: 0, ms: 1, komut: 'DELETE', degisiklik: { kolonlar: ['id', 'a'], satirlar: [] } },
+      { type: 'bitti', sonuc: 'deneme' },
+    );
+    const sections = within(changes()).getAllByRole('article');
+    expect(sections.map((s) => within(s).getByRole('heading').textContent)).toEqual([
+      'UPDATE · satır 1 · 250 satır güncellendi',
+      'INSERT · satır 3 · 1 satır eklendi',
+      'DELETE · satır 4 · 0 satır silindi',
+    ]);
+    expect(sections[0]).toHaveTextContent('ilk 100 satır gösteriliyor');
+    expect(within(sections[0]!).getAllByRole('row')).toHaveLength(3);
+    expect(within(sections[2]!).queryByRole('table')).not.toBeInTheDocument();
+    expect(changes()).not.toHaveTextContent('secilen');
+
+    await user.click(within(column()).getByRole('tab', { name: 'Log' }));
+    expect(cards()[1]).toHaveTextContent('secilen');
+    // DML'in satırları Log'da tekrarlanmaz; satır sayısı yeter.
+    expect(cards()[0]).toHaveTextContent('250 satır etkilendi');
+    expect(within(cards()[0]!).queryByRole('table')).not.toBeInTheDocument();
+  });
+
+  it('karar kartı yerine "deneme geri alındı" özeti; Commit/Rollback yok', async () => {
+    const { run } = await startTry();
+    run.emit({ type: 'done', i: 0, rowCount: 1, ms: 3, komut: 'UPDATE', degisiklik: { kolonlar: ['id'], satirlar: [['1']] } });
+    run.emit({ type: 'bitti', sonuc: 'deneme' });
+    expect(within(decision()).getByText('Deneme geri alındı; hiçbir şey kalıcı yazılmadı')).toBeInTheDocument();
+    expect(within(decision()).queryByRole('button')).not.toBeInTheDocument();
+    expect(tryButton()).toBeEnabled();
+  });
+
+  it('hata: banner’da hatalı satır ve SQLSTATE, altında hataya kadar olan önizlemeler; sonuç yine geri alındı', async () => {
+    const { run } = await startTry();
+    run.emit(
+      { type: 'done', i: 0, rowCount: 1, ms: 3, komut: 'UPDATE', degisiklik: { kolonlar: ['id'], satirlar: [['1']] } },
+      { type: 'done', i: 1, rowCount: 1, ms: 1, komut: 'SELECT', onizleme: { kolonlar: ['a'], satirlar: [['1']] } },
+      { type: 'error', i: 2, ms: 1, sqlstate: '23505', mesaj: 'duplicate key', satir: 3, sutun: 1, bas: 37, bit: 61 },
+      { type: 'bitti', sonuc: 'deneme' },
+    );
+    expect(within(changes()).getByRole('alert')).toHaveTextContent('Satır 3 · 23505 · duplicate key');
+    expect(within(changes()).getAllByRole('article').map((s) => within(s).getByRole('heading').textContent)).toEqual([
+      'UPDATE · satır 1 · 1 satır güncellendi',
+    ]);
+    expect(within(decision()).getByText('Deneme hatada durdu; geri alındı')).toBeInTheDocument();
+    expect(gutterMarks()).toEqual({ 1: '✓', 2: '✓', 3: '✗', 4: '–' });
+  });
+
+  it('Autocommit script’i denenemez; nedeni Dene’nin açıklamasında, Çalıştır açık', async () => {
+    setup();
+    setEditorScript('VACUUM t;\nVACUUM u');
+    await waitFor(() => expect(tryButton()).toBeDisabled());
+    expect(runButton()).toBeEnabled();
+    expect(tryButton()).toHaveAccessibleDescription(
+      'Satır 1: Transaction dışı komut Deneme modunda çalıştırılamaz; geri alınamaz.\nSatır 2: Transaction dışı komut Deneme modunda çalıştırılamaz; geri alınamaz.',
+    );
+    // Normal çalıştırmanın önünde engel yok; editörün altında liste çıkmaz.
+    expect(screen.queryByText(/Deneme modunda çalıştırılamaz/)).not.toBeInTheDocument();
+  });
+
+  it('Karışık script’te transaction dışı ifadeler işaretli; Dene de Çalıştır da kapalı', async () => {
+    setup();
+    setEditorScript('UPDATE t SET a = 1;\nVACUUM t');
+    await waitFor(() => expect(tryButton()).toBeDisabled());
+    expect(runButton()).toBeDisabled();
+    expect(gutterMarks()).toEqual({ 2: '⚠' });
+    expect(tryButton()).toHaveAccessibleDescription(expect.stringContaining('Satır 2: Transaction dışı komut Deneme modunda'));
+  });
+});

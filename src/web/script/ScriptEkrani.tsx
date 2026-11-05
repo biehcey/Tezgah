@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { isProd, type Connection } from '../../core/baglanti';
 import { analyzeScript, type RunMode, type ScriptAnalysis } from '../../core/calistirma-modu';
+import { DML_VERBS } from '../../core/deneme';
 import { positionOf, splitStatements, type Statement } from '../../core/ifade-bolme';
 import { decisionStatus, formatRemaining, startDecision, type DecisionPhase, type DecisionTimer } from '../../core/karar-suresi';
 import {
@@ -53,6 +54,9 @@ const AUTOCOMMIT_CONNECTION_LOST: ServerEvent = {
 const ANALYSIS_DELAY_MS = 200;
 
 const MODE_LABELS: Record<RunMode, string> = { transaction: 'Transaction', autocommit: 'Autocommit', karisik: 'Karışık' };
+
+type Tab = 'degisiklikler' | 'log';
+const TAB_LABELS: Record<Tab, string> = { degisiklikler: 'Değişiklikler', log: 'Log' };
 
 function useDebounced<T>(value: T, ms: number): T {
   const [debounced, setDebounced] = useState(value);
@@ -118,19 +122,33 @@ export function ScriptEkrani({ target, onChangeTarget, onTargetLockChange, writa
   const statements = useMemo(() => splitStatements(analyzed), [analyzed]);
   const analysis = useMemo(() => analyzeScript(statements), [statements]);
   /** Reddedilen ifadeler, Karışık script ve salt okunur prod'da Autocommit. */
-  const reasons = useMemo(() => runBlockReasons(analyzed, statements, lock, analysis), [analyzed, statements, lock, analysis]);
+  const reasons = useMemo(() => runBlockReasons(analyzed, statements, lock, { analysis }), [analyzed, statements, lock, analysis]);
+  /**
+   * Deneme modunun engelleri: ek olarak transaction dışı her ifade. Editörün altında listelenmez
+   * (Autocommit script'i Çalıştır ile çalışır); Dene düğmesinin açıklamasında durur.
+   */
+  const tryReasons = useMemo(
+    () => runBlockReasons(analyzed, statements, lock, { analysis, deneme: true }),
+    [analyzed, statements, lock, analysis],
+  );
   const blocked = reasons.length > 0;
+  const tryBlocked = tryReasons.length > 0;
+  /** Sonuç sütununun seçili sekmesi; Değişiklikler yalnızca denemede var. */
+  const [tab, setTab] = useState<Tab>('log');
+  const tabs: Tab[] = run?.deneme ? ['degisiklikler', 'log'] : ['log'];
+  const shownTab = run?.deneme ? tab : 'log';
 
-  function start() {
+  function start(deneme: boolean) {
     if (!targetRef || busy) return;
     // Analiz yazmanın gerisinde kalabilir; çalıştırmadan önce güncel metinle yeniden bakılır.
     const currentStatements = splitStatements(script);
     const current = analyzeScript(currentStatements);
-    if (runBlockReasons(script, currentStatements, lock, current).length > 0) return;
+    if (runBlockReasons(script, currentStatements, lock, { analysis: current, deneme }).length > 0) return;
     handle.current?.close();
-    setRun(startRunView(script));
+    setRun(startRunView(script, { deneme }));
+    setTab(deneme ? 'degisiklikler' : 'log');
     setDeadline(null);
-    handle.current = api.runScript({ target: targetRef, script, yazmaModu: writeMode }, (received) => {
+    handle.current = api.runScript({ target: targetRef, script, yazmaModu: writeMode, deneme }, (received) => {
       // Autocommit'te geri alınacak transaction yok; sunucu çalışan ifadeyi iptal eder.
       const event = received === CONNECTION_LOST && current.mod === 'autocommit' ? AUTOCOMMIT_CONNECTION_LOST : received;
       setRun((current) => (current ? applyEvent(current, event) : current));
@@ -233,30 +251,55 @@ export function ScriptEkrani({ target, onChangeTarget, onTargetLockChange, writa
                 ■ İptal
               </button>
             ) : (
-              <button type="button" className="birincil" onClick={start} disabled={!target || busy || !hasStatements || blocked}>
-                ▶ Çalıştır
-              </button>
+              <>
+                <button
+                  type='button'
+                  title={tryBlocked ? tryReasons.map(formatReason).join('\n') : 'Çalıştır ve her zaman geri al'}
+                  onClick={() => start(true)}
+                  disabled={!target || busy || !hasStatements || tryBlocked}
+                >
+                  ⟲ Dene
+                </button>
+                <button type="button" className="birincil" onClick={() => start(false)} disabled={!target || busy || !hasStatements || blocked}>
+                  ▶ Çalıştır
+                </button>
+              </>
             )}
           </div>
         </div>
         <aside aria-label="Çalıştırma" className="calistirma-sutunu">
           <KararKarti run={run} deadline={run?.evre === 'karar' ? deadline : null} onRequest={request} />
           <div role="tablist" className="sekmeler">
-            <button type="button" role="tab" aria-selected="true" className="sekme secili">
-              Log
-            </button>
+            {tabs.map((t) => (
+              <button
+                key={t}
+                type="button"
+                role="tab"
+                aria-selected={t === shownTab}
+                className={`sekme${t === shownTab ? ' secili' : ''}`}
+                onClick={() => setTab(t)}
+              >
+                {TAB_LABELS[t]}
+              </button>
+            ))}
           </div>
-          <div role="tabpanel" aria-label="Log" className="ifade-listesi">
-            {run ? (
-              <ol className="ifade-kartlari">
-                {run.ifadeler.map((s) => (
-                  <IfadeKarti key={s.i} statement={s} onGoTo={goToLine} />
-                ))}
-              </ol>
-            ) : (
-              <p className="soluk kucuk">Script çalıştırılınca ifadeler burada listelenir.</p>
-            )}
-          </div>
+          {shownTab === 'degisiklikler' && run ? (
+            <div role="tabpanel" aria-label={TAB_LABELS.degisiklikler} className="ifade-listesi">
+              <Degisiklikler run={run} />
+            </div>
+          ) : (
+            <div role="tabpanel" aria-label={TAB_LABELS.log} className="ifade-listesi">
+              {run ? (
+                <ol className="ifade-kartlari">
+                  {run.ifadeler.map((s) => (
+                    <IfadeKarti key={s.i} statement={s} onGoTo={goToLine} />
+                  ))}
+                </ol>
+              ) : (
+                <p className="soluk kucuk">Script çalıştırılınca ifadeler burada listelenir.</p>
+              )}
+            </div>
+          )}
         </aside>
       </div>
     </div>
@@ -268,10 +311,14 @@ function BlockReasons({ reasons }: { reasons: ReturnType<typeof runBlockReasons>
   return (
     <ul className="analiz-sorunlari kucuk">
       {reasons.map(({ satir, mesaj }) => (
-        <li key={`${satir}:${mesaj}`}>{satir === null ? mesaj : `Satır ${satir}: ${mesaj}`}</li>
+        <li key={`${satir}:${mesaj}`}>{formatReason({ satir, mesaj })}</li>
       ))}
     </ul>
   );
+}
+
+function formatReason({ satir, mesaj }: { satir: number | null; mesaj: string }): string {
+  return satir === null ? mesaj : `Satır ${satir}: ${mesaj}`;
 }
 
 /** Geri sayımı saniyede bir yeniler; süre yoksa `null`. */
@@ -360,8 +407,41 @@ function KararKarti({
   );
 }
 
+/**
+ * Deneme modunun Değişiklikler sekmesi: hata varsa üstte hatalı satır ve SQLSTATE, altında
+ * hataya kadar çalışan DML ifadelerinin değişiklik önizlemeleri.
+ */
+function Degisiklikler({ run }: { run: RunView }) {
+  const failed = run.ifadeler.find((s) => s.hata);
+  const changed = run.ifadeler.filter((s) => s.degisiklik);
+  return (
+    <>
+      {failed?.hata && (
+        <p role="alert" className="deneme-hatasi kucuk">
+          Satır {failed.hata.satir}
+          {failed.hata.sqlstate && <> · {failed.hata.sqlstate}</>} · {failed.hata.mesaj}
+        </p>
+      )}
+      {changed.map((s) => (
+        <article key={s.i} className="degisiklik">
+          <h3 className="degisiklik-basligi kucuk">
+            {s.komut} · satır {s.satir} · {s.rowCount ?? s.degisiklik!.satirlar.length} satır {DML_VERBS[s.komut] ?? 'etkilendi'}
+          </h3>
+          {(s.rowCount ?? 0) > PREVIEW_ROWS && <p className="soluk kucuk">ilk {PREVIEW_ROWS} satır gösteriliyor</p>}
+          {s.degisiklik!.satirlar.length > 0 && <Onizleme preview={s.degisiklik!} />}
+        </article>
+      ))}
+      {changed.length === 0 && !failed && (
+        <p className="soluk kucuk">{run.evre === 'bitti' ? 'Değişiklik yok.' : 'DML ifadelerinin değiştirdiği satırlar burada görünür.'}</p>
+      )}
+    </>
+  );
+}
+
 function resultText(run: RunView): string {
   switch (run.sonuc) {
+    case 'deneme':
+      return run.ifadeler.some((s) => s.hata) ? 'Deneme hatada durdu; geri alındı' : 'Deneme geri alındı; hiçbir şey kalıcı yazılmadı';
     case 'commit':
       return 'Commit edildi';
     case 'rollback':
