@@ -960,8 +960,25 @@ button.kucuk {
   color: var(--basarili);
 }
 
-.karar-sonucu.hata {
+.karar-sonucu.hata,
+.karar-sonucu.sureDoldu {
   color: var(--uyari);
+}
+
+.geri-sayim {
+  color: var(--uyari);
+}
+
+.geri-sayim [role='timer'] {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.palet-kilidi {
+  margin: 0;
+  padding: 6px 12px;
+  color: var(--uyari);
+  font-size: 12px;
 }
 
 .sekmeler {

@@ -3,6 +3,11 @@ import type { Clock } from '../saat';
 export interface FakeClock extends Clock {
   /** Zamanı ilerletir ve süresi dolan zamanlayıcıları sırayla çalıştırır. */
   advance(ms: number): void;
+  /**
+   * Zamanı zamanlayıcıları çalıştırmadan ilerletir (dizüstü uykudayken Node zamanlayıcısı
+   * işlemez); süresi geçenler sonraki `advance`'ta çalışır.
+   */
+  jump(ms: number): void;
 }
 
 export function createFakeClock(): FakeClock {
@@ -10,6 +15,10 @@ export function createFakeClock(): FakeClock {
   let nextId = 1;
   const timers = new Map<number, { at: number; fn: () => void }>();
   return {
+    now: () => now,
+    jump(ms) {
+      now += ms;
+    },
     setTimeout(fn, ms) {
       const id = nextId++;
       timers.set(id, { at: now + ms, fn });

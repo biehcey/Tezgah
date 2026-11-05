@@ -85,6 +85,8 @@ export function App() {
   const promptCount = useRef(0);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [reveal, setReveal] = useState<Reveal | null>(null);
+  /** Script çalışırken ve karar beklenirken hedef değiştirilemez; neden. */
+  const [targetLock, setTargetLock] = useState<string | null>(null);
   const urlFormCount = useRef(0);
   /** Başka bir pencere (klasör, onay, şifre) açıkken kısayol paleti onun üstüne açmaz. */
   const dialogOpen = useRef(false);
@@ -220,9 +222,11 @@ export function App() {
     }
   }
 
-  /** Editörün hedefini değiştirmenin tek yolu (panel, menü, palet). */
-  function chooseTarget(next: Target) {
+  /** Editörün hedefini değiştirmenin tek yolu (panel, menü, palet); kilitliyken hiçbiri değiştiremez. */
+  function chooseTarget(next: Target): boolean {
+    if (targetLock) return false;
     setTarget(next);
+    return true;
   }
 
   function selectTarget(connection: Connection, database: string) {
@@ -232,8 +236,7 @@ export function App() {
   /** Paletten (gizli veritabanı, URL eşleşmesi): hedef olur; seçimde yoksa görünür yapılır. */
   function chooseAndShow(next: Target) {
     const connection = connections?.find((c) => c.id === next.connectionId);
-    if (!connection) return;
-    chooseTarget(next);
+    if (!connection || !chooseTarget(next)) return;
     if (!connection.databaseSelection.some((d) => d.database === next.database)) {
       void changeSelection(connection, setDatabaseVisible(connection.databaseSelection, next.database, true));
     }
@@ -363,7 +366,7 @@ export function App() {
     showMenu(`${connection.name} menüsü`, at, [
       {
         label: 'Hedef yap',
-        disabled: targetDatabase === null,
+        disabled: targetDatabase === null || targetLock !== null,
         onSelect: () => {
           setSelectedId(connection.id);
           selectTarget(connection, targetDatabase!);
@@ -474,6 +477,7 @@ export function App() {
             connection={selected}
             session={sessions[selected.id]}
             target={target}
+            targetLock={targetLock}
             reveal={reveal?.connectionId === selected.id ? reveal.database : null}
             onRevealed={revealed}
             onConnect={() => void connect(selected)}
@@ -513,7 +517,7 @@ export function App() {
             onDelete={setDeleting}
           />
         ) : (
-          <ScriptEkrani target={targetView} onChangeTarget={() => setPaletteOpen(true)} />
+          <ScriptEkrani target={targetView} onChangeTarget={() => setPaletteOpen(true)} onTargetLockChange={setTargetLock} />
         )}
       </main>
       {paletteOpen && (
@@ -521,6 +525,7 @@ export function App() {
           connections={connections ?? []}
           serverDatabases={serverDatabases}
           target={target}
+          targetLock={targetLock}
           commands={paletteCommands}
           onSelectTarget={chooseTarget}
           onSelectAndShow={chooseAndShow}

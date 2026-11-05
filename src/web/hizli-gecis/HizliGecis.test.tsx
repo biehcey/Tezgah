@@ -2,7 +2,8 @@ import { screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import { App } from '../App';
-import { connection, createFakeConnections, folder, renderWithApi, type FakeConnections } from '../test/sahte-api';
+import { setEditorScript } from '../test/eylemler';
+import { connection, createFakeConnections, createFakeScriptRuns, folder, renderWithApi, type FakeConnections } from '../test/sahte-api';
 
 const palette = () => screen.getByRole('dialog', { name: 'Hızlı geçiş' });
 const search = () => within(palette()).getByRole('combobox');
@@ -281,5 +282,60 @@ describe('Cmd/Ctrl+K paleti: uygulamayla etkileşim', () => {
     await user.keyboard('{Alt>}{Enter}{/Alt}');
     expect(within(nav()).getByText('Prod', { selector: '.baglanti-adi' })).toBeInTheDocument();
     expect(within(panel()).getByRole('button', { name: 'faturalar' })).toHaveFocus();
+  });
+});
+
+describe('hedef kilidi: karar beklenirken', () => {
+  async function waitingDecision() {
+    const runs = createFakeScriptRuns();
+    const fake = twoConnections();
+    fake.api.runScript = runs.runScript;
+    const ctx = await setup(fake);
+    await ctx.user.keyboard('{Control>}k{/Control}');
+    await ctx.user.keyboard('{Enter}');
+    expect(within(header()).getByRole('heading')).toHaveTextContent('Yerel / postgres');
+    setEditorScript('INSERT INTO t VALUES (1)');
+    await ctx.user.click(screen.getByRole('button', { name: '▶ Çalıştır' }));
+    runs.last().emit({ type: 'done', i: 0, rowCount: 1, ms: 1, komut: 'INSERT' }, { type: 'kararBekleniyor', commitEdilebilir: true, kalanMs: 1_800_000 });
+    return { ...ctx, run: runs.last() };
+  }
+
+  it('palette hedef satırları pasif, tepede neden yazar; Enter hedefi değiştirmez', async () => {
+    const { user } = await waitingDecision();
+    await user.keyboard('{Control>}k{/Control}');
+    expect(within(palette()).getByRole('status')).toHaveTextContent('Commit/rollback kararı bekleniyor');
+    for (const option of within(group('Hedefler')).getAllByRole('option')) {
+      expect(option).toHaveAttribute('aria-disabled', 'true');
+    }
+    expect(within(group('Komutlar')).getByRole('option', { name: 'Yeni klasör' })).not.toHaveAttribute('aria-disabled');
+
+    await user.type(search(), 'app');
+    await user.keyboard('{Enter}');
+    await user.click(within(group('Hedefler')).getByRole('option', { name: /Yerel \/ app/ }));
+    expect(within(header()).getByRole('heading')).toHaveTextContent('Yerel / postgres');
+  });
+
+  it('Alt+Enter (listede göster) çalışmaya devam eder', async () => {
+    const { user } = await waitingDecision();
+    await user.keyboard('{Control>}k{/Control}');
+    await user.type(search(), 'fatura');
+    await user.keyboard('{Alt>}{Enter}{/Alt}');
+    expect(screen.queryByRole('dialog', { name: 'Hızlı geçiş' })).not.toBeInTheDocument();
+    expect(within(panel()).getByRole('button', { name: 'faturalar' })).toHaveFocus();
+    expect(within(header()).getByRole('heading')).toHaveTextContent('Yerel / postgres');
+  });
+
+  it('Veritabanı panelinde tıklamak hedefi değiştirmez; karar verilince yeniden değiştirilebilir', async () => {
+    const { user, run } = await waitingDecision();
+    await user.click(within(nav()).getByText('Yerel', { selector: '.baglanti-adi' }));
+    const app = within(panel()).getByRole('button', { name: 'app' });
+    expect(app).toHaveAttribute('aria-disabled', 'true');
+    await user.click(app);
+    expect(within(header()).getByRole('heading')).toHaveTextContent('Yerel / postgres');
+
+    run.emit({ type: 'bitti', sonuc: 'rollback' });
+    expect(app).not.toHaveAttribute('aria-disabled');
+    await user.click(app);
+    expect(within(header()).getByRole('heading')).toHaveTextContent('Yerel / app');
   });
 });

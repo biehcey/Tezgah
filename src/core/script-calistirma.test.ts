@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { applyEvent, parseClientMessage, startRunView, type RunView, type ServerEvent } from './script-calistirma';
+import { applyEvent, parseClientMessage, startRunView, targetLock, type RunView, type ServerEvent } from './script-calistirma';
 
 describe('parseClientMessage', () => {
   it.each([
@@ -7,7 +7,8 @@ describe('parseClientMessage', () => {
     ['commit', { type: 'commit' }, { type: 'commit' }],
     ['rollback', { type: 'rollback' }, { type: 'rollback' }],
     ['iptal', { type: 'iptal' }, { type: 'iptal' }],
-    ['bilinmeyen tür', { type: 'uzat' }, null],
+    ['uzat', { type: 'uzat' }, { type: 'uzat' }],
+    ['bilinmeyen tür', { type: 'yok' }, null],
     ['hedefsiz run', { type: 'run', script: 'SELECT 1' }, null],
     ['script metin değil', { type: 'run', target: { connectionId: 'b1', database: 'app' }, script: 1 }, null],
     ['nesne değil', 'commit', null],
@@ -47,8 +48,18 @@ describe('çalıştırma görünümü', () => {
     expect(view.ifadeler[0]!.hata).toEqual({ sqlstate: '42P01', mesaj: 'yok', satir: 1, sutun: 13, bas: 12, bit: 13 });
   });
 
-  it('kararBekleniyor karar evresine geçirir ve commit edilebilirliği taşır', () => {
-    expect(play({ type: 'kararBekleniyor', commitEdilebilir: false })).toMatchObject({ evre: 'karar', commitEdilebilir: false });
+  it('kararBekleniyor karar evresine geçirir; commit edilebilirliği ve kalan Karar süresini taşır', () => {
+    expect(play({ type: 'kararBekleniyor', commitEdilebilir: false, kalanMs: 300_000 })).toMatchObject({
+      evre: 'karar',
+      commitEdilebilir: false,
+      kararSuresi: { kalanMs: 300_000, surum: 1 },
+    });
+  });
+
+  it('uzatildi kalan süreyi yeniler ve bekleyen uzat isteğini temizler', () => {
+    const waiting = play({ type: 'kararBekleniyor', commitEdilebilir: true, kalanMs: 300_000 });
+    const view = applyEvent({ ...waiting, bekleyenIstek: 'uzat' }, { type: 'uzatildi', kalanMs: 300_000 });
+    expect(view).toMatchObject({ evre: 'karar', bekleyenIstek: null, kararSuresi: { kalanMs: 300_000, surum: 2 } });
   });
 
   it('bitti sonucu yazar, bekleyen isteği temizler, bitmemiş ifadeleri çalıştırılmadı yapar', () => {
@@ -60,5 +71,17 @@ describe('çalıştırma görünümü', () => {
   it('uyarı mesajı gösterilir ve bekleyen istek yeniden gönderilebilir', () => {
     const view = applyEvent({ ...play(), bekleyenIstek: 'commit' }, { type: 'uyari', tur: 'commitReddedildi', mesaj: 'olmaz' });
     expect(view).toMatchObject({ uyari: 'olmaz', bekleyenIstek: null, evre: 'calisiyor' });
+  });
+});
+
+describe('hedef kilidi', () => {
+  it('çalıştırma yokken ya da bitmişken hedef değiştirilebilir', () => {
+    expect(targetLock(null)).toBeNull();
+    expect(targetLock(play({ type: 'bitti', sonuc: 'commit' }))).toBeNull();
+  });
+
+  it('karar beklenirken ve script çalışırken hedef değiştirilemez; neden döner', () => {
+    expect(targetLock(play({ type: 'kararBekleniyor', commitEdilebilir: true, kalanMs: 1 }))).toBe('Commit/rollback kararı bekleniyor');
+    expect(targetLock(play())).toBe('Script çalışıyor');
   });
 });

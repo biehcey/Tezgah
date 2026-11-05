@@ -23,6 +23,11 @@ interface Props {
   /** Bağlı bağlantıların `pg_database` listeleri (kimlik → veritabanları). */
   serverDatabases: Readonly<Record<string, readonly string[]>>;
   target: Target | null;
+  /**
+   * Hedef değiştirilemiyorsa nedeni: hedef satırları pasif olur (Enter seçmez), tepede neden yazar.
+   * Komutlar ve Alt+Enter (listede göster) çalışır.
+   */
+  targetLock?: string | null;
   commands: readonly PaletteCommand[];
   /** Enter: mevcut editörün hedefi olur. */
   onSelectTarget: (target: Target) => void;
@@ -42,6 +47,8 @@ interface Entry {
   key: string;
   label: string;
   disabled?: boolean;
+  /** Hedef kilitli: gezinilir ve Alt+Enter ile gösterilir ama Enter/tıklama hedef yapmaz. */
+  locked?: boolean;
   hint?: string;
   item?: TargetItem;
   run: () => void;
@@ -61,6 +68,7 @@ export function HizliGecis({
   connections,
   serverDatabases,
   target,
+  targetLock = null,
   commands,
   onSelectTarget,
   onSelectAndShow,
@@ -91,6 +99,7 @@ export function HizliGecis({
       label: item.label,
       item,
       hint,
+      locked: targetLock !== null,
       run: () => select(chosen),
       reveal: () => onReveal(chosen),
     };
@@ -125,7 +134,7 @@ export function HizliGecis({
   const optionId = (entry: Entry) => `${id}-${entry.key}`;
 
   function choose(entry: Entry | undefined, reveal: boolean) {
-    if (!entry || entry.disabled) return;
+    if (!entry || entry.disabled || (entry.locked && !reveal)) return;
     const action = reveal ? entry.reveal : entry.run;
     if (!action) return;
     onClose();
@@ -170,6 +179,11 @@ export function HizliGecis({
           }}
           onKeyDown={onKeyDown}
         />
+        {targetLock && (
+          <p role="status" className="palet-kilidi">
+            Hedef değiştirilemez: {targetLock}
+          </p>
+        )}
         {urlError && (
           <p role="alert" className="palet-hatasi">
             Geçersiz URL: {urlError}
@@ -187,7 +201,7 @@ export function HizliGecis({
                   id={optionId(entry)}
                   role="option"
                   aria-selected={entry === current}
-                  aria-disabled={entry.disabled ? true : undefined}
+                  aria-disabled={entry.disabled || entry.locked ? true : undefined}
                   className={`palet-secenegi${entry.item?.prod ? ' prod' : ''}`}
                   onMouseMove={() => !entry.disabled && entry !== current && setActive(enabled.indexOf(entry))}
                   onMouseDown={(e) => e.preventDefault()}

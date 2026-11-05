@@ -3,6 +3,15 @@ import pg from 'pg';
 import type { WebSocket } from 'ws';
 import type { Connection } from '../core/baglanti';
 import { errorLocation } from '../core/hata-konumu';
+import {
+  commitRequest,
+  decisionDurationMs,
+  decisionStatus,
+  extendDecision,
+  serverIdleTimeoutMs,
+  startDecision,
+  type DecisionTimer,
+} from '../core/karar-suresi';
 import { splitStatements, type Statement } from '../core/ifade-bolme';
 import {
   PREVIEW_ROWS,
@@ -14,10 +23,13 @@ import {
 import type { Target } from '../core/veritabani-secimi';
 import type { SettingsStore } from './ayar-deposu';
 import { TargetError, catalogQuery, type PoolManager } from './havuzlar';
+import type { Clock } from './saat';
 
 export interface ScriptRunnerDeps {
   store: SettingsStore;
   pools: PoolManager;
+  /** Karar süresinin yetkili zamanlayıcısı. */
+  clock: Clock;
   log: (line: string) => void;
 }
 
@@ -30,17 +42,31 @@ const CURSOR_PREFIX = `DECLARE ${CURSOR} NO SCROLL CURSOR FOR `;
 /** İmleçle çalıştırılmaya çalışılan ifade türleri; olmazsa (ör. `SELECT … INTO`) düz çalışır. */
 const CURSOR_COMMANDS = new Set(['SELECT', 'VALUES', 'TABLE', 'WITH']);
 
-type Decision = 'commit' | 'rollback' | 'kopma';
+/** Kararın nasıl verildiği: istemciden, soket kopmasından, Karar süresinden ya da ölen bağlantıdan. */
+type Decision = 'commit' | 'rollback' | 'kopma' | 'sureDoldu' | 'baglantiKoptu';
+
+const EXPIRED = 'Süre doldu; transaction geri alındı';
+const LATE_COMMIT = `${EXPIRED}; commit yapılamaz.`;
+const SESSION_TIMED_OUT = 'Oturum sunucuda zaman aşımına uğradı; transaction geri alındı';
+/** Postgres oturumu `idle_in_transaction_session_timeout` ile kapattı. */
+const IDLE_IN_TRANSACTION_TIMEOUT = '25P03';
+/** Hata alan transaction'da yalnızca ROLLBACK kabul edilir; diğer sorgular bununla döner. */
+const TRANSACTION_ABORTED = '25P02';
 
 /** Soket başına tek çalıştırma; karar verilene kadar client tutulur (ADR-0002). */
 interface Run {
-  phase: 'calisiyor' | 'karar';
+  /** `bitiyor`: karar verildi, transaction kapanıyor; yeni karar istekleri kabul edilmez. */
+  phase: 'calisiyor' | 'karar' | 'bitiyor';
   /** İptal ya da kopma istendi; sıradaki ifadeler çalıştırılmaz. */
   stopping: 'iptal' | 'kopma' | null;
   /** Çalışan ifadeyi `pg_cancel_backend` ile durdurur; client henüz alınmadıysa yok. */
   cancel?: () => Promise<void>;
   /** Karar bekleniyorken çağrılır. */
   decide?: (decision: Decision) => void;
+  /** "Uzat": `SELECT 1` gönderir ve Karar süresini baştan başlatır. */
+  extend?: () => Promise<void>;
+  /** Karar beklenirken işleyen Karar süresi. */
+  timer?: DecisionTimer;
   commitAllowed: boolean;
 }
 
@@ -53,9 +79,11 @@ type StatementResult =
  * transaction'da sırayla çalışır; ilk hatada durulur; sonda istemciden commit/rollback beklenir.
  * Soket koparsa açık transaction geri alınır.
  */
-export function createScriptRunner({ store, pools, log }: ScriptRunnerDeps) {
+export function createScriptRunner({ store, pools, clock, log }: ScriptRunnerDeps) {
   return function attach(ws: WebSocket) {
     let run: Run | null = null;
+    /** Bu soketin son çalıştırması Karar süresi dolarak bitti; geç gelen commit buna göre reddedilir. */
+    let expired = false;
     let open = true;
     const send = (event: ServerEvent) => {
       if (open) ws.send(JSON.stringify(event));
@@ -85,6 +113,7 @@ export function createScriptRunner({ store, pools, log }: ScriptRunnerDeps) {
       switch (message.type) {
         case 'run': {
           if (run) return warn('mesgul', 'Bu sekmede zaten bir çalıştırma var');
+          expired = false;
           const current: Run = { phase: 'calisiyor', stopping: null, commitAllowed: false };
           run = current;
           execute(current, message.target, message.script)
@@ -105,12 +134,23 @@ export function createScriptRunner({ store, pools, log }: ScriptRunnerDeps) {
           return;
         case 'commit':
         case 'rollback':
-          if (run?.phase !== 'karar') return warn('gecersizIstek', 'Karar bekleyen bir transaction yok');
+        case 'uzat': {
+          if (run?.phase !== 'karar') {
+            if (message.type === 'commit' && expired) return warn('commitReddedildi', LATE_COMMIT);
+            return warn('gecersizIstek', 'Karar bekleyen bir transaction yok');
+          }
+          // Yetkili olan sunucunun saati: zamanlayıcı geç kalsa da (uyku) süresi geçen istek işlenmez.
+          if (run.timer && commitRequest(run.timer, clock.now()) === 'sureDoldu') {
+            if (message.type === 'commit') warn('commitReddedildi', LATE_COMMIT);
+            return run.decide?.('sureDoldu');
+          }
+          if (message.type === 'uzat') return void run.extend?.();
           if (message.type === 'commit' && !run.commitAllowed) {
             return warn('commitReddedildi', 'Hata alan transaction commit edilemez; yalnızca rollback yapılabilir.');
           }
           run.decide?.(message.type);
           return;
+        }
       }
     }
 
@@ -138,16 +178,27 @@ export function createScriptRunner({ store, pools, log }: ScriptRunnerDeps) {
       let cancelSent: Promise<void> | null = null;
       /** Transaction COMMIT ya da ROLLBACK ile kapandı; client pool'a temiz dönebilir. */
       let clean = false;
+      /** Postgres oturumu `idle_in_transaction_session_timeout` ile kapattı (ör. dizüstü uykudayken). */
+      let timedOut = false;
+      let expiry: unknown;
+      const markBroken = () => {
+        broken = true;
+        // Karar beklenirken ölen client'ın kararı beklenmez.
+        if (current.phase === 'karar') current.decide?.('baglantiKoptu');
+      };
       // Checkout sırasında pool'un dinleyicisi yok; bağlantı düşerse süreç çökmesin.
       const onError = (err: Error) => {
-        broken = true;
+        if ((err as Partial<pg.DatabaseError>).code === IDLE_IN_TRANSACTION_TIMEOUT) timedOut = true;
         log(`Script bağlantısı düştü (${where}): ${err.message}`);
+        markBroken();
       };
       client.on('error', onError);
-      const lost = () => send({ type: 'bitti', sonuc: 'hata', mesaj: 'Bağlantı koptu; transaction sunucuda geri alındı.' });
+      const lost = () =>
+        send({ type: 'bitti', sonuc: 'hata', mesaj: timedOut ? SESSION_TIMED_OUT : 'Bağlantı koptu; transaction sunucuda geri alındı.' });
       const rolledBack = async (reason: Decision | 'iptal') => {
         clean = await rollback(client);
         if (reason === 'kopma') log(`Soket koptu; transaction geri alındı (${where}).`);
+        if (reason === 'sureDoldu') log(`Karar süresi doldu; transaction geri alındı (${where}).`);
       };
       try {
         // İptal client beklenirken geldi: hiçbir şey çalışmadı.
@@ -160,6 +211,9 @@ export function createScriptRunner({ store, pools, log }: ScriptRunnerDeps) {
         current.cancel = () => (cancelSent ??= cancelBackend(session, pid));
 
         await client.query('BEGIN');
+        const sureMs = decisionDurationMs(connection.envTag);
+        // Yedek: Node zamanlayıcısı işlemezken (uyku) uzak sunucuda transaction açık kalmasın.
+        await client.query(`SET LOCAL idle_in_transaction_session_timeout = ${serverIdleTimeoutMs(sureMs)}`);
         const outcome = await runStatements(current, client, script);
         if (outcome === 'baglantiKoptu') broken = true;
         if (broken) return lost();
@@ -174,9 +228,43 @@ export function createScriptRunner({ store, pools, log }: ScriptRunnerDeps) {
         current.commitAllowed = !failed;
         const decision = await new Promise<Decision>((resolve) => {
           current.decide = resolve;
-          send({ type: 'kararBekleniyor', commitEdilebilir: !failed });
+          const arm = (timer: DecisionTimer) => {
+            current.timer = timer;
+            clock.clearTimeout(expiry);
+            expiry = clock.setTimeout(() => resolve('sureDoldu'), timer.bitis - clock.now());
+          };
+          current.extend = async () => {
+            if (!current.timer) return;
+            // Süre isteğin geldiği andan başlar: SELECT 1 yoldayken eski süre dolmasın.
+            const next = extendDecision(current.timer, clock.now());
+            if (!next) return resolve('sureDoldu');
+            arm(next);
+            try {
+              // Postgres'in boşta bekleme sayacını da sıfırlar.
+              await client.query('SELECT 1');
+            } catch (err) {
+              // Hatadan sonra transaction iptal durumunda (25P02); sayaç yine sıfırlanır. Başka her
+              // hata (ör. 25P03: oturum sunucuda kapandı) client'ın öldüğünü söyler.
+              const code = (err as Partial<pg.DatabaseError>).code;
+              if (code !== TRANSACTION_ABORTED) {
+                if (code === IDLE_IN_TRANSACTION_TIMEOUT) timedOut = true;
+                return markBroken();
+              }
+            }
+            if (current.phase === 'karar') send({ type: 'uzatildi', kalanMs: decisionStatus(next, clock.now()).kalanMs });
+          };
+          arm(startDecision(sureMs, clock.now()));
+          send({ type: 'kararBekleniyor', commitEdilebilir: !failed, kalanMs: sureMs });
         });
+        current.phase = 'bitiyor';
+        clock.clearTimeout(expiry);
+        if (decision === 'sureDoldu') expired = true;
         if (broken) return lost();
+        if (decision === 'sureDoldu') {
+          await rolledBack(decision);
+          // ROLLBACK gidemediyse oturum ölmüştür; sunucu transaction'ı zaten geri aldı.
+          return send({ type: 'bitti', sonuc: 'sureDoldu', mesaj: timedOut ? SESSION_TIMED_OUT : EXPIRED });
+        }
         if (decision !== 'commit') {
           await rolledBack(decision);
           return send({ type: 'bitti', sonuc: 'rollback' });
@@ -194,6 +282,7 @@ export function createScriptRunner({ store, pools, log }: ScriptRunnerDeps) {
           send({ type: 'bitti', sonuc: 'hata', mesaj: `Commit başarısız; transaction geri alındı: ${err.message}` });
         }
       } finally {
+        clock.clearTimeout(expiry);
         client.off('error', onError);
         // Kapanan oturumun açık transaction'ı sunucuda geri alınır.
         if (broken || !clean || cancelSent) discard();

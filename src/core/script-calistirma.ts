@@ -15,12 +15,14 @@ export type ClientMessage =
   | { type: 'run'; target: Target; script: string }
   | { type: 'commit' }
   | { type: 'rollback' }
+  /** Karar süresini baştan başlatır. */
+  | { type: 'uzat' }
   | { type: 'iptal' };
 
 export function parseClientMessage(raw: unknown): ClientMessage | null {
   if (typeof raw !== 'object' || raw === null) return null;
   const m = raw as Record<string, unknown>;
-  if (m.type === 'commit' || m.type === 'rollback' || m.type === 'iptal') return { type: m.type };
+  if (m.type === 'commit' || m.type === 'rollback' || m.type === 'uzat' || m.type === 'iptal') return { type: m.type };
   if (m.type !== 'run' || typeof m.script !== 'string') return null;
   const target = m.target as Record<string, unknown> | null | undefined;
   if (typeof target?.connectionId !== 'string' || typeof target.database !== 'string') return null;
@@ -35,15 +37,20 @@ export interface Preview {
   satirlar: (string | null)[][];
 }
 
-/** Çalıştırmanın sonu. `hata`: çalıştırma başlayamadı ya da commit başarısız oldu. */
-export type RunResult = 'commit' | 'rollback' | 'iptal' | 'hata';
+/**
+ * Çalıştırmanın sonu. `sureDoldu`: Karar süresi doldu, transaction geri alındı. `hata`: çalıştırma
+ * başlayamadı, bağlantı koptu ya da commit başarısız oldu.
+ */
+export type RunResult = 'commit' | 'rollback' | 'sureDoldu' | 'iptal' | 'hata';
 
 export type ServerEvent =
   | { type: 'started'; i: number }
   | { type: 'done'; i: number; rowCount: number | null; ms: number; komut: string; onizleme?: Preview }
   | { type: 'error'; i: number; sqlstate: string | null; mesaj: string; satir: number; sutun: number; bas: number; bit: number; ms: number }
-  /** Script bitti, transaction açık; hatadan sonra commit edilemez. */
-  | { type: 'kararBekleniyor'; commitEdilebilir: boolean }
+  /** Script bitti, transaction açık; hatadan sonra commit edilemez. `kalanMs`: Karar süresi. */
+  | { type: 'kararBekleniyor'; commitEdilebilir: boolean; kalanMs: number }
+  /** "Uzat" sunucuda işlendi; Karar süresi baştan başladı. */
+  | { type: 'uzatildi'; kalanMs: number }
   | { type: 'bitti'; sonuc: RunResult; mesaj?: string }
   /** İstek reddedildi; çalıştırma sürüyor. */
   | { type: 'uyari'; tur: 'commitReddedildi' | 'mesgul' | 'gecersizIstek'; mesaj: string };
@@ -72,8 +79,13 @@ export interface RunView {
   ifadeler: StatementView[];
   evre: RunPhase;
   commitEdilebilir: boolean;
-  /** İstemci commit/rollback/iptal gönderdi, yanıt bekleniyor. */
-  bekleyenIstek: 'commit' | 'rollback' | 'iptal' | null;
+  /** İstemci commit/rollback/uzat/iptal gönderdi, yanıt bekleniyor. */
+  bekleyenIstek: 'commit' | 'rollback' | 'uzat' | 'iptal' | null;
+  /**
+   * Sunucunun bildirdiği kalan Karar süresi; `surum` her bildirimde artar ki arayüz geri sayımı
+   * o andan yeniden kursun. Yetkili sayaç sunucudadır.
+   */
+  kararSuresi?: { kalanMs: number; surum: number };
   sonuc?: RunResult;
   mesaj?: string;
   /** Son reddedilen istek ya da uyarı. */
@@ -116,7 +128,9 @@ export function applyEvent(view: RunView, event: ServerEvent): RunView {
       return { ...next, ifadeler: next.ifadeler.map((s) => (s.durum === 'sirada' ? { ...s, durum: 'calistirilmadi' } : s)) };
     }
     case 'kararBekleniyor':
-      return { ...view, evre: 'karar', commitEdilebilir: event.commitEdilebilir };
+      return { ...view, evre: 'karar', commitEdilebilir: event.commitEdilebilir, kararSuresi: nextTimer(view, event.kalanMs) };
+    case 'uzatildi':
+      return { ...view, bekleyenIstek: null, kararSuresi: nextTimer(view, event.kalanMs) };
     case 'bitti':
       return {
         ...view,
@@ -130,5 +144,24 @@ export function applyEvent(view: RunView, event: ServerEvent): RunView {
       };
     case 'uyari':
       return { ...view, bekleyenIstek: null, uyari: event.mesaj };
+  }
+}
+
+function nextTimer(view: RunView, kalanMs: number): RunView['kararSuresi'] {
+  return { kalanMs, surum: (view.kararSuresi?.surum ?? 0) + 1 };
+}
+
+/**
+ * Editörün hedefi değiştirilebilir mi; değiştirilemiyorsa neden. Açık transaction'ın hedefi
+ * başlıkta görünenle aynı kalmalı: script çalışırken ve karar beklenirken hedef kilitlidir.
+ */
+export function targetLock(view: RunView | null): string | null {
+  switch (view?.evre) {
+    case 'karar':
+      return 'Commit/rollback kararı bekleniyor';
+    case 'calisiyor':
+      return 'Script çalışıyor';
+    default:
+      return null;
   }
 }

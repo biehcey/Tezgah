@@ -1,12 +1,17 @@
 import pg from 'pg';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { ServerEvent } from '../core/script-calistirma';
+import { createFakeClock, type FakeClock } from './test/sahte-saat';
 import { describePg, pgUrl, startTestServer, type TestServer, type TestSocket } from './test/sunucu';
+
+const DK = 60_000;
 
 let t: TestServer;
 let ws: TestSocket;
+let clock: FakeClock;
 beforeEach(async () => {
-  t = await startTestServer();
+  clock = createFakeClock();
+  t = await startTestServer({ clock });
   ws = await t.socket();
 });
 afterEach(async () => {
@@ -27,6 +32,11 @@ describe('script çalıştırma: istek doğrulama', () => {
     ws.send({ type: 'run', target: { connectionId: 'yok', database: 'postgres' }, script: 'SELECT 1' });
     expect(await ws.waitFor('bitti')).toMatchObject({ sonuc: 'hata', mesaj: 'Bağlantı bulunamadı' });
     expect(sequence(ws.events)).toEqual(['bitti']);
+  });
+
+  it('karar beklenmezken uzat reddedilir', async () => {
+    ws.send({ type: 'uzat' });
+    expect(await ws.waitFor('uyari')).toMatchObject({ tur: 'gecersizIstek' });
   });
 
   it('çalıştırma yokken commit reddedilir', async () => {
@@ -63,7 +73,7 @@ describePg('script çalıştırma: Transaction modu, gerçek Postgres', () => {
     connectionId = res.body.connection.id;
   });
 
-  const run = (script: string) => ws.send({ type: 'run', target: { connectionId, database: real.database }, script });
+  const run = (script: string, id = connectionId) => ws.send({ type: 'run', target: { connectionId: id, database: real.database }, script });
   const ids = async () => (await admin.query<{ id: number }>(`SELECT id FROM ${TABLE} ORDER BY id`)).rows.map((r) => r.id);
 
   /** Tezgah'ın sunucudaki oturumlarının durumları. */
@@ -73,6 +83,17 @@ describePg('script çalıştırma: Transaction modu, gerçek Postgres', () => {
     );
     return rows.map((r) => r.state);
   }
+
+  /** Karar bekleyen Tezgah oturumunun son sorgusu. */
+  async function waitingQuery(): Promise<string | undefined> {
+    const { rows } = await admin.query<{ query: string }>(
+      `SELECT query FROM pg_stat_activity WHERE application_name = 'Tezgah' AND state = 'idle in transaction'`,
+    );
+    return rows[0]?.query;
+  }
+
+  /** Sunucudan gelebilecek olayların ulaşması için kısa bir süre tanır. */
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 200));
 
   async function eventually(check: () => Promise<boolean>) {
     for (let i = 0; i < 100; i++) {
@@ -195,5 +216,102 @@ describePg('script çalıştırma: Transaction modu, gerçek Postgres', () => {
     ws.events.length = 0;
     run('SELECT 2');
     expect(await ws.waitFor('kararBekleniyor')).toMatchObject({ commitEdilebilir: true });
+  });
+
+  describe('Karar süresi', () => {
+    it('karar 30 dk beklenir; sunucudaki yedek zaman aşımı BEGIN ile süre + 1 dk', async () => {
+      run('SHOW idle_in_transaction_session_timeout');
+      expect(await ws.waitFor('kararBekleniyor')).toMatchObject({ kalanMs: 30 * DK });
+      expect((await ws.waitFor('done')).onizleme?.satirlar).toEqual([['31min']]);
+    });
+
+    it('prod hedefte süre 5 dk, yedek zaman aşımı 6 dk', async () => {
+      const prod = await t.api('POST', '/api/baglantilar', { name: 'Prod', envTag: 'prod', ...real });
+      run('SHOW idle_in_transaction_session_timeout', prod.body.connection.id);
+      expect(await ws.waitFor('kararBekleniyor')).toMatchObject({ kalanMs: 5 * DK });
+      expect((await ws.waitFor('done')).onizleme?.satirlar).toEqual([['6min']]);
+    });
+
+    it('süre dolunca transaction geri alınır ve client pool’a döner; geç gelen commit reddedilir', async () => {
+      run(`INSERT INTO ${TABLE} VALUES (1)`);
+      await ws.waitFor('kararBekleniyor');
+      clock.advance(30 * DK - 1);
+      await settle();
+      expect(ws.events.some((e) => e.type === 'bitti')).toBe(false);
+
+      clock.advance(1);
+      expect(await ws.waitFor('bitti')).toEqual({ type: 'bitti', sonuc: 'sureDoldu', mesaj: 'Süre doldu; transaction geri alındı' });
+      expect(await ids()).toEqual([]);
+      await eventually(async () => (await tezgahStates()).every((s) => s === 'idle'));
+
+      ws.send({ type: 'commit' });
+      expect(await ws.waitFor('uyari')).toMatchObject({ tur: 'commitReddedildi', mesaj: expect.stringContaining('Süre doldu') });
+      expect(await ids()).toEqual([]);
+    });
+
+    it('uzat sunucuya SELECT 1 gönderir ve süreyi baştan başlatır', async () => {
+      run(`INSERT INTO ${TABLE} VALUES (1)`);
+      await ws.waitFor('kararBekleniyor');
+      clock.advance(29 * DK);
+      ws.send({ type: 'uzat' });
+      expect(await ws.waitFor('uzatildi')).toEqual({ type: 'uzatildi', kalanMs: 30 * DK });
+      expect(await waitingQuery()).toBe('SELECT 1');
+
+      clock.advance(29 * DK);
+      await settle();
+      expect(ws.events.some((e) => e.type === 'bitti')).toBe(false);
+      ws.send({ type: 'commit' });
+      expect(await ws.waitFor('bitti')).toMatchObject({ sonuc: 'commit' });
+      expect(await ids()).toEqual([1]);
+    });
+
+    it('hatadan sonra da uzatılabilir; rollback çalışır', async () => {
+      run(`INSERT INTO ${TABLE} VALUES (1);\nSELECT 1/0`);
+      expect(await ws.waitFor('kararBekleniyor')).toMatchObject({ commitEdilebilir: false });
+      clock.advance(29 * DK);
+      ws.send({ type: 'uzat' });
+      expect(await ws.waitFor('uzatildi')).toEqual({ type: 'uzatildi', kalanMs: 30 * DK });
+      clock.advance(29 * DK);
+      ws.send({ type: 'rollback' });
+      expect(await ws.waitFor('bitti')).toMatchObject({ sonuc: 'rollback' });
+      await eventually(async () => (await tezgahStates()).every((s) => s === 'idle'));
+    });
+
+    it('zamanlayıcı geç kalsa da (uyku) süresi geçmiş commit reddedilir ve transaction geri alınır', async () => {
+      run(`INSERT INTO ${TABLE} VALUES (1)`);
+      await ws.waitFor('kararBekleniyor');
+      clock.jump(30 * DK);
+      ws.send({ type: 'commit' });
+      expect(await ws.waitFor('uyari')).toMatchObject({ tur: 'commitReddedildi', mesaj: expect.stringContaining('Süre doldu') });
+      expect(await ws.waitFor('bitti')).toMatchObject({ sonuc: 'sureDoldu' });
+      expect(await ids()).toEqual([]);
+    });
+
+    it('süresi geçmişken uzat da reddedilir; transaction geri alınır', async () => {
+      run(`INSERT INTO ${TABLE} VALUES (1)`);
+      await ws.waitFor('kararBekleniyor');
+      clock.jump(30 * DK);
+      ws.send({ type: 'uzat' });
+      expect(await ws.waitFor('bitti')).toMatchObject({ sonuc: 'sureDoldu' });
+      expect(ws.events.some((e) => e.type === 'uzatildi')).toBe(false);
+    });
+
+    it('oturum sunucuda zaman aşımına uğrarsa client atılır ve nedeni söylenir', async () => {
+      // Yedek zaman aşımını kısaltır: dizüstü uykudayken uzak sunucunun oturumu kapatmasının benzeri.
+      run(`INSERT INTO ${TABLE} VALUES (1);
+SET LOCAL idle_in_transaction_session_timeout = 300`);
+      await ws.waitFor('kararBekleniyor');
+      expect(await ws.waitFor('bitti')).toEqual({
+        type: 'bitti',
+        sonuc: 'hata',
+        mesaj: 'Oturum sunucuda zaman aşımına uğradı; transaction geri alındı',
+      });
+      await eventually(async () => (await tezgahStates()).length === 0);
+      expect(await ids()).toEqual([]);
+      // Ölen client pool'a dönmedi: aynı hedefte yeni çalıştırma sorunsuz.
+      ws.events.length = 0;
+      run('SELECT 1');
+      expect(await ws.waitFor('kararBekleniyor')).toMatchObject({ commitEdilebilir: true });
+    });
   });
 });

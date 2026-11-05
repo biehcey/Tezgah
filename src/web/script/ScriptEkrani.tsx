@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { isProd, type Connection } from '../../core/baglanti';
 import { splitStatements } from '../../core/ifade-bolme';
+import { decisionStatus, formatRemaining, startDecision, type DecisionPhase, type DecisionTimer } from '../../core/karar-suresi';
 import {
   PREVIEW_ROWS,
   applyEvent,
   startRunView,
+  targetLock,
   type RunView,
   type StatementStatus,
   type StatementView,
@@ -18,6 +20,8 @@ interface Props {
   target: { connection: Connection; database: string } | null;
   /** "hedefi değiştir ▾": hızlı geçiş paletini açar. */
   onChangeTarget: () => void;
+  /** Hedef kilidinin nedeni değişti (`null`: hedef değiştirilebilir); ekran kapanınca `null`. */
+  onTargetLockChange?: (reason: string | null) => void;
 }
 
 /** Aynı satırda başlayan birden çok ifadede satır işareti en önemli durumu gösterir. */
@@ -30,16 +34,24 @@ const NO_MARKS: EditorMarks = { lines: new Map(), error: null };
  * sağda karar kartı ve ifade kartları. prod hedefte başlık kırmızımsıdır; uygulamanın kırmızı
  * çerçevesi kökte verilir.
  */
-export function ScriptEkrani({ target, onChangeTarget }: Props) {
+export function ScriptEkrani({ target, onChangeTarget, onTargetLockChange }: Props) {
   const api = useApi();
   const prod = target !== null && isProd(target.connection.envTag);
   const [script, setScript] = useState('');
   const [run, setRun] = useState<RunView | null>(null);
   const handle = useRef<ScriptRunHandle | null>(null);
+  /** Sunucunun son bildirdiği kalan süreden kurulan yerel geri sayım; yetkili sayaç sunucudadır. */
+  const [deadline, setDeadline] = useState<DecisionTimer | null>(null);
   const editor = useRef<ScriptEditoruHandle>(null);
 
   // Ekran kapanırsa açık transaction sunucuda geri alınır (ADR-0002).
   useEffect(() => () => handle.current?.close(), []);
+
+  const lock = targetLock(run);
+  useEffect(() => {
+    onTargetLockChange?.(lock);
+  }, [lock, onTargetLockChange]);
+  useEffect(() => () => onTargetLockChange?.(null), [onTargetLockChange]);
 
   const running = run?.evre === 'calisiyor';
   const busy = run !== null && run.evre !== 'bitti';
@@ -49,12 +61,14 @@ export function ScriptEkrani({ target, onChangeTarget }: Props) {
     if (!target || busy) return;
     handle.current?.close();
     setRun(startRunView(script));
-    handle.current = api.runScript({ connectionId: target.connection.id, database: target.database }, script, (event) =>
-      setRun((current) => (current ? applyEvent(current, event) : current)),
-    );
+    setDeadline(null);
+    handle.current = api.runScript({ connectionId: target.connection.id, database: target.database }, script, (event) => {
+      setRun((current) => (current ? applyEvent(current, event) : current));
+      if (event.type === 'kararBekleniyor' || event.type === 'uzatildi') setDeadline(startDecision(event.kalanMs, Date.now()));
+    });
   }
 
-  function request(type: 'commit' | 'rollback' | 'iptal') {
+  function request(type: 'commit' | 'rollback' | 'uzat' | 'iptal') {
     handle.current?.send({ type });
     setRun((current) => (current ? { ...current, bekleyenIstek: type, uyari: undefined } : current));
   }
@@ -121,7 +135,7 @@ export function ScriptEkrani({ target, onChangeTarget }: Props) {
           </div>
         </div>
         <aside aria-label="Çalıştırma" className="calistirma-sutunu">
-          <KararKarti run={run} onRequest={request} />
+          <KararKarti run={run} deadline={run?.evre === 'karar' ? deadline : null} onRequest={request} />
           <div role="tablist" className="sekmeler">
             <button type="button" role="tab" aria-selected="true" className="sekme secili">
               Log
@@ -144,7 +158,28 @@ export function ScriptEkrani({ target, onChangeTarget }: Props) {
   );
 }
 
-function KararKarti({ run, onRequest }: { run: RunView | null; onRequest: (type: 'commit' | 'rollback') => void }) {
+/** Geri sayımı saniyede bir yeniler; süre yoksa `null`. */
+function useCountdown(deadline: DecisionTimer | null): { kalanMs: number; evre: DecisionPhase } | null {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!deadline) return;
+    setNow(Date.now());
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [deadline]);
+  return deadline ? decisionStatus(deadline, now) : null;
+}
+
+function KararKarti({
+  run,
+  deadline,
+  onRequest,
+}: {
+  run: RunView | null;
+  deadline: DecisionTimer | null;
+  onRequest: (type: 'commit' | 'rollback' | 'uzat') => void;
+}) {
+  const remaining = useCountdown(deadline);
   let body;
   if (!run) body = <p className="soluk kucuk">Henüz çalıştırma yok.</p>;
   else if (run.evre === 'calisiyor') {
@@ -155,12 +190,23 @@ function KararKarti({ run, onRequest }: { run: RunView | null; onRequest: (type:
       </p>
     );
   } else if (run.evre === 'karar') {
-    const pending = run.bekleyenIstek !== null;
+    // Süre dolunca sunucunun geri almasını beklerken düğmeler kapalı.
+    const expired = remaining?.evre === 'doldu';
+    const pending = run.bekleyenIstek !== null || expired;
+    const counting = remaining !== null && remaining.evre !== 'bekliyor';
     body = (
       <>
         <p className="karar-sorusu">
           {run.commitEdilebilir ? 'Script bitti. Commit ya da rollback?' : 'Hata alındı; transaction yalnızca geri alınabilir.'}
         </p>
+        {counting && (
+          <p className="geri-sayim kucuk">
+            {expired ? 'Süre doldu; transaction geri alınıyor…' : 'Karar süresi doluyor:'}{' '}
+            <span role="timer" aria-label="Kalan karar süresi">
+              {formatRemaining(remaining.kalanMs)}
+            </span>
+          </p>
+        )}
         <div className="karar-dugmeleri">
           {run.commitEdilebilir && (
             <button type="button" className="birincil" onClick={() => onRequest('commit')} disabled={pending}>
@@ -170,6 +216,11 @@ function KararKarti({ run, onRequest }: { run: RunView | null; onRequest: (type:
           <button type="button" onClick={() => onRequest('rollback')} disabled={pending}>
             Rollback
           </button>
+          {counting && (
+            <button type="button" onClick={() => onRequest('uzat')} disabled={pending}>
+              Uzat
+            </button>
+          )}
         </div>
       </>
     );
@@ -196,6 +247,8 @@ function resultText(run: RunView): string {
       return 'Geri alındı (rollback)';
     case 'iptal':
       return 'İptal edildi; transaction geri alındı';
+    case 'sureDoldu':
+      return run.mesaj ?? 'Süre doldu; transaction geri alındı';
     default:
       return run.mesaj ?? 'Çalıştırma başarısız';
   }

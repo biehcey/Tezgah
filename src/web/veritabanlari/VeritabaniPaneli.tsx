@@ -17,6 +17,8 @@ interface Props {
   /** Bağlantının sunucu oturumu; bağlanılmadıysa `undefined`. */
   session: ConnectionSession | undefined;
   target: Target | null;
+  /** Hedef değiştirilemiyorsa nedeni; satırlar pasif görünür ama odaklanabilir kalır. */
+  targetLock?: string | null;
   /** Hızlı geçişte Alt+Enter: bu veritabanının satırı odaklanır. */
   reveal?: string | null;
   /** Gösterilecek satır odaklandı (ya da yok); gösterme bir kez yapılır. */
@@ -40,6 +42,7 @@ export function VeritabaniPaneli({
   connection,
   session,
   target,
+  targetLock = null,
   reveal = null,
   onRevealed,
   onConnect,
@@ -110,7 +113,9 @@ export function VeritabaniPaneli({
         type="button"
         className="veritabani-adi"
         aria-current={isTarget(database) ? 'true' : undefined}
-        onClick={() => onSelectTarget(database)}
+        aria-disabled={targetLock ? true : undefined}
+        title={targetLock ? `Hedef değiştirilemez: ${targetLock}` : undefined}
+        onClick={() => !targetLock && onSelectTarget(database)}
       >
         {database}
       </button>

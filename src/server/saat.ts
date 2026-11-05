@@ -1,11 +1,14 @@
 /** Zamanlayıcılar; testlerde sahte saatle değiştirilir. */
 export interface Clock {
+  /** Şimdiki zaman (ms). */
+  now(): number;
   setTimeout(fn: () => void, ms: number): unknown;
   clearTimeout(handle: unknown): void;
 }
 
 /** Gerçek saat; zamanlayıcılar süreci açık tutmaz. */
 export const systemClock: Clock = {
+  now: () => Date.now(),
   setTimeout(fn, ms) {
     const handle = setTimeout(fn, ms);
     handle.unref();

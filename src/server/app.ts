@@ -65,8 +65,9 @@ export async function startServer(options: ServerOptions): Promise<TezgahServer>
   const folderRoutes = createFolderRoutes({ store });
   // Oturumluk şifreler yalnızca bu süreçte; diske yazılmaz.
   const sessionPasswords = createSessionPasswords();
+  const clock = options.clock ?? systemClock;
   // Pool'lar tembel: açılışta hiçbir sunucuya bağlanılmaz.
-  const pools = createPoolManager({ keychain: options.keychain, sessionPasswords, clock: options.clock ?? systemClock, log: options.log });
+  const pools = createPoolManager({ keychain: options.keychain, sessionPasswords, clock, log: options.log });
   const connectionRoutes = createConnectionRoutes({
     store,
     keychain: options.keychain,
@@ -77,7 +78,7 @@ export async function startServer(options: ServerOptions): Promise<TezgahServer>
   });
   const databaseRoutes = createDatabaseRoutes({ store, pools });
   // Her `/ws` bağlantısı kendi çalıştırmasını taşır; koparsa transaction geri alınır (ADR-0002).
-  const attachScriptRunner = createScriptRunner({ store, pools, log: options.log });
+  const attachScriptRunner = createScriptRunner({ store, pools, clock, log: options.log });
   wss.on('connection', attachScriptRunner);
 
   const connectionTestRoutes = createConnectionTestRoutes({ store, keychain: options.keychain, log: options.log });

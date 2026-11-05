@@ -1,10 +1,11 @@
-import { screen, within } from '@testing-library/react';
+import { act, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { editorCursorLine, editorScript, gutterMarks, setEditorScript } from '../test/eylemler';
 import { connection, createFakeApi, createFakeScriptRuns, renderWithApi } from '../test/sahte-api';
 import { ScriptEkrani } from './ScriptEkrani';
 
+const DK = 60_000;
 const SCRIPT = 'INSERT INTO t VALUES (1);\nSELECT nope FROM t;\nDELETE FROM t';
 
 function setup({ withTarget = true } = {}) {
@@ -131,7 +132,7 @@ describe('Script ekranı: canlı olaylar', () => {
 describe('Script ekranı: karar kartı', () => {
   it('script bitince Commit ve Rollback sunulur; commit sonucu gösterilir', async () => {
     const { user, run } = await startRun('SELECT 1');
-    run.emit({ type: 'done', i: 0, rowCount: 1, ms: 1, komut: 'SELECT' }, { type: 'kararBekleniyor', commitEdilebilir: true });
+    run.emit({ type: 'done', i: 0, rowCount: 1, ms: 1, komut: 'SELECT' }, { type: 'kararBekleniyor', commitEdilebilir: true, kalanMs: 30 * DK });
     expect(screen.queryByRole('button', { name: '■ İptal' })).not.toBeInTheDocument();
     await user.click(within(decision()).getByRole('button', { name: 'Commit' }));
     expect(run.sent).toEqual(['commit']);
@@ -145,7 +146,7 @@ describe('Script ekranı: karar kartı', () => {
     const { user, run } = await startRun('SELECT 1/0');
     run.emit(
       { type: 'error', i: 0, ms: 1, sqlstate: '22012', mesaj: 'division by zero', satir: 1, sutun: 1, bas: 0, bit: 10 },
-      { type: 'kararBekleniyor', commitEdilebilir: false },
+      { type: 'kararBekleniyor', commitEdilebilir: false, kalanMs: 30 * DK },
     );
     expect(within(decision()).queryByRole('button', { name: 'Commit' })).not.toBeInTheDocument();
     expect(within(decision()).getByText(/yalnızca geri alınabilir/)).toBeInTheDocument();
@@ -164,17 +165,74 @@ describe('Script ekranı: karar kartı', () => {
 
   it('ekran kapanınca çalıştırma kapatılır (transaction geri alınır)', async () => {
     const { run, view } = await startRun('SELECT 1');
-    run.emit({ type: 'kararBekleniyor', commitEdilebilir: true });
+    run.emit({ type: 'kararBekleniyor', commitEdilebilir: true, kalanMs: 30 * DK });
     view.unmount();
     expect(run.closed).toBe(true);
   });
 
   it('çalıştırma bitince script düzenlenirse satır işaretleri kalkar, log kalır', async () => {
     const { run } = await startRun('SELECT 1');
-    run.emit({ type: 'done', i: 0, rowCount: 1, ms: 1, komut: 'SELECT' }, { type: 'kararBekleniyor', commitEdilebilir: true }, { type: 'bitti', sonuc: 'rollback' });
+    run.emit({ type: 'done', i: 0, rowCount: 1, ms: 1, komut: 'SELECT' }, { type: 'kararBekleniyor', commitEdilebilir: true, kalanMs: 30 * DK }, { type: 'bitti', sonuc: 'rollback' });
     setEditorScript('SELECT 2');
     expect(editorScript()).toBe('SELECT 2');
     expect(gutterMarks()).toEqual({});
     expect(cards()).toHaveLength(1);
+  });
+});
+
+describe('Script ekranı: Karar süresi', () => {
+  beforeEach(() => {
+    // Yalnızca geri sayımın saati sahte; userEvent'in setTimeout'u gerçek kalır.
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const countdown = () => within(decision()).queryByRole('timer');
+  const tick = (ms: number) => act(() => vi.advanceTimersByTime(ms));
+
+  async function waiting(kalanMs = 5 * DK) {
+    const ctx = await startRun('INSERT INTO t VALUES (1)');
+    ctx.run.emit({ type: 'done', i: 0, rowCount: 1, ms: 1, komut: 'INSERT' }, { type: 'kararBekleniyor', commitEdilebilir: true, kalanMs });
+    return ctx;
+  }
+
+  it('son dakikaya kadar geri sayım ve Uzat yok; son dakikada görünür ve işler', async () => {
+    await waiting();
+    expect(countdown()).not.toBeInTheDocument();
+    expect(within(decision()).queryByRole('button', { name: 'Uzat' })).not.toBeInTheDocument();
+
+    tick(4 * DK);
+    expect(countdown()).toHaveTextContent('1:00');
+    expect(within(decision()).getByRole('button', { name: 'Uzat' })).toBeEnabled();
+    tick(18_000);
+    expect(countdown()).toHaveTextContent('0:42');
+  });
+
+  it('Uzat sunucuya gönderilir; sunucu süreyi yenileyince geri sayım kalkar', async () => {
+    const { user, run } = await waiting();
+    tick(4.5 * DK);
+    await user.click(within(decision()).getByRole('button', { name: 'Uzat' }));
+    expect(run.sent).toEqual(['uzat']);
+    expect(within(decision()).getByRole('button', { name: 'Uzat' })).toBeDisabled();
+
+    run.emit({ type: 'uzatildi', kalanMs: 5 * DK });
+    expect(countdown()).not.toBeInTheDocument();
+    tick(4 * DK);
+    expect(countdown()).toHaveTextContent('1:00');
+  });
+
+  it('süre dolunca düğmeler devre dışı; sunucu geri alınca mesaj gösterilir, log korunur', async () => {
+    const { run } = await waiting();
+    tick(5 * DK);
+    for (const name of ['Commit', 'Rollback', 'Uzat']) {
+      expect(within(decision()).getByRole('button', { name })).toBeDisabled();
+    }
+    run.emit({ type: 'bitti', sonuc: 'sureDoldu', mesaj: 'Süre doldu; transaction geri alındı' });
+    expect(within(decision()).getByText('Süre doldu; transaction geri alındı')).toBeInTheDocument();
+    expect(within(decision()).queryByRole('button')).not.toBeInTheDocument();
+    expect(cards()).toHaveLength(1);
+    expect(cards()[0]).toHaveTextContent('INSERT');
   });
 });
