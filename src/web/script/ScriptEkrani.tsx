@@ -83,6 +83,12 @@ export function ScriptEkrani({ target, onChangeTarget, onTargetLockChange }: Pro
   /** Sunucunun son bildirdiği kalan süreden kurulan yerel geri sayım; yetkili sayaç sunucudadır. */
   const [deadline, setDeadline] = useState<DecisionTimer | null>(null);
   const editor = useRef<ScriptEditoruHandle>(null);
+  const [folderError, setFolderError] = useState<string | null>(null);
+
+  function openHistoryFolder() {
+    setFolderError(null);
+    api.openRunHistoryFolder().catch((err: unknown) => setFolderError(`Kayıt klasörü açılamadı: ${(err as Error).message}`));
+  }
 
   // Ekran kapanırsa açık transaction sunucuda geri alınır (ADR-0002).
   useEffect(() => () => handle.current?.close(), []);
@@ -166,6 +172,14 @@ export function ScriptEkrani({ target, onChangeTarget, onTargetLockChange }: Pro
         <button type="button" className="hedef-degistir" onClick={onChangeTarget}>
           hedefi değiştir ▾
         </button>
+        <button type="button" className="kayit-klasoru" onClick={openHistoryFolder}>
+          Çalıştırma kayıtları klasörünü aç
+        </button>
+        {folderError && (
+          <span role="alert" className="uyari kucuk">
+            {folderError}
+          </span>
+        )}
       </section>
       {analysis.mod === 'autocommit' && (
         <div role="note" aria-label="Autocommit uyarısı" className="uyari-seridi autocommit">
@@ -303,6 +317,11 @@ function KararKarti({
       {run?.uyari && (
         <p role="alert" className="uyari kucuk">
           {run.uyari}
+        </p>
+      )}
+      {run?.kayitUyarisi && (
+        <p role="status" className="uyari kucuk">
+          ⚠ {run.kayitUyarisi}
         </p>
       )}
     </section>

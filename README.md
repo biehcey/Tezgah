@@ -12,6 +12,12 @@ npx tezgah --no-open  # yalnızca adresi terminale yazar
 
 Sunucu yalnızca `127.0.0.1`'de dinler. Her açılışta rastgele bir erişim anahtarı üretilir; tarayıcı terminalde yazan `http://127.0.0.1:<port>/?t=<anahtar>` adresiyle açılır. Tezgah yeniden başlatıldığında eski sekme geçersiz olur; terminaldeki yeni adresi açın.
 
+## Çalıştırma kayıtları
+
+Her script çalıştırması (hatalı ve iptal edilenler dahil) yapılandırma dizinindeki `history/` altında aylık bir JSON Lines dosyasına (`2026-11.jsonl`) yazılır: script metni, hedef, mod, zamanlar, sonuç ve ifade başına özet. Satır verisi yazılmaz. Dizin macOS'ta `~/Library/Application Support/Tezgah/history`, Windows'ta `%APPDATA%\Tezgah\history`; script ekranındaki "Çalıştırma kayıtları klasörünü aç" bağlantısı onu açar.
+
+Kayıtlar düz metindir ve script'teki sırlar (ör. `CREATE ROLE … PASSWORD '…'`) maskelenmez. Dosyalar POSIX'te yalnızca kullanıcının okuyabileceği izinle (`0600`) oluşturulur. Kayıtlar otomatik silinmez; aylık dosyalar elle silinebilir.
+
 ## Geliştirme
 
 ```sh

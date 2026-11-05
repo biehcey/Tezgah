@@ -1,7 +1,8 @@
 import { performance } from 'node:perf_hooks';
 import pg from 'pg';
 import type { WebSocket } from 'ws';
-import type { Connection } from '../core/baglanti';
+import { isProd, type Connection } from '../core/baglanti';
+import type { RecordResult, StatementSummary } from '../core/calistirma-kaydi';
 import { errorLocation } from '../core/hata-konumu';
 import {
   commitRequest,
@@ -24,6 +25,7 @@ import {
 } from '../core/script-calistirma';
 import type { Target } from '../core/veritabani-secimi';
 import type { SettingsStore } from './ayar-deposu';
+import type { RunHistory } from './calistirma-kayitlari';
 import { TargetError, catalogQuery, type PoolManager } from './havuzlar';
 import type { Clock } from './saat';
 
@@ -32,6 +34,8 @@ export interface ScriptRunnerDeps {
   pools: PoolManager;
   /** Karar süresinin yetkili zamanlayıcısı. */
   clock: Clock;
+  /** Her çalıştırma (bağlantısı bulunan) bir Çalıştırma kaydına yazılır. */
+  history: RunHistory;
   log: (line: string) => void;
 }
 
@@ -70,7 +74,13 @@ interface Run {
   /** Karar beklenirken işleyen Karar süresi. */
   timer?: DecisionTimer;
   commitAllowed: boolean;
+  /** Çalışan ifadelerin kayıt özetleri; satır verisi içermez. */
+  ifadeler: StatementSummary[];
 }
+
+type Finished = Extract<ServerEvent, { type: 'bitti' }>;
+/** Çalıştırmayı bitirir: kaydın `bitti` satırını yazar, sonra istemciye `bitti` gönderir. */
+type Finish = (event: Omit<Finished, 'type'>, sonuc: RecordResult) => Promise<void>;
 
 type StatementResult =
   | { ok: true; rowCount: number | null; komut: string; onizleme?: Preview }
@@ -86,7 +96,7 @@ type StatementResult =
  * - Autocommit modu: ifadeler transaction'sız, sırayla ve her biri anında kalıcı çalışır; ilk
  *   hatada durulur; karar beklenmez. Soket koparsa çalışan ifade iptal edilir, kalanlar çalışmaz.
  */
-export function createScriptRunner({ store, pools, clock, log }: ScriptRunnerDeps) {
+export function createScriptRunner({ store, pools, clock, history, log }: ScriptRunnerDeps) {
   return function attach(ws: WebSocket) {
     let run: Run | null = null;
     /** Bu soketin son çalıştırması Karar süresi dolarak bitti; geç gelen commit buna göre reddedilir. */
@@ -129,7 +139,7 @@ export function createScriptRunner({ store, pools, clock, log }: ScriptRunnerDep
             const mesaj = blocked.satir === null ? blocked.mesaj : `Satır ${blocked.satir}: ${blocked.mesaj}`;
             return send({ type: 'bitti', sonuc: 'reddedildi', mesaj });
           }
-          const current: Run = { phase: 'calisiyor', stopping: null, commitAllowed: false };
+          const current: Run = { phase: 'calisiyor', stopping: null, commitAllowed: false, ifadeler: [] };
           run = current;
           // Engellenmeyen script Karışık değildir.
           execute(current, message.target, message.script, analysis.mod as Exclude<RunMode, 'karisik'>)
@@ -172,19 +182,45 @@ export function createScriptRunner({ store, pools, clock, log }: ScriptRunnerDep
 
     async function execute(current: Run, target: Target, script: string, mode: Exclude<RunMode, 'karisik'>) {
       const connection = (await store.read()).connections.find((c) => c.id === target.connectionId);
+      // Hedefi olmayan çalıştırma kaydedilmez: hiçbir şey çalışmadı.
       if (!connection) return send({ type: 'bitti', sonuc: 'hata', mesaj: 'Bağlantı bulunamadı' });
+      const recorder = history.begin({
+        script,
+        hedef: { baglantiId: connection.id, ad: connection.name, veritabani: target.database, ortam: connection.envTag },
+        mod: mode,
+        deneme: false,
+        // prod hedef şimdilik her zaman salt okunur açılır (pool `default_transaction_read_only`).
+        yazmaKilidi: isProd(connection.envTag) ? 'salt-okunur' : null,
+      });
+      // Kayıt yazılamazsa çalıştırma sürer; uyarı bir kez gider.
+      let warned = false;
+      const recordFailed = () => {
+        if (warned) return;
+        warned = true;
+        warn('kayitYazilamadi', 'Çalıştırma kaydı yazılamadı');
+      };
+      void recorder.started.then((ok) => ok || recordFailed());
+      let finished = false;
+      const finish: Finish = async (event, sonuc) => {
+        finished = true;
+        if (!(await recorder.finish({ sonuc, mesaj: event.mesaj, ifadeler: current.ifadeler }))) recordFailed();
+        send({ type: 'bitti', ...event });
+      };
       try {
         await pools.withClient(connection, target.database, (client, discard) => {
           const session = { client, discard, connection, database: target.database };
-          return mode === 'autocommit' ? inAutocommit(current, session, script) : inTransaction(current, session, script);
+          return mode === 'autocommit' ? inAutocommit(current, session, script, finish) : inTransaction(current, session, script, finish);
         });
       } catch (err) {
-        if (!(err instanceof TargetError)) throw err;
-        send({ type: 'bitti', sonuc: 'hata', mesaj: err.failure.mesaj });
+        // `bitti` gitti; ikinci bir sonuç gönderilmez.
+        if (finished) return log(`Script çalıştırma hatası: ${String(err)}`);
+        if (err instanceof TargetError) return finish({ sonuc: 'hata', mesaj: err.failure.mesaj }, 'hata');
+        log(`Script çalıştırma hatası: ${String(err)}`);
+        await finish({ sonuc: 'hata', mesaj: 'Beklenmeyen bir hata oluştu' }, 'hata');
       }
     }
 
-    async function inTransaction(current: Run, session: Session, script: string) {
+    async function inTransaction(current: Run, session: Session, script: string, finish: Finish) {
       const { client, discard, connection, database } = session;
       const where = `${connection.name} / ${database}`;
       let broken = false;
@@ -211,7 +247,9 @@ export function createScriptRunner({ store, pools, clock, log }: ScriptRunnerDep
       };
       client.on('error', onError);
       const lost = () =>
-        send({ type: 'bitti', sonuc: 'hata', mesaj: timedOut ? SESSION_TIMED_OUT : 'Bağlantı koptu; transaction sunucuda geri alındı.' });
+        finish({ sonuc: 'hata', mesaj: timedOut ? SESSION_TIMED_OUT : 'Bağlantı koptu; transaction sunucuda geri alındı.' }, 'hata');
+      /** İptal ya da soket kopması: transaction geri alındı. */
+      const stopped = (reason: 'iptal' | 'kopma') => finish({ sonuc: 'iptal' }, reason === 'kopma' ? 'kopma-rollback' : 'iptal');
       const rolledBack = async (reason: Decision | 'iptal') => {
         clean = await rollback(client);
         if (reason === 'kopma') log(`Soket koptu; transaction geri alındı (${where}).`);
@@ -221,7 +259,8 @@ export function createScriptRunner({ store, pools, clock, log }: ScriptRunnerDep
         // İptal client beklenirken geldi: hiçbir şey çalışmadı.
         if (current.stopping) {
           clean = true;
-          return send({ type: 'bitti', sonuc: 'iptal' });
+          // Transaction hiç açılmadı; geri alınan bir şey yok.
+          return await finish({ sonuc: 'iptal' }, 'iptal');
         }
         // Sunucu süreç kimliği (BackendKeyData); @types/pg'de tanımlı değil.
         const pid = (client as unknown as { processID: number }).processID;
@@ -233,12 +272,12 @@ export function createScriptRunner({ store, pools, clock, log }: ScriptRunnerDep
         await client.query(`SET LOCAL idle_in_transaction_session_timeout = ${serverIdleTimeoutMs(sureMs)}`);
         const { outcome } = await runStatements(current, client, script);
         if (outcome === 'baglantiKoptu') broken = true;
-        if (broken) return lost();
+        if (broken) return await lost();
         const failed = outcome === 'hata';
         if (current.stopping) {
           await cancelSent;
           await rolledBack(current.stopping);
-          return send({ type: 'bitti', sonuc: 'iptal' });
+          return await stopped(current.stopping);
         }
 
         current.phase = 'karar';
@@ -276,28 +315,32 @@ export function createScriptRunner({ store, pools, clock, log }: ScriptRunnerDep
         current.phase = 'bitiyor';
         clock.clearTimeout(expiry);
         if (decision === 'sureDoldu') expired = true;
-        if (broken) return lost();
+        if (broken) return await lost();
         if (decision === 'sureDoldu') {
           await rolledBack(decision);
           // ROLLBACK gidemediyse oturum ölmüştür; sunucu transaction'ı zaten geri aldı.
-          return send({ type: 'bitti', sonuc: 'sureDoldu', mesaj: timedOut ? SESSION_TIMED_OUT : EXPIRED });
+          return await finish({ sonuc: 'sureDoldu', mesaj: timedOut ? SESSION_TIMED_OUT : EXPIRED }, 'karar-suresi-doldu');
         }
         if (decision !== 'commit') {
           await rolledBack(decision);
-          return send({ type: 'bitti', sonuc: 'rollback' });
+          return await finish({ sonuc: 'rollback' }, decision === 'kopma' ? 'kopma-rollback' : 'rollback');
         }
+        let commitError: unknown = null;
         try {
           await client.query('COMMIT');
-          clean = true;
-          send({ type: 'bitti', sonuc: 'commit' });
         } catch (err) {
-          if (!(err instanceof pg.DatabaseError)) {
-            return send({ type: 'bitti', sonuc: 'hata', mesaj: 'Commit sonucu bilinmiyor: bağlantı koptu.' });
-          }
-          // Postgres başarısız COMMIT'te transaction'ı geri alır.
-          clean = true;
-          send({ type: 'bitti', sonuc: 'hata', mesaj: `Commit başarısız; transaction geri alındı: ${err.message}` });
+          commitError = err;
         }
+        if (commitError === null) {
+          clean = true;
+          return await finish({ sonuc: 'commit' }, 'commit');
+        }
+        if (!(commitError instanceof pg.DatabaseError)) {
+          return await finish({ sonuc: 'hata', mesaj: 'Commit sonucu bilinmiyor: bağlantı koptu.' }, 'hata');
+        }
+        // Postgres başarısız COMMIT'te transaction'ı geri alır.
+        clean = true;
+        await finish({ sonuc: 'hata', mesaj: `Commit başarısız; transaction geri alındı: ${commitError.message}` }, 'hata');
       } finally {
         clock.clearTimeout(expiry);
         client.off('error', onError);
@@ -310,7 +353,7 @@ export function createScriptRunner({ store, pools, clock, log }: ScriptRunnerDep
      * Transaction'sız çalıştırma: her ifade kendi örtük transaction'ında anında kalıcıdır. Karar
      * beklenmez; özet uygulanan, hatalı ve çalıştırılmayan ifadeleri sayar.
      */
-    async function inAutocommit(current: Run, session: Session, script: string) {
+    async function inAutocommit(current: Run, session: Session, script: string, finish: Finish) {
       const { client, discard, connection, database } = session;
       const where = `${connection.name} / ${database}`;
       const total = splitStatements(script).length;
@@ -324,7 +367,7 @@ export function createScriptRunner({ store, pools, clock, log }: ScriptRunnerDep
       client.on('error', onError);
       try {
         if (current.stopping) {
-          return send({ type: 'bitti', sonuc: 'iptal', ozet: { uygulandi: 0, hatali: 0, calistirilmadi: total } });
+          return await finish({ sonuc: 'iptal', ozet: { uygulandi: 0, hatali: 0, calistirilmadi: total } }, 'iptal');
         }
         // Sunucu süreç kimliği (BackendKeyData); @types/pg'de tanımlı değil.
         const pid = (client as unknown as { processID: number }).processID;
@@ -332,14 +375,16 @@ export function createScriptRunner({ store, pools, clock, log }: ScriptRunnerDep
         const { outcome, applied } = await runStatements(current, client, script);
         const ozet = autocommitSummary(total, applied, outcome !== 'tamam');
         if (outcome === 'baglantiKoptu' || broken) {
-          return send({ type: 'bitti', sonuc: 'hata', mesaj: 'Bağlantı koptu; çalışan ifadenin sonucu bilinmiyor.', ozet });
+          return await finish({ sonuc: 'hata', mesaj: 'Bağlantı koptu; çalışan ifadenin sonucu bilinmiyor.', ozet }, 'hata');
         }
         if (current.stopping) {
           await cancelSent;
+          // Uygulanan ifadeler kalıcıdır; geri alınan bir şey yok, kayıtta iptal.
           if (current.stopping === 'kopma') log(`Soket koptu; autocommit durduruldu (${where}): ${applied} ifade uygulandı.`);
-          return send({ type: 'bitti', sonuc: 'iptal', ozet });
+          return await finish({ sonuc: 'iptal', ozet }, 'iptal');
         }
-        send({ type: 'bitti', sonuc: 'autocommit', ozet });
+        // Her ifade kendi örtük transaction'ında commit edildi.
+        await finish({ sonuc: 'autocommit', ozet }, outcome === 'tamam' ? 'commit' : 'hata');
       } finally {
         client.off('error', onError);
         if (broken || cancelSent) discard();
@@ -361,13 +406,16 @@ export function createScriptRunner({ store, pools, clock, log }: ScriptRunnerDep
         const ms = Math.round(performance.now() - started);
         if (result.ok) {
           send({ type: 'done', i, ms, rowCount: result.rowCount, komut: result.komut, onizleme: result.onizleme });
+          current.ifadeler.push({ offset: statement.start, ms, komut: result.komut, satirSayisi: result.rowCount });
           applied++;
           continue;
         }
         const e = result.error as Partial<pg.DatabaseError>;
         const position = e.position ? Number(e.position) - result.prefix : undefined;
         const location = errorLocation(script, statement, position !== undefined && position >= 1 ? position : undefined);
-        send({ type: 'error', i, ms, sqlstate: e.code ?? null, mesaj: e.message ?? String(result.error), ...location });
+        const hata = { kod: e.code ?? null, mesaj: e.message ?? String(result.error), satir: location.satir };
+        send({ type: 'error', i, ms, sqlstate: hata.kod, mesaj: hata.mesaj, ...location });
+        current.ifadeler.push({ offset: statement.start, ms, komut: statement.keywords[0] ?? '', satirSayisi: null, hata });
         return { outcome: result.error instanceof pg.DatabaseError ? 'hata' : 'baglantiKoptu', applied };
       }
       return { outcome: 'tamam', applied };

@@ -9,12 +9,15 @@ import { ScriptEkrani } from './ScriptEkrani';
 const DK = 60_000;
 const SCRIPT = 'INSERT INTO t VALUES (1);\nSELECT nope FROM t;\nDELETE FROM t';
 
-function setup({ withTarget = true } = {}) {
+function setup({ withTarget = true, openRunHistoryFolder = vi.fn(() => Promise.resolve()) } = {}) {
   const user = userEvent.setup();
   const fake = createFakeScriptRuns();
   const target = withTarget ? { connection: connection({ id: 'b1', name: 'Yerel' }), database: 'app' } : null;
-  const view = renderWithApi(<ScriptEkrani target={target} onChangeTarget={() => {}} />, createFakeApi({ runScript: fake.runScript }));
-  return { user, fake, view };
+  const view = renderWithApi(
+    <ScriptEkrani target={target} onChangeTarget={() => {}} />,
+    createFakeApi({ runScript: fake.runScript, openRunHistoryFolder }),
+  );
+  return { user, fake, view, openRunHistoryFolder };
 }
 
 const runButton = () => screen.getByRole('button', { name: '▶ Çalıştır' });
@@ -325,5 +328,33 @@ describe('Script ekranı: Çalıştırma modu', () => {
     const { run } = await startRun('SELECT 1');
     run.emit({ type: 'bitti', sonuc: 'reddedildi', mesaj: 'Satır 1: olmaz' });
     expect(within(decision()).getByText('Satır 1: olmaz')).toBeInTheDocument();
+  });
+});
+
+describe('Script ekranı: Çalıştırma kaydı', () => {
+  const header = () => screen.getByRole('region', { name: 'Hedef' });
+
+  it('hedef başlığındaki bağlantı kayıt klasörünü açar', async () => {
+    const { user, openRunHistoryFolder } = setup();
+    await user.click(within(header()).getByRole('button', { name: 'Çalıştırma kayıtları klasörünü aç' }));
+    expect(openRunHistoryFolder).toHaveBeenCalledOnce();
+  });
+
+  it('klasör açılamazsa nedeni başlıkta görünür', async () => {
+    const { user } = setup({ openRunHistoryFolder: vi.fn(() => Promise.reject(new Error('izin yok'))) });
+    await user.click(within(header()).getByRole('button', { name: 'Çalıştırma kayıtları klasörünü aç' }));
+    expect(await within(header()).findByRole('alert')).toHaveTextContent('Kayıt klasörü açılamadı: izin yok');
+  });
+
+  it('kayıt yazılamazsa çalıştırma sürer; uyarı karar kartında kalır', async () => {
+    const { run, user } = await startRun('SELECT 1');
+    run.emit({ type: 'uyari', tur: 'kayitYazilamadi', mesaj: 'Çalıştırma kaydı yazılamadı' });
+    run.emit({ type: 'started', i: 0 }, { type: 'done', i: 0, rowCount: 1, ms: 1, komut: 'SELECT' });
+    run.emit({ type: 'kararBekleniyor', commitEdilebilir: true, kalanMs: 30 * DK });
+    expect(within(decision()).getByRole('status')).toHaveTextContent('Çalıştırma kaydı yazılamadı');
+    await user.click(within(decision()).getByRole('button', { name: 'Commit' }));
+    run.emit({ type: 'bitti', sonuc: 'commit' });
+    expect(decision()).toHaveTextContent('Commit edildi');
+    expect(within(decision()).getByRole('status')).toHaveTextContent('Çalıştırma kaydı yazılamadı');
   });
 });

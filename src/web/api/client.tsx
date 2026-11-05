@@ -50,6 +50,8 @@ export interface ApiClient {
    * bağlıdır: `close` ya da sekmenin kapanması açık transaction'ı geri aldırır (ADR-0002).
    */
   runScript(target: Target, script: string, onEvent: (event: ServerEvent) => void): ScriptRunHandle;
+  /** Çalıştırma kayıtları klasörünü işletim sisteminin dosya yöneticisinde açar. */
+  openRunHistoryFolder(): Promise<void>;
 }
 
 export interface ScriptRunHandle {
@@ -127,6 +129,9 @@ export function createHttpApiClient(): ApiClient {
       await send('POST', `${connectionUrl(id)}/baglantiyi-kes`);
     },
     runScript: (target, script, onEvent) => openScriptSocket(target, script, onEvent),
+    openRunHistoryFolder: async () => {
+      await send('POST', '/api/calistirma-kayitlari/klasoru-ac');
+    },
   };
 }
 

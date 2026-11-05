@@ -1,8 +1,9 @@
 import { createServer, type AddressInfo, type Socket } from 'node:net';
 
 /**
- * Şifre doğrulamasını ve tek kolonlu ad listesi sorgularını konuşan küçük bir Postgres taklidi
- * (wire protokolü v3, düz metin şifre). Gerçek Postgres olmadan `28P01` akışını sınamak için.
+ * Şifre doğrulamasını ve basit sorgu protokolünü konuşan küçük bir Postgres taklidi (wire protokolü
+ * v3, düz metin şifre): her sorgu tek kolonlu ad listesi döner ya da `failOn`'un verdiği hatayla
+ * düşer. Gerçek Postgres olmadan `28P01` akışını ve script çalıştırmanın kayıtlarını sınamak için.
  */
 export interface FakePostgres {
   port: number;
@@ -12,6 +13,10 @@ export interface FakePostgres {
   names: string[];
   /** Denenen şifreler, sırasıyla. */
   attempts: string[];
+  /** Gelen sorgular, sırasıyla. */
+  queries: string[];
+  /** Sorgu bu hatayla düşsün mü; `undefined` dönerse sorgu başarılıdır. */
+  failOn: (sql: string) => { code: string; message: string; position?: number } | undefined;
   /** Açık oturumları düşürür (bağlantı koptu). */
   dropSessions(): void;
   close(): Promise<void>;
@@ -26,6 +31,8 @@ export async function startFakePostgres({ password }: { password: string }): Pro
     password,
     names: ['postgres'],
     attempts: [],
+    queries: [],
+    failOn: () => undefined,
     dropSessions: () => {
       for (const socket of sockets) socket.destroy();
     },
@@ -80,6 +87,13 @@ export async function startFakePostgres({ password }: { password: string }): Pro
       }
       socket.write(Buffer.concat([message('R', int32(0)), message('K', Buffer.concat([int32(1), int32(2)])), ready()]));
     } else if (type === 'Q') {
+      const sql = body.subarray(0, body.indexOf(0)).toString('utf8');
+      fake.queries.push(sql);
+      const failure = fake.failOn(sql);
+      if (failure) {
+        socket.write(Buffer.concat([errorResponse(failure.code, failure.message, 'ERROR', failure.position), ready()]));
+        return;
+      }
       const rows = fake.names.map((name) => {
         const value = Buffer.from(name, 'utf8');
         return message('D', Buffer.concat([int16(1), int32(value.length), value]));
@@ -108,9 +122,11 @@ function ready(): Buffer {
   return message('Z', Buffer.from('I'));
 }
 
-function errorResponse(code: string, text: string): Buffer {
+function errorResponse(code: string, text: string, severity = 'FATAL', position?: number): Buffer {
   const field = (key: string, value: string) => Buffer.concat([Buffer.from(key), cstring(value)]);
-  return message('E', Buffer.concat([field('S', 'FATAL'), field('V', 'FATAL'), field('C', code), field('M', text), Buffer.from([0])]));
+  const fields = [field('S', severity), field('V', severity), field('C', code), field('M', text)];
+  if (position !== undefined) fields.push(field('P', String(position)));
+  return message('E', Buffer.concat([...fields, Buffer.from([0])]));
 }
 
 function cstring(value: string): Buffer {

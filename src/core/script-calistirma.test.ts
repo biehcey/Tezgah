@@ -72,6 +72,17 @@ describe('çalıştırma görünümü', () => {
     const view = applyEvent({ ...play(), bekleyenIstek: 'commit' }, { type: 'uyari', tur: 'commitReddedildi', mesaj: 'olmaz' });
     expect(view).toMatchObject({ uyari: 'olmaz', bekleyenIstek: null, evre: 'calisiyor' });
   });
+
+  it('Çalıştırma kaydı yazılamadı uyarısı ayrı tutulur; bekleyen isteğe ve sonraki uyarılara dokunmaz', () => {
+    const warned = applyEvent(
+      { ...play({ type: 'kararBekleniyor', commitEdilebilir: true, kalanMs: 1 }), bekleyenIstek: 'commit' },
+      { type: 'uyari', tur: 'kayitYazilamadi', mesaj: 'Çalıştırma kaydı yazılamadı' },
+    );
+    expect(warned).toMatchObject({ kayitUyarisi: 'Çalıştırma kaydı yazılamadı', bekleyenIstek: 'commit' });
+    expect(warned.uyari).toBeUndefined();
+    const done = applyEvent(warned, { type: 'bitti', sonuc: 'commit' });
+    expect(done.kayitUyarisi).toBe('Çalıştırma kaydı yazılamadı');
+  });
 });
 
 describe('çalıştırma görünümü: Çalıştırma modu', () => {

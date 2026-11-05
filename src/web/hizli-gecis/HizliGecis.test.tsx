@@ -151,6 +151,19 @@ describe('Cmd/Ctrl+K paleti: gizli veritabanları', () => {
 });
 
 describe('Cmd/Ctrl+K paleti: komutlar', () => {
+  it('Çalıştırma kayıtları klasörünü aç komutu klasörü açar', async () => {
+    const opened: string[] = [];
+    const { user } = await setup(
+      createFakeConnections(twoConnections().connections, {
+        openRunHistoryFolder: async () => void opened.push('acildi'),
+      }),
+    );
+    await user.keyboard('{Control>}k{/Control}');
+    await user.type(search(), 'kayıtları');
+    await user.keyboard('{Enter}');
+    expect(opened).toEqual(['acildi']);
+  });
+
   it('yeni bağlantı formu ve yeni klasör penceresi açılır; henüz olmayanlar pasif', async () => {
     const { user } = await setup();
     await user.keyboard('{Control>}k{/Control}');
@@ -158,7 +171,7 @@ describe('Cmd/Ctrl+K paleti: komutlar', () => {
       'Yeni bağlantı',
       'Yeni klasör',
       'İçe aktaryakında',
-      'Çalıştırma kayıtları klasörünü açyakında',
+      'Çalıştırma kayıtları klasörünü aç',
     ]);
     expect(within(group('Komutlar')).getByRole('option', { name: /İçe aktar/ })).toHaveAttribute('aria-disabled', 'true');
 

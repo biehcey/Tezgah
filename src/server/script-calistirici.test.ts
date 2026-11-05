@@ -1,5 +1,8 @@
+import { readFile, readdir } from 'node:fs/promises';
+import { join } from 'node:path';
 import pg from 'pg';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { parseRecords } from '../core/calistirma-kaydi';
 import type { ServerEvent } from '../core/script-calistirma';
 import { createFakeClock, type FakeClock } from './test/sahte-saat';
 import { describePg, pgUrl, startTestServer, type TestServer, type TestSocket } from './test/sunucu';
@@ -18,6 +21,14 @@ afterEach(async () => {
   ws.close();
   await t.close();
 });
+
+/** Yapılandırma dizinine yazılan Çalıştırma kayıtlarının sonuçları. */
+async function recordedResults(): Promise<string[]> {
+  const dir = join(t.configDir, 'history');
+  const files = await readdir(dir).catch(() => []);
+  const texts = await Promise.all(files.map((f) => readFile(join(dir, f), 'utf8')));
+  return parseRecords(texts.join('')).map((r) => r.sonuc);
+}
 
 /** Olay dizisinin özeti: tür ve (varsa) ifade indeksi. Her çalıştırmanın başındaki `analiz` ayrıca sınanır. */
 const sequence = (events: ServerEvent[]) => events.filter((e) => e.type !== 'analiz').map((e) => ('i' in e ? `${e.type}:${e.i}` : e.type));
@@ -207,6 +218,7 @@ describePg('script çalıştırma: Transaction modu, gerçek Postgres', () => {
     expect(await ws.waitFor('bitti')).toMatchObject({ sonuc: 'iptal' });
     expect(sequence(ws.events)).toEqual(['started:0', 'done:0', 'started:1', 'error:1', 'bitti']);
     expect(await ids()).toEqual([]);
+    expect(await recordedResults()).toEqual(['iptal']);
   });
 
   it('karar beklenirken soket koparsa transaction geri alınır', async () => {
@@ -226,6 +238,7 @@ describePg('script çalıştırma: Transaction modu, gerçek Postgres', () => {
     ws.terminate();
     await eventually(async () => (await tezgahStates()).every((s) => s === 'idle'));
     expect(await ids()).toEqual([]);
+    await eventually(async () => (await recordedResults()).join() === 'kopma-rollback');
   });
 
   it('bitince aynı soketten yeni çalıştırma başlatılabilir; çalışırken ikincisi reddedilir', async () => {

@@ -79,8 +79,8 @@ export type ServerEvent =
   | { type: 'uzatildi'; kalanMs: number }
   /** `ozet` yalnızca Autocommit'te. */
   | { type: 'bitti'; sonuc: RunResult; mesaj?: string; ozet?: AutocommitSummary }
-  /** İstek reddedildi; çalıştırma sürüyor. */
-  | { type: 'uyari'; tur: 'commitReddedildi' | 'mesgul' | 'gecersizIstek'; mesaj: string };
+  /** İstek reddedildi ya da Çalıştırma kaydı yazılamadı; çalıştırma sürüyor. */
+  | { type: 'uyari'; tur: 'commitReddedildi' | 'mesgul' | 'gecersizIstek' | 'kayitYazilamadi'; mesaj: string };
 
 // ---------- Arayüzün görünümü ----------
 
@@ -130,6 +130,8 @@ export interface RunView {
   ozet?: AutocommitSummary;
   /** Son reddedilen istek ya da uyarı. */
   uyari?: string;
+  /** Çalıştırma kaydı yazılamadı; çalıştırma sürer, uyarı kalıcıdır. */
+  kayitUyarisi?: string;
 }
 
 export function startRunView(script: string): RunView {
@@ -187,6 +189,8 @@ export function applyEvent(view: RunView, event: ServerEvent): RunView {
         ),
       };
     case 'uyari':
+      // Kayıt uyarısı bir isteğin yanıtı değil; bekleyen isteğe dokunmaz.
+      if (event.tur === 'kayitYazilamadi') return { ...view, kayitUyarisi: event.mesaj };
       return { ...view, bekleyenIstek: null, uyari: event.mesaj };
   }
 }

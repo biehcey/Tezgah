@@ -6,6 +6,7 @@ import pkg from '../../package.json' with { type: 'json' };
 import { SettingsFileError, createSettingsStore } from './ayar-deposu';
 import { createConnectionTestRoutes } from './baglanti-testi';
 import { createConnectionRoutes } from './baglantilar';
+import { createRunHistory, createRunHistoryRoutes } from './calistirma-kayitlari';
 import { createAccessPolicy } from './erisim';
 import { createPoolManager } from './havuzlar';
 import { createSessionPasswords } from './oturum-sifreleri';
@@ -15,6 +16,7 @@ import type { Keychain } from './keychain';
 import { systemClock, type Clock } from './saat';
 import { createScriptRunner } from './script-calistirici';
 import { serveStatic } from './statik';
+import { openFolder } from './tarayici';
 import { createDatabaseRoutes } from './veritabanlari';
 
 export interface ServerOptions {
@@ -32,6 +34,8 @@ export interface ServerOptions {
   keychain: Keychain;
   /** Pool boşta kalma süresi gibi zamanlayıcılar; testlerde sahte saat. */
   clock?: Clock;
+  /** Çalıştırma kayıtları klasörünü OS dosya yöneticisinde açar; testlerde sahte. */
+  openFolder?: (dir: string) => void;
   log: (line: string) => void;
 }
 
@@ -77,8 +81,10 @@ export async function startServer(options: ServerOptions): Promise<TezgahServer>
     onChanged: (id) => void pools.disconnect(id),
   });
   const databaseRoutes = createDatabaseRoutes({ store, pools });
+  const history = createRunHistory({ configDir: options.configDir, log: options.log });
+  const historyRoutes = createRunHistoryRoutes({ history, openFolder: options.openFolder ?? openFolder });
   // Her `/ws` bağlantısı kendi çalıştırmasını taşır; koparsa transaction geri alınır (ADR-0002).
-  const attachScriptRunner = createScriptRunner({ store, pools, clock, log: options.log });
+  const attachScriptRunner = createScriptRunner({ store, pools, clock, history, log: options.log });
   wss.on('connection', attachScriptRunner);
 
   const connectionTestRoutes = createConnectionTestRoutes({ store, keychain: options.keychain, log: options.log });
@@ -113,6 +119,7 @@ export async function startServer(options: ServerOptions): Promise<TezgahServer>
     if (await databaseRoutes(req, res, url.pathname)) return;
     if (await connectionTestRoutes(req, res, url.pathname)) return;
     if (await folderRoutes(req, res, url.pathname)) return;
+    if (await historyRoutes(req, res, url.pathname)) return;
     if (url.pathname === '/api' || url.pathname.startsWith('/api/')) return json(res, 404, { hata: 'Bulunamadı' });
     if (req.method !== 'GET' && req.method !== 'HEAD') return sendStatus(res, 405);
     await serveStatic(options.webRoot, url.pathname, res);

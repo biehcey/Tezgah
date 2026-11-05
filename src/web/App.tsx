@@ -255,7 +255,7 @@ export function App() {
     { label: 'Yeni bağlantı', run: () => open({ kind: 'yeni' }) },
     { label: 'Yeni klasör', run: () => setFolderDialog({ kind: 'yeni' }) },
     { label: 'İçe aktar', disabled: true, hint: 'yakında', run: () => {} },
-    { label: 'Çalıştırma kayıtları klasörünü aç', disabled: true, hint: 'yakında', run: () => {} },
+    { label: 'Çalıştırma kayıtları klasörünü aç', run: () => void api.openRunHistoryFolder().catch((err: unknown) => console.error('Kayıt klasörü açılamadı', err)) },
   ];
   const serverDatabases = Object.fromEntries(
     Object.entries(sessions).flatMap(([id, s]) => (s.durum === 'bagli' ? [[id, s.veritabanlari]] : [])),
