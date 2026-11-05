@@ -14,13 +14,29 @@ import {
   type DecisionTimer,
 } from '../core/karar-suresi';
 import { analyzeScript, type RunMode } from '../core/calistirma-modu';
-import { withReturning } from '../core/deneme';
+import {
+  DML_VERBS,
+  OLD_NEW_MIN_VERSION,
+  ddlTargets,
+  decodeOldNew,
+  dmlTarget,
+  oldNewSelect,
+  parseServerVersion,
+  parseTableInfo,
+  tableInfoQuery,
+  withReturning,
+  type FallbackReason,
+  type TableInfo,
+  type TableName,
+} from '../core/deneme';
+import type { SchemaChange, TableSchema } from '../core/deneme-farki';
 import { splitStatements, type Statement } from '../core/ifade-bolme';
 import {
   PREVIEW_ROWS,
   autocommitSummary,
   parseClientMessage,
   type ClientMessage,
+  type DenemeOutput,
   type Preview,
   type ServerEvent,
 } from '../core/script-calistirma';
@@ -55,6 +71,10 @@ const CURSOR_PREFIX = `DECLARE ${WRAPPER} NO SCROLL CURSOR FOR `;
  */
 const CHANGES_PREFIX = `WITH ${WRAPPER} AS (`;
 const CHANGES_SUFFIX = `) SELECT count(*) OVER (), * FROM ${WRAPPER} LIMIT ${PREVIEW_ROWS}`;
+/** PG18+ önce/sonra sarmalının kapanışı. */
+const OLD_NEW_SUFFIX = oldNewSelect(WRAPPER);
+/** Katalog okumalarının savepoint'i: beklenmedik bir hata kullanıcının transaction'ını bozmasın. */
+const CATALOG_SAVEPOINT = 'tezgah_katalog';
 /** İmleçle çalıştırılmaya çalışılan ifade türleri; olmazsa (ör. `SELECT … INTO`) düz çalışır. */
 const CURSOR_COMMANDS = new Set(['SELECT', 'VALUES', 'TABLE', 'WITH']);
 
@@ -93,7 +113,7 @@ type Finished = Extract<ServerEvent, { type: 'bitti' }>;
 type Finish = (event: Omit<Finished, 'type'>, sonuc: RecordResult) => Promise<void>;
 
 type StatementResult =
-  | { ok: true; rowCount: number | null; komut: string; onizleme?: Preview; degisiklik?: Preview }
+  | ({ ok: true; rowCount: number | null; komut: string; onizleme?: Preview } & DenemeOutput)
   | { ok: false; error: unknown; /** Hata konumundan düşülecek önek (imleç sarmalı). */ prefix: number };
 
 /**
@@ -296,12 +316,14 @@ export function createScriptRunner({ store, pools, clock, history, log }: Script
         const pid = (client as unknown as { processID: number }).processID;
         current.cancel = () => (cancelSent ??= cancelBackend(session, pid));
 
+        // Sürüm transaction'dan önce okunur: beklenmedik bir hata transaction'ı bozmasın.
+        const deneme = session.deneme ? { surum: await serverVersion(client) } : null;
         // Salt okunur prod'da `BEGIN READ ONLY`; yazma modunda pool varsayılanı `READ WRITE` ile aşılır.
         await client.query(beginStatement(session.lock));
         const sureMs = decisionDurationMs(connection.envTag);
         // Yedek: Node zamanlayıcısı işlemezken (uyku) uzak sunucuda transaction açık kalmasın.
         await client.query(`SET LOCAL idle_in_transaction_session_timeout = ${serverIdleTimeoutMs(sureMs)}`);
-        const { outcome } = await runStatements(current, client, script, session.deneme);
+        const { outcome } = await runStatements(current, client, script, deneme);
         if (outcome === 'baglantiKoptu') broken = true;
         if (broken) return await lost();
         const failed = outcome === 'hata';
@@ -416,7 +438,7 @@ export function createScriptRunner({ store, pools, clock, history, log }: Script
           unlocked = true;
           await client.query('SET default_transaction_read_only = off');
         }
-        const { outcome, applied } = await runStatements(current, client, script, false);
+        const { outcome, applied } = await runStatements(current, client, script, null);
         const ozet = autocommitSummary(total, applied, outcome !== 'tamam');
         if (outcome === 'baglantiKoptu' || broken) {
           return await finish({ sonuc: 'hata', mesaj: 'Bağlantı koptu; çalışan ifadenin sonucu bilinmiyor.', ozet }, 'hata');
@@ -437,13 +459,13 @@ export function createScriptRunner({ store, pools, clock, history, log }: Script
 
     /**
      * İfadeleri sırayla çalıştırır; ilk hatada ya da iptal/kopmada durur. `applied`: başarılı ifade
-     * sayısı. `deneme`: DML'in değiştirdiği satırlar önizlenir.
+     * sayısı. `deneme`: DML'in değiştirdiği satırlar ve DDL'in şema farkı çıkarılır.
      */
     async function runStatements(
       current: Run,
       client: pg.PoolClient,
       script: string,
-      deneme: boolean,
+      deneme: DenemeContext | null,
     ): Promise<{ outcome: 'tamam' | 'hata' | 'baglantiKoptu'; applied: number }> {
       let applied = 0;
       for (const [i, statement] of splitStatements(script).entries()) {
@@ -453,8 +475,8 @@ export function createScriptRunner({ store, pools, clock, history, log }: Script
         const result = await runStatement(client, statement, deneme);
         const ms = Math.round(performance.now() - started);
         if (result.ok) {
-          const { rowCount, komut, onizleme, degisiklik } = result;
-          send({ type: 'done', i, ms, rowCount, komut, onizleme, degisiklik });
+          const { ok: _ok, ...output } = result;
+          send({ type: 'done', i, ms, ...output });
           current.ifadeler.push({ offset: statement.start, ms, komut: result.komut, satirSayisi: result.rowCount });
           applied++;
           continue;
@@ -501,24 +523,136 @@ async function rollback(client: pg.PoolClient): Promise<boolean> {
   }
 }
 
-async function runStatement(client: pg.PoolClient, statement: Statement, deneme: boolean): Promise<StatementResult> {
+/** Deneme modunda çalıştırmanın bilgisi. */
+interface DenemeContext {
+  /** `server_version_num`; okunamadıysa 0. */
+  surum: number;
+}
+
+async function serverVersion(client: pg.PoolClient): Promise<number> {
+  try {
+    const result = await client.query({ text: 'SHOW server_version_num', rowMode: 'array', types: RAW_TYPES });
+    return parseServerVersion(result.rows[0]?.[0]);
+  } catch {
+    return 0;
+  }
+}
+
+async function runStatement(client: pg.PoolClient, statement: Statement, deneme: DenemeContext | null): Promise<StatementResult> {
   const viaCursor = CURSOR_COMMANDS.has(statement.keywords[0] ?? '') ? await runWithCursor(client, statement) : null;
   if (viaCursor) return viaCursor;
-  const changes = deneme && withReturning(statement);
-  const viaChanges = changes && changes.degistirir ? await runWithChanges(client, statement, changes.text) : null;
-  if (viaChanges) return viaChanges;
+  if (!deneme) return runPlain(client, statement, false);
+  if (Object.hasOwn(DML_VERBS, statement.keywords[0] ?? '')) return runDml(client, statement, deneme);
+  const tables = ddlTargets(statement);
+  return tables.length > 0 ? runDdl(client, statement, tables) : runPlain(client, statement, false);
+}
+
+/**
+ * İfadeyi kullanıcının yazdığı gibi çalıştırır. `degistirir`: DML'in kendi `RETURNING`'i değişiklik
+ * önizlemesidir; satırların tamamı çekilir, ilk 100'ü gösterilir.
+ */
+async function runPlain(client: pg.PoolClient, statement: Statement, degistirir: boolean): Promise<StatementResult> {
   try {
-    // Sarmalı kabul etmeyen DML kullanıcının yazdığı gibi çalışır: eklenen RETURNING * ifadeyi
-    // (ör. kurallı tabloda) gerçek çalıştırmada olmayan bir hatayla düşürebilir. Kendi RETURNING'i
-    // varsa satırların tamamı çekilir, ilk 100'ü gösterilir.
     const raw = await client.query({ text: statement.text, rowMode: 'array', types: RAW_TYPES });
     const result = Array.isArray(raw) ? (raw.at(-1) as pg.QueryArrayResult) : raw;
     const rows = result.fields.length > 0 ? preview(result) : undefined;
     const komut = result.command ?? statement.keywords[0] ?? '';
-    return { ok: true, rowCount: result.rowCount, komut, ...(changes && changes.degistirir ? { degisiklik: rows } : { onizleme: rows }) };
+    return { ok: true, rowCount: result.rowCount, komut, ...(degistirir ? { degisiklik: rows } : { onizleme: rows }) };
   } catch (error) {
     return { ok: false, error, prefix: 0 };
   }
+}
+
+/**
+ * Deneme modunda DML: PG18+ ve PK'lı tabloda önce/sonra satırları, değilse `RETURNING *` önizlemesi
+ * ve nedeni. Sarmalı kabul etmeyen DML kullanıcının yazdığı gibi çalışır: eklenen RETURNING ifadeyi
+ * (ör. kurallı tabloda) gerçek çalıştırmada olmayan bir hatayla düşürebilir.
+ */
+async function runDml(client: pg.PoolClient, statement: Statement, { surum }: DenemeContext): Promise<StatementResult> {
+  const plain = withReturning(statement);
+  let reason: FallbackReason;
+  if (plain.kendiReturning) reason = 'returning';
+  else if (surum < OLD_NEW_MIN_VERSION) reason = 'surum';
+  else {
+    const target = dmlTarget(statement);
+    const info = target && (await readTable(client, { ad: target }));
+    if (!info || info.anahtar.length === 0) reason = 'anahtar';
+    else {
+      const viaOldNew = await runWithOldNew(client, statement, info);
+      if (viaOldNew) return viaOldNew;
+      reason = 'sarmal';
+    }
+  }
+  const result = (await runWithChanges(client, statement, plain.text)) ?? (await runPlain(client, statement, reason === 'returning'));
+  return result.ok && result.degisiklik ? { ...result, farkYok: reason } : result;
+}
+
+/**
+ * Deneme modunda tablo DDL'i: dokunduğu tabloların şeması ifadeden önce ve sonra katalogdan okunur.
+ * Sonraki okuma hemen yapılır; hatadan sonra transaction iptal durumunda olur, katalog okunamaz.
+ */
+async function runDdl(client: pg.PoolClient, statement: Statement, tables: TableName[]): Promise<StatementResult> {
+  const before = new Map<string, TableSchema>();
+  const unresolved: TableName[] = [];
+  for (const table of tables) {
+    const info = await readTable(client, { ad: table });
+    if (info) before.set(info.tablo.oid, info.sema);
+    else unresolved.push(table);
+  }
+  const result = await runPlain(client, statement, false);
+  if (!result.ok) return result;
+  // Var olan tablolar oid ile izlenir (yeniden adlandırma, silme); yeni tablolar adıyla bulunur.
+  const after = new Map<string, TableSchema>();
+  for (const oid of before.keys()) {
+    const info = await readTable(client, { oid });
+    if (info) after.set(oid, info.sema);
+  }
+  for (const table of unresolved) {
+    const info = await readTable(client, { ad: table });
+    if (info) after.set(info.tablo.oid, info.sema);
+  }
+  const oids = new Set([...before.keys(), ...after.keys()]);
+  if (oids.size === 0) return result;
+  const sema: SchemaChange[] = [...oids].map((oid) => ({ oid, once: before.get(oid) ?? null, sonra: after.get(oid) ?? null }));
+  return { ...result, sema };
+}
+
+/** Tablo bilgisini katalogdan okur; tablo yoksa ya da okunamazsa `null`. */
+async function readTable(client: pg.PoolClient, by: Parameters<typeof tableInfoQuery>[0]): Promise<TableInfo | null> {
+  try {
+    await client.query(`SAVEPOINT ${CATALOG_SAVEPOINT}`);
+  } catch {
+    return null;
+  }
+  try {
+    const result = await client.query({ text: tableInfoQuery(by), rowMode: 'array', types: RAW_TYPES });
+    await client.query(`RELEASE SAVEPOINT ${CATALOG_SAVEPOINT}`);
+    return parseTableInfo(result.rows[0]?.[0]);
+  } catch {
+    try {
+      await client.query(`ROLLBACK TO SAVEPOINT ${CATALOG_SAVEPOINT}`);
+      await client.query(`RELEASE SAVEPOINT ${CATALOG_SAVEPOINT}`);
+    } catch {
+      // Bağlantı koptuysa sıradaki ifade bunu bildirir.
+    }
+    return null;
+  }
+}
+
+/**
+ * PG18+ ve PK'lı tabloda DML'i önce/sonra sarmalıyla çalıştırır: ilk 100 satırın eski ve yeni hâli
+ * çekilir, türlere göre sayılar sunucuda sayılır. Sarmal reddedilirse `null` döner.
+ */
+function runWithOldNew(client: pg.PoolClient, statement: Statement, info: TableInfo): Promise<StatementResult | null> {
+  const { text } = withReturning(statement, info.anahtar);
+  return withWrapper(client, CHANGES_PREFIX, async () => {
+    const result = await client.query({ text: CHANGES_PREFIX + text + OLD_NEW_SUFFIX, rowMode: 'array', types: RAW_TYPES });
+    const { rowCount, ...fark } = decodeOldNew(
+      result.fields.map((f) => f.name),
+      result.rows,
+    );
+    return { ok: true, rowCount, komut: statement.keywords[0] ?? '', fark: { tablo: info.tablo, anahtar: info.anahtar, ...fark } };
+  });
 }
 
 /**

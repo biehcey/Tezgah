@@ -526,6 +526,81 @@ describe('Script ekranı: Deneme modu', () => {
     expect(within(cards()[0]!).queryByRole('table')).not.toBeInTheDocument();
   });
 
+  describe('önce/sonra farkı', () => {
+    const MUSTERI = { oid: '100', ad: 'public.musteri' };
+    const NONE = { eklendi: 0, guncellendi: 0, silindi: 0 };
+    const fark = (satirlar: { once: (string | null)[] | null; sonra: (string | null)[] | null }[], gorulmeyen = NONE) => ({
+      tablo: MUSTERI,
+      kolonlar: ['id', 'ad', 'sehir'],
+      anahtar: ['id'],
+      satirlar,
+      gorulmeyen,
+    });
+    const section = () => within(changes()).getByRole('region', { name: 'public.musteri' });
+
+    it('tabloya göre gruplanır: sayılar, eklenen/silinen satır ve yalnızca değişen hücrede eski değer üstü çizili', async () => {
+      const { run } = await startTry();
+      run.emit(
+        { type: 'done', i: 0, rowCount: 1, ms: 3, komut: 'UPDATE', fark: fark([{ once: ['1', 'Ali', 'İzmir'], sonra: ['1', 'Ali', 'Ankara'] }]) },
+        { type: 'done', i: 1, rowCount: 1, ms: 1, komut: 'SELECT', onizleme: { kolonlar: ['a'], satirlar: [['1']] } },
+        { type: 'done', i: 2, rowCount: 1, ms: 1, komut: 'INSERT', fark: fark([{ once: null, sonra: ['9', 'Can', null] }]) },
+        { type: 'done', i: 3, rowCount: 1, ms: 1, komut: 'DELETE', fark: fark([{ once: ['2', 'Ayşe', 'Bursa'], sonra: null }]) },
+        { type: 'bitti', sonuc: 'deneme' },
+      );
+      expect(within(section()).getByRole('heading')).toHaveTextContent('public.musteri+1 eklendi · ~1 güncellendi · −1 silindi');
+      const [, updated, inserted, deleted] = within(section()).getAllByRole('row');
+      const cells = (row: HTMLElement) => within(row).getAllByRole('cell');
+      expect(cells(updated!).map((c) => c.textContent)).toEqual(['~', '1', 'Ali', 'İzmirAnkara']);
+      expect(within(cells(updated!)[3]!).getByRole('deletion')).toHaveTextContent('İzmir');
+      expect(within(cells(updated!)[2]!).queryByRole('deletion')).not.toBeInTheDocument();
+      expect(cells(inserted!).map((c) => c.textContent)).toEqual(['+', '9', 'Can', 'NULL']);
+      expect(inserted).toHaveClass('eklendi');
+      expect(cells(deleted!).map((c) => c.textContent)).toEqual(['−', '2', 'Ayşe', 'Bursa']);
+      expect(deleted).toHaveClass('silindi');
+      // Farkı olan DML için ayrıca ifade kartı yok.
+      expect(within(changes()).queryByRole('article')).not.toBeInTheDocument();
+    });
+
+    it('100 satırdan fazlası "… N satır daha" ile söylenir', async () => {
+      const { run } = await startTry('UPDATE t SET a = 1');
+      const rows = Array.from({ length: 100 }, (_, i) => ({ once: [String(i), 'a', null], sonra: [String(i), 'b', null] }));
+      run.emit({ type: 'done', i: 0, rowCount: 130, ms: 3, komut: 'UPDATE', fark: fark(rows, { ...NONE, guncellendi: 30 }) }, { type: 'bitti', sonuc: 'deneme' });
+      expect(within(section()).getByRole('heading')).toHaveTextContent('~130 güncellendi');
+      expect(section()).toHaveTextContent('… 30 satır daha');
+      expect(within(section()).getAllByRole('row')).toHaveLength(101);
+    });
+
+    it('DDL’in şema farkı tablonun bölümünde', async () => {
+      const { run } = await startTry('ALTER TABLE musteri ADD COLUMN son_giris timestamptz');
+      const kolon = (no: number, ad: string, tip: string) => ({ no, ad, tip, bos: true, varsayilan: null });
+      run.emit(
+        {
+          type: 'done',
+          i: 0,
+          rowCount: null,
+          ms: 3,
+          komut: 'ALTER TABLE',
+          sema: [
+            { oid: '100', once: { ad: 'public.musteri', kolonlar: [kolon(1, 'id', 'integer')] }, sonra: { ad: 'public.musteri', kolonlar: [kolon(1, 'id', 'integer'), kolon(2, 'son_giris', 'timestamp with time zone')] } },
+          ],
+        },
+        { type: 'bitti', sonuc: 'deneme' },
+      );
+      expect(within(section()).getByRole('list', { name: 'Şema farkı' })).toHaveTextContent('+ kolon son_giris timestamp with time zone NULL');
+      expect(within(section()).queryByRole('table')).not.toBeInTheDocument();
+    });
+
+    it('yedeğe düşen ifade nedenini söyleyen notla önizlenir', async () => {
+      const { run } = await startTry();
+      run.emit(
+        { type: 'done', i: 0, rowCount: 1, ms: 3, komut: 'UPDATE', degisiklik: { kolonlar: ['id'], satirlar: [['1']] }, farkYok: 'surum' },
+        { type: 'bitti', sonuc: 'deneme' },
+      );
+      const [card] = within(changes()).getAllByRole('article');
+      expect(within(card!).getByRole('note')).toHaveTextContent('Sunucu PostgreSQL 18’den eski');
+    });
+  });
+
   it('karar kartı yerine "deneme geri alındı" özeti; Commit/Rollback yok', async () => {
     const { run } = await startTry();
     run.emit({ type: 'done', i: 0, rowCount: 1, ms: 3, komut: 'UPDATE', degisiklik: { kolonlar: ['id'], satirlar: [['1']] } });

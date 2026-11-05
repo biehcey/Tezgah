@@ -294,9 +294,8 @@ Tezgah, `npx` ile terminalden başlatılan, yalnızca `127.0.0.1`'de dinleyen ve
   - Sunucu → istemci:
     - `analiz{mod, reddedilenler}`
     - `started{i}`
-    - `done{i, rowCount, ms, komut, onizleme?}`
+    - `done{i, rowCount, ms, komut, onizleme?, degisiklik?, farkYok?, fark?, sema?}`: son dördü yalnızca denemede. `fark` ifadenin önce/sonra satırları, `sema` DDL'in önce/sonra şemasıdır. Tablo bazında birleştirmeyi arayüz core'daki `mergeChanges` ile yapar; ayrı bir `fark` olayı yoktur.
     - `error{i, sqlstate, mesaj, satir, sutun}`
-    - `fark{tablolar}` (yalnızca denemede)
     - `kararBekleniyor{bitis}`
     - `geriSayim`
     - `bitti{sonuc, ozet}`

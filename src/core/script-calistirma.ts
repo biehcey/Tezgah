@@ -4,6 +4,8 @@
  * aynı betik için verdiği sıradır.
  */
 import { ACTIVE_SQL_TRANSACTION, NON_TRANSACTIONAL_FALLBACK, type ScriptAnalysis } from './calistirma-modu';
+import type { FallbackReason } from './deneme';
+import type { RowChanges, SchemaChange } from './deneme-farki';
 import { splitStatements, positionOf, type Statement } from './ifade-bolme';
 import type { Target } from './veritabani-secimi';
 
@@ -50,6 +52,14 @@ export interface Preview {
   satirlar: (string | null)[][];
 }
 
+/** Deneme modunda bir ifadenin değişiklik çıktısı (bkz. `done`). */
+export interface DenemeOutput {
+  degisiklik?: Preview;
+  farkYok?: FallbackReason;
+  fark?: RowChanges;
+  sema?: SchemaChange[];
+}
+
 /**
  * Çalıştırmanın sonu. `sureDoldu`: Karar süresi doldu, transaction geri alındı. `hata`: çalıştırma
  * başlayamadı, bağlantı koptu ya da commit başarısız oldu. `autocommit`: Autocommit script'i bitti
@@ -84,10 +94,12 @@ export type ServerEvent =
   | ({ type: 'analiz' } & ScriptAnalysis)
   | { type: 'started'; i: number }
   /**
-   * `onizleme`: ifadenin döndürdüğü satırlar (SELECT). `degisiklik`: yalnızca Deneme modunda, DML'in
-   * `RETURNING` satırları (ilk 100); `rowCount` her durumda etkilenen satırların tamamıdır.
+   * `onizleme`: ifadenin döndürdüğü satırlar (SELECT). Yalnızca Deneme modunda: `fark` PG18+ ve PK'lı
+   * tabloda DML'in önce/sonra satırları; yoksa `degisiklik` DML'in `RETURNING` satırları ve
+   * `farkYok` nedeni. `sema`: DDL'in dokunduğu tabloların ifadeden önceki ve sonraki şeması. Satırlar
+   * en fazla 100; `rowCount` her durumda etkilenen satırların tamamıdır.
    */
-  | { type: 'done'; i: number; rowCount: number | null; ms: number; komut: string; onizleme?: Preview; degisiklik?: Preview }
+  | ({ type: 'done'; i: number; rowCount: number | null; ms: number; komut: string; onizleme?: Preview } & DenemeOutput)
   | { type: 'error'; i: number; sqlstate: string | null; mesaj: string; satir: number; sutun: number; bas: number; bit: number; ms: number }
   /** Script bitti, transaction açık; hatadan sonra commit edilemez. `kalanMs`: Karar süresi. */
   | { type: 'kararBekleniyor'; commitEdilebilir: boolean; kalanMs: number }
@@ -102,7 +114,7 @@ export type ServerEvent =
 
 export type StatementStatus = 'sirada' | 'calisiyor' | 'basarili' | 'hatali' | 'calistirilmadi';
 
-export interface StatementView {
+export interface StatementView extends DenemeOutput {
   i: number;
   /** İfadenin başladığı 1 tabanlı satır. */
   satir: number;
@@ -112,8 +124,6 @@ export interface StatementView {
   ms?: number;
   rowCount?: number | null;
   onizleme?: Preview;
-  /** Deneme modunda DML'in değişiklik önizlemesi. */
-  degisiklik?: Preview;
   hata?: {
     sqlstate: string | null;
     mesaj: string;
@@ -187,6 +197,9 @@ export function applyEvent(view: RunView, event: ServerEvent): RunView {
         rowCount: event.rowCount,
         onizleme: event.onizleme,
         degisiklik: event.degisiklik,
+        farkYok: event.farkYok,
+        fark: event.fark,
+        sema: event.sema,
       });
     case 'error': {
       const { type: _t, i, ms, ...hata } = event;

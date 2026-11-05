@@ -1164,6 +1164,70 @@ button.kucuk {
   font-weight: 600;
 }
 
+/* Tablo bazlı önce/sonra farkı: eklenen yeşil, silinen kırmızı ve üstü çizili, değişen hücre vurgulu. */
+.tablo-farki .degisiklik-basligi {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  align-items: baseline;
+}
+
+.tablo-adi {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.fark-sayilari {
+  font-weight: 400;
+}
+
+.fark-sayilari .eklendi,
+.sema-farki .eklendi {
+  color: var(--basarili);
+}
+
+.fark-sayilari .guncellendi,
+.sema-farki .guncellendi {
+  color: var(--dikkat);
+}
+
+.fark-sayilari .silindi,
+.sema-farki .silindi {
+  color: var(--uyari);
+}
+
+.sema-farki {
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.fark-tablosu tr.eklendi td {
+  background: color-mix(in srgb, var(--basarili) 14%, transparent);
+}
+
+.fark-tablosu tr.silindi td {
+  background: color-mix(in srgb, var(--uyari) 14%, transparent);
+  text-decoration: line-through;
+}
+
+.fark-tablosu td.degisti {
+  background: color-mix(in srgb, var(--dikkat) 18%, transparent);
+}
+
+.fark-tablosu .eski {
+  margin-right: 6px;
+  color: var(--soluk);
+}
+
+.fark-isareti {
+  color: var(--soluk);
+}
+
+.yedek-notu {
+  margin: 2px 0 0;
+}
+
 .onizleme {
   max-height: 220px;
   margin-top: 6px;
