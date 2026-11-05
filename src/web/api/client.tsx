@@ -13,7 +13,7 @@ import type {
 } from '../../core/baglanti';
 import type { ConnectionTestRequest, ConnectionTestResponse } from '../../core/baglanti-testi';
 import type { ClientMessage, ServerEvent } from '../../core/script-calistirma';
-import type { DatabaseListResponse, SchemaListResponse, Target, TargetErrorResponse } from '../../core/veritabani-secimi';
+import type { DatabaseListResponse, SchemaListResponse, TargetErrorResponse } from '../../core/veritabani-secimi';
 
 /**
  * Web'in sunucuyla tek konuşma noktası (REST + WS olay akışı).
@@ -49,10 +49,13 @@ export interface ApiClient {
    * Script'i hedefte çalıştırır; olaylar `onEvent`'e sırayla gelir. Transaction bu çalıştırmaya
    * bağlıdır: `close` ya da sekmenin kapanması açık transaction'ı geri aldırır (ADR-0002).
    */
-  runScript(target: Target, script: string, onEvent: (event: ServerEvent) => void): ScriptRunHandle;
+  runScript(request: ScriptRunRequest, onEvent: (event: ServerEvent) => void): ScriptRunHandle;
   /** Çalıştırma kayıtları klasörünü işletim sisteminin dosya yöneticisinde açar. */
   openRunHistoryFolder(): Promise<void>;
 }
+
+/** Çalıştırmanın hedefi, script'i ve (prod'da) yazma kilidi durumu. */
+export type ScriptRunRequest = Omit<Extract<ClientMessage, { type: 'run' }>, 'type'>;
 
 export interface ScriptRunHandle {
   send(message: Exclude<ClientMessage, { type: 'run' }>): void;
@@ -128,7 +131,7 @@ export function createHttpApiClient(): ApiClient {
     disconnect: async (id) => {
       await send('POST', `${connectionUrl(id)}/baglantiyi-kes`);
     },
-    runScript: (target, script, onEvent) => openScriptSocket(target, script, onEvent),
+    runScript: (request, onEvent) => openScriptSocket(request, onEvent),
     openRunHistoryFolder: async () => {
       await send('POST', '/api/calistirma-kayitlari/klasoru-ac');
     },
@@ -136,14 +139,14 @@ export function createHttpApiClient(): ApiClient {
 }
 
 /** Çalıştırma başına bir WebSocket; erişim cookie'si upgrade isteğinde gider. */
-function openScriptSocket(target: Target, script: string, onEvent: (event: ServerEvent) => void): ScriptRunHandle {
+function openScriptSocket(request: ScriptRunRequest, onEvent: (event: ServerEvent) => void): ScriptRunHandle {
   const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const ws = new WebSocket(`${scheme}//${location.host}/ws`);
   let finished = false;
   /** Soket açılmadan istenenler (ör. hemen basılan İptal) açılınca `run`'dan sonra gider. */
   const queued: ClientMessage[] = [];
   ws.onopen = () => {
-    ws.send(JSON.stringify({ type: 'run', target, script } satisfies ClientMessage));
+    ws.send(JSON.stringify({ type: 'run', ...request } satisfies ClientMessage));
     for (const message of queued.splice(0)) ws.send(JSON.stringify(message));
   };
   ws.onmessage = (message) => {

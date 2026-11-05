@@ -1,8 +1,8 @@
 import { performance } from 'node:perf_hooks';
 import pg from 'pg';
 import type { WebSocket } from 'ws';
-import { isProd, type Connection } from '../core/baglanti';
-import type { RecordResult, StatementSummary } from '../core/calistirma-kaydi';
+import type { Connection } from '../core/baglanti';
+import type { RecordResult, StatementSummary, WriteLockState } from '../core/calistirma-kaydi';
 import { errorLocation } from '../core/hata-konumu';
 import {
   commitRequest,
@@ -24,6 +24,7 @@ import {
   type ServerEvent,
 } from '../core/script-calistirma';
 import type { Target } from '../core/veritabani-secimi';
+import { beginStatement, writeLockBlock, writeLockState } from '../core/yazma-kilidi';
 import type { SettingsStore } from './ayar-deposu';
 import type { RunHistory } from './calistirma-kayitlari';
 import { TargetError, catalogQuery, type PoolManager } from './havuzlar';
@@ -142,7 +143,7 @@ export function createScriptRunner({ store, pools, clock, history, log }: Script
           const current: Run = { phase: 'calisiyor', stopping: null, commitAllowed: false, ifadeler: [] };
           run = current;
           // Engellenmeyen script Karışık değildir.
-          execute(current, message.target, message.script, analysis.mod as Exclude<RunMode, 'karisik'>)
+          execute(current, message.target, message.script, analysis.mod as Exclude<RunMode, 'karisik'>, message.yazmaModu)
             .catch((err: unknown) => {
               log(`Script çalıştırma hatası: ${String(err)}`);
               send({ type: 'bitti', sonuc: 'hata', mesaj: 'Beklenmeyen bir hata oluştu' });
@@ -180,17 +181,20 @@ export function createScriptRunner({ store, pools, clock, history, log }: Script
       }
     }
 
-    async function execute(current: Run, target: Target, script: string, mode: Exclude<RunMode, 'karisik'>) {
+    async function execute(current: Run, target: Target, script: string, mode: Exclude<RunMode, 'karisik'>, yazmaModu: boolean) {
       const connection = (await store.read()).connections.find((c) => c.id === target.connectionId);
       // Hedefi olmayan çalıştırma kaydedilmez: hiçbir şey çalışmadı.
       if (!connection) return send({ type: 'bitti', sonuc: 'hata', mesaj: 'Bağlantı bulunamadı' });
+      const lock = writeLockState(connection.envTag, yazmaModu);
+      // Salt okunur prod'da Autocommit sunucuya hiç gitmez; analizden geçmeyen script gibi kaydedilmez.
+      const blocked = writeLockBlock(mode, lock);
+      if (blocked) return send({ type: 'bitti', sonuc: 'reddedildi', mesaj: blocked });
       const recorder = history.begin({
         script,
         hedef: { baglantiId: connection.id, ad: connection.name, veritabani: target.database, ortam: connection.envTag },
         mod: mode,
         deneme: false,
-        // prod hedef şimdilik her zaman salt okunur açılır (pool `default_transaction_read_only`).
-        yazmaKilidi: isProd(connection.envTag) ? 'salt-okunur' : null,
+        yazmaKilidi: lock,
       });
       // Kayıt yazılamazsa çalıştırma sürer; uyarı bir kez gider.
       let warned = false;
@@ -208,7 +212,7 @@ export function createScriptRunner({ store, pools, clock, history, log }: Script
       };
       try {
         await pools.withClient(connection, target.database, (client, discard) => {
-          const session = { client, discard, connection, database: target.database };
+          const session = { client, discard, connection, database: target.database, lock };
           return mode === 'autocommit' ? inAutocommit(current, session, script, finish) : inTransaction(current, session, script, finish);
         });
       } catch (err) {
@@ -266,7 +270,8 @@ export function createScriptRunner({ store, pools, clock, history, log }: Script
         const pid = (client as unknown as { processID: number }).processID;
         current.cancel = () => (cancelSent ??= cancelBackend(session, pid));
 
-        await client.query('BEGIN');
+        // Salt okunur prod'da `BEGIN READ ONLY`; yazma modunda pool varsayılanı `READ WRITE` ile aşılır.
+        await client.query(beginStatement(session.lock));
         const sureMs = decisionDurationMs(connection.envTag);
         // Yedek: Node zamanlayıcısı işlemezken (uyku) uzak sunucuda transaction açık kalmasın.
         await client.query(`SET LOCAL idle_in_transaction_session_timeout = ${serverIdleTimeoutMs(sureMs)}`);
@@ -354,10 +359,12 @@ export function createScriptRunner({ store, pools, clock, history, log }: Script
      * beklenmez; özet uygulanan, hatalı ve çalıştırılmayan ifadeleri sayar.
      */
     async function inAutocommit(current: Run, session: Session, script: string, finish: Finish) {
-      const { client, discard, connection, database } = session;
+      const { client, discard, connection, database, lock } = session;
       const where = `${connection.name} / ${database}`;
       const total = splitStatements(script).length;
       let broken = false;
+      /** prod yazma modunda oturumun salt okunurluğu kapatıldı; ayar pool'a sızmasın. */
+      let unlocked = false;
       /** Gönderilen iptal sinyali; geç varabilir, client bu yüzden pool'a dönmez. */
       let cancelSent: Promise<void> | null = null;
       const onError = (err: Error) => {
@@ -372,6 +379,11 @@ export function createScriptRunner({ store, pools, clock, history, log }: Script
         // Sunucu süreç kimliği (BackendKeyData); @types/pg'de tanımlı değil.
         const pid = (client as unknown as { processID: number }).processID;
         current.cancel = () => (cancelSent ??= cancelBackend(session, pid));
+        // Transaction'sız ifadelerin her biri oturum varsayılanıyla (prod pool'unda salt okunur) açılır.
+        if (lock === 'yazma-acik') {
+          unlocked = true;
+          await client.query('SET default_transaction_read_only = off');
+        }
         const { outcome, applied } = await runStatements(current, client, script);
         const ozet = autocommitSummary(total, applied, outcome !== 'tamam');
         if (outcome === 'baglantiKoptu' || broken) {
@@ -387,7 +399,7 @@ export function createScriptRunner({ store, pools, clock, history, log }: Script
         await finish({ sonuc: 'autocommit', ozet }, outcome === 'tamam' ? 'commit' : 'hata');
       } finally {
         client.off('error', onError);
-        if (broken || cancelSent) discard();
+        if (broken || cancelSent || unlocked) discard();
       }
     }
 
@@ -438,6 +450,7 @@ interface Session {
   discard: () => void;
   connection: Connection;
   database: string;
+  lock: WriteLockState;
 }
 
 /** Geri alındıysa `true`; alınamayan client pool'a dönmemeli. */

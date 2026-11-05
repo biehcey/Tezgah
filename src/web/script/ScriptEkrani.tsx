@@ -15,6 +15,7 @@ import {
 } from '../../core/script-calistirma';
 import { CONNECTION_LOST, useApi, type ScriptRunHandle } from '../api/client';
 import type { ServerEvent } from '../../core/script-calistirma';
+import { writeLockBlock, writeLockState } from '../../core/yazma-kilidi';
 import { STATUS_LABELS, STATUS_SYMBOLS, type AnalysisMark } from './durum';
 import { ScriptEditoru, type EditorMarks, type ScriptEditoruHandle } from './ScriptEditoru';
 
@@ -45,6 +46,9 @@ const MODE_LABELS: Record<RunMode, string> = { transaction: 'Transaction', autoc
 
 /** Script analizden geçmedi: reddedilen ifade var ya da script Karışık. */
 const isBlocked = (analysis: ScriptAnalysis) => analysis.reddedilenler.length > 0 || analysis.mod === 'karisik';
+
+/** Yazma kilidinin anahtarı: kilit editör ve hedef başınadır. */
+const targetKey = (target: NonNullable<Props['target']>) => `${target.connection.id}\u0000${target.database}`;
 
 function useDebounced<T>(value: T, ms: number): T {
   const [debounced, setDebounced] = useState(value);
@@ -84,6 +88,20 @@ export function ScriptEkrani({ target, onChangeTarget, onTargetLockChange }: Pro
   const [deadline, setDeadline] = useState<DecisionTimer | null>(null);
   const editor = useRef<ScriptEditoruHandle>(null);
   const [folderError, setFolderError] = useState<string | null>(null);
+  /** Yazma modu açılmış hedefler; sayfa açık kaldıkça tutulur. */
+  const [writable, setWritable] = useState<ReadonlySet<string>>(() => new Set());
+  const writeMode = target !== null && writable.has(targetKey(target));
+  const lock = target ? writeLockState(target.connection.envTag, writeMode) : null;
+
+  function toggleWriteMode() {
+    if (!target) return;
+    const key = targetKey(target);
+    setWritable((current) => {
+      const next = new Set(current);
+      if (!next.delete(key)) next.add(key);
+      return next;
+    });
+  }
 
   function openHistoryFolder() {
     setFolderError(null);
@@ -93,10 +111,10 @@ export function ScriptEkrani({ target, onChangeTarget, onTargetLockChange }: Pro
   // Ekran kapanırsa açık transaction sunucuda geri alınır (ADR-0002).
   useEffect(() => () => handle.current?.close(), []);
 
-  const lock = targetLock(run);
+  const targetLockReason = targetLock(run);
   useEffect(() => {
-    onTargetLockChange?.(lock);
-  }, [lock, onTargetLockChange]);
+    onTargetLockChange?.(targetLockReason);
+  }, [targetLockReason, onTargetLockChange]);
   useEffect(() => () => onTargetLockChange?.(null), [onTargetLockChange]);
 
   const running = run?.evre === 'calisiyor';
@@ -106,17 +124,20 @@ export function ScriptEkrani({ target, onChangeTarget, onTargetLockChange }: Pro
   const analyzed = useDebounced(script, ANALYSIS_DELAY_MS);
   const statements = useMemo(() => splitStatements(analyzed), [analyzed]);
   const analysis = useMemo(() => analyzeScript(statements), [statements]);
-  const blocked = isBlocked(analysis);
+  /** Salt okunur prod'da Autocommit script'i. */
+  const writeBlock = writeLockBlock(analysis.mod, lock);
+  const blocked = isBlocked(analysis) || writeBlock !== null;
 
   function start() {
     if (!target || busy) return;
     // Analiz yazmanın gerisinde kalabilir; çalıştırmadan önce güncel metinle yeniden bakılır.
     const current = analyzeScript(splitStatements(script));
-    if (isBlocked(current)) return;
+    if (isBlocked(current) || writeLockBlock(current.mod, lock)) return;
     handle.current?.close();
     setRun(startRunView(script));
     setDeadline(null);
-    handle.current = api.runScript({ connectionId: target.connection.id, database: target.database }, script, (received) => {
+    const request = { target: { connectionId: target.connection.id, database: target.database }, script, yazmaModu: writeMode };
+    handle.current = api.runScript(request, (received) => {
       // Autocommit'te geri alınacak transaction yok; sunucu çalışan ifadeyi iptal eder.
       const event = received === CONNECTION_LOST && current.mod === 'autocommit' ? AUTOCOMMIT_CONNECTION_LOST : received;
       setRun((current) => (current ? applyEvent(current, event) : current));
@@ -191,11 +212,28 @@ export function ScriptEkrani({ target, onChangeTarget, onTargetLockChange }: Pro
           <section aria-label="Script editörü" className="editor-alani">
             <ScriptEditoru ref={editor} value={script} onChange={setScript} readOnly={busy} marks={marks} />
           </section>
-          {!busy && blocked && <BlockReasons reasons={blockReasons(analyzed, statements, analysis)} />}
+          {!busy && blocked && (
+            <BlockReasons
+              reasons={[...blockReasons(analyzed, statements, analysis), ...(writeBlock ? [{ satir: null, mesaj: writeBlock }] : [])]}
+            />
+          )}
           <div className="script-cubugu">
             <span title="Çalıştırma modu" className={`mod-rozeti ${analysis.mod}`}>
               {MODE_LABELS[analysis.mod]}
             </span>
+            {lock && (
+              // Tek tık; onay, şerit ya da tema değişimi yok. Açık transaction'ın kilidi değişmez.
+              <button
+                type="button"
+                className={`kilit-dugmesi ${lock}`}
+                aria-pressed={lock === 'yazma-acik'}
+                title={lock === 'yazma-acik' ? 'Salt okunura dön' : 'Yazma modunu aç'}
+                onClick={toggleWriteMode}
+                disabled={busy}
+              >
+                {lock === 'yazma-acik' ? '🔓 Yazma açık' : '🔒 Salt okunur'}
+              </button>
+            )}
             {running ? (
               <button type="button" className="tehlikeli" onClick={() => request('iptal')} disabled={run.bekleyenIstek === 'iptal'}>
                 ■ İptal

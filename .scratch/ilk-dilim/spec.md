@@ -262,7 +262,7 @@ Tezgah, `npx` ile terminalden başlatılan, yalnızca `127.0.0.1`'de dinleyen ve
 - **Script çalıştırıcı** (WebSocket; ADR-0002):
   - Pool'dan tek bir client alınır ve çalıştırma ile karar dahil her şey bitene kadar tutulur.
   - **Transaction modu**:
-    - Transaction `BEGIN READ ONLY` (salt okunur prod) ya da `BEGIN` ile açılır.
+    - Transaction `BEGIN READ ONLY` (salt okunur prod), `BEGIN READ WRITE` (yazma modundaki prod) ya da `BEGIN` ile açılır.
     - Hemen ardından `SET LOCAL idle_in_transaction_session_timeout` = Karar süresi + 1 dk ayarlanır.
     - İfadeler sırayla çalışır; ilk hatada durulur.
     - Son ifadeden sonra sunucu taraflı Karar süresi zamanlayıcısı başlar. "Uzat" `SELECT 1` gönderir ve zamanlayıcıyı sıfırlar. Süre dolunca rollback yapılır ve sonra gelen commit reddedilir.

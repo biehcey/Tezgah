@@ -50,6 +50,10 @@ _Avoid_: Transaction modu anahtarı, execution mode
 Bir script'i Transaction modunda çalıştırıp sonunda her zaman geri alan, ne değişeceğini gösteren çalıştırma biçimi. Hiçbir şeyi kalıcı yazmaz; bu yüzden `prod` hedefinde yazma modu kapalıyken de kullanılabilir. Geri alınamayan yan etkileri (ilerleyen sequence'ler, dış sistemlere giden etkiler) vardır.
 _Avoid_: Dry run, simülasyon, test çalıştırma
 
+**Yazma kilidi**:
+`prod` hedefinin salt okunur (🔒) ya da yazma modunda (🔓) olma durumu. Editör ve hedef başınadır, sayfa açık kaldıkça geçerlidir ve tek tıkla değişir. Salt okunurken yazmayı Postgres reddeder; Autocommit script'i hiç gönderilmez. Bir kaza önleyicidir, güvenlik sınırı değildir.
+_Avoid_: Salt okunur mod, read-only toggle, yazma izni
+
 **Karar süresi**:
 Transaction modunda script bittikten sonra commit veya rollback kararı için tanınan süre; dolunca transaction geri alınır.
 _Avoid_: Zaman aşımı, timeout

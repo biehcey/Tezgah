@@ -1,7 +1,7 @@
-import { act, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { CONNECTION_LOST } from '../api/client';
+import { ApiProvider, CONNECTION_LOST } from '../api/client';
 import { editorCursorLine, editorScript, gutterMarks, setEditorScript } from '../test/eylemler';
 import { connection, createFakeApi, createFakeScriptRuns, renderWithApi } from '../test/sahte-api';
 import { ScriptEkrani } from './ScriptEkrani';
@@ -356,5 +356,95 @@ describe('Script ekranı: Çalıştırma kaydı', () => {
     run.emit({ type: 'bitti', sonuc: 'commit' });
     expect(decision()).toHaveTextContent('Commit edildi');
     expect(within(decision()).getByRole('status')).toHaveTextContent('Çalıştırma kaydı yazılamadı');
+  });
+});
+
+describe('Script ekranı: prod yazma kilidi', () => {
+  const prodTarget = (database = 'app') => ({
+    connection: connection({ id: 'p1', name: 'Canlı', envTag: 'prod', color: '#d33' }),
+    database,
+  });
+
+  function setupProd() {
+    const user = userEvent.setup();
+    const fake = createFakeScriptRuns();
+    const api = createFakeApi({ runScript: fake.runScript });
+    const screenFor = (target: ReturnType<typeof prodTarget> | null) => (
+      <ApiProvider client={api}>
+        <ScriptEkrani target={target} onChangeTarget={() => {}} />
+      </ApiProvider>
+    );
+    const view = render(screenFor(prodTarget()));
+    const showTarget = (target: ReturnType<typeof prodTarget> | null) => view.rerender(screenFor(target));
+    return { user, fake, showTarget };
+  }
+
+  const lockButton = () => screen.getByRole('button', { name: /Salt okunur|Yazma açık/ });
+
+  it('prod hedef 🔒 Salt okunur açılır ve çalıştırma salt okunur gider', async () => {
+    const { user, fake } = setupProd();
+    expect(lockButton()).toHaveTextContent('🔒 Salt okunur');
+    expect(lockButton()).toHaveAttribute('aria-pressed', 'false');
+    setEditorScript('SELECT 1');
+    await user.click(runButton());
+    expect(fake.last().yazmaModu).toBe(false);
+  });
+
+  it('düğme yazma modunu tek tıkla açar ve kapatır; çalıştırma onaysız yazma moduyla gider', async () => {
+    const { user, fake } = setupProd();
+    await user.click(lockButton());
+    expect(lockButton()).toHaveTextContent('🔓 Yazma açık');
+    expect(lockButton()).toHaveAttribute('aria-pressed', 'true');
+    setEditorScript('INSERT INTO t VALUES (1)');
+    await user.click(runButton());
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(fake.last().yazmaModu).toBe(true);
+    // Ek şerit yok.
+    expect(screen.queryByRole('note')).not.toBeInTheDocument();
+
+    fake.last().emit({ type: 'bitti', sonuc: 'iptal' });
+    await user.click(lockButton());
+    expect(lockButton()).toHaveTextContent('🔒 Salt okunur');
+    await user.click(runButton());
+    expect(fake.last().yazmaModu).toBe(false);
+  });
+
+  it('kilit hedef başına tutulur: başka hedef salt okunur açılır, geri dönünce yazma açık kalır', async () => {
+    const { user, showTarget } = setupProd();
+    await user.click(lockButton());
+    showTarget(prodTarget('raporlar'));
+    expect(lockButton()).toHaveTextContent('🔒 Salt okunur');
+    showTarget(prodTarget('app'));
+    expect(lockButton()).toHaveTextContent('🔓 Yazma açık');
+  });
+
+  it('prod olmayan hedefte kilit düğmesi yok ve yazma modu gönderilmez', async () => {
+    const { user, fake } = setup();
+    expect(screen.queryByRole('button', { name: /Salt okunur|Yazma açık/ })).not.toBeInTheDocument();
+    setEditorScript('SELECT 1');
+    await user.click(runButton());
+    expect(fake.last().yazmaModu).toBe(false);
+  });
+
+  it('salt okunur prod’da Autocommit script’i çalıştırılamaz; yazma modu açılınca çalışır', async () => {
+    const { user, fake } = setupProd();
+    setEditorScript('VACUUM t');
+    await waitFor(() => expect(runButton()).toBeDisabled());
+    expect(screen.getByText(/Salt okunur prod'da Autocommit/)).toBeInTheDocument();
+    await user.click(lockButton());
+    expect(runButton()).toBeEnabled();
+    await user.click(runButton());
+    expect(fake.last().yazmaModu).toBe(true);
+  });
+
+  it('çalıştırma sürerken kilit değiştirilemez', async () => {
+    const { user, fake } = setupProd();
+    setEditorScript('SELECT 1');
+    await user.click(runButton());
+    expect(lockButton()).toBeDisabled();
+    fake.last().emit({ type: 'kararBekleniyor', commitEdilebilir: true, kalanMs: 5 * DK });
+    expect(lockButton()).toBeDisabled();
+    fake.last().emit({ type: 'bitti', sonuc: 'rollback' });
+    expect(lockButton()).toBeEnabled();
   });
 });

@@ -947,6 +947,19 @@ button.kucuk {
   color: var(--uyari);
 }
 
+/* prod yazma kilidi: rozet gibi görünen tek tık düğmesi. */
+.kilit-dugmesi {
+  align-self: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+}
+
+.kilit-dugmesi.yazma-acik {
+  border-color: var(--prod);
+  color: var(--prod);
+}
+
 .uyari-seridi {
   padding: 6px 16px;
   border-bottom: 1px solid var(--cizgi);

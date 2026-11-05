@@ -13,7 +13,8 @@ export const PREVIEW_ROWS = 100;
 // ---------- İstemci → sunucu ----------
 
 export type ClientMessage =
-  | { type: 'run'; target: Target; script: string }
+  /** `yazmaModu`: prod hedefte yazma kilidi açık; prod olmayan hedefte etkisizdir. */
+  | { type: 'run'; target: Target; script: string; yazmaModu: boolean }
   | { type: 'commit' }
   | { type: 'rollback' }
   /** Karar süresini baştan başlatır. */
@@ -27,7 +28,13 @@ export function parseClientMessage(raw: unknown): ClientMessage | null {
   if (m.type !== 'run' || typeof m.script !== 'string') return null;
   const target = m.target as Record<string, unknown> | null | undefined;
   if (typeof target?.connectionId !== 'string' || typeof target.database !== 'string') return null;
-  return { type: 'run', target: { connectionId: target.connectionId, database: target.database }, script: m.script };
+  return {
+    type: 'run',
+    target: { connectionId: target.connectionId, database: target.database },
+    script: m.script,
+    // Yalnızca açıkça `true` yazma modudur; eksik ya da belirsiz değer salt okunur kalır.
+    yazmaModu: m.yazmaModu === true,
+  };
 }
 
 // ---------- Sunucu → istemci ----------
