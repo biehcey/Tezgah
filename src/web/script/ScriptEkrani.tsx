@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { isProd, type Connection } from '../../core/baglanti';
-import { analyzeScript, blockReasons, type RunMode, type ScriptAnalysis } from '../../core/calistirma-modu';
+import { analyzeScript, type RunMode, type ScriptAnalysis } from '../../core/calistirma-modu';
 import { positionOf, splitStatements, type Statement } from '../../core/ifade-bolme';
 import { decisionStatus, formatRemaining, startDecision, type DecisionPhase, type DecisionTimer } from '../../core/karar-suresi';
 import {
@@ -15,8 +15,9 @@ import {
 } from '../../core/script-calistirma';
 import { CONNECTION_LOST, useApi, type ScriptRunHandle } from '../api/client';
 import type { ServerEvent } from '../../core/script-calistirma';
-import { writeLockBlock, writeLockState } from '../../core/yazma-kilidi';
-import { STATUS_LABELS, STATUS_SYMBOLS, type AnalysisMark } from './durum';
+import type { Target } from '../../core/veritabani-secimi';
+import { isWritable, runBlockReasons, writeLockState, type WritableTargets } from '../../core/yazma-kilidi';
+import { STATUS_LABELS, STATUS_SYMBOLS, WRITE_LOCK_LABELS, type AnalysisMark } from './durum';
 import { ScriptEditoru, type EditorMarks, type ScriptEditoruHandle } from './ScriptEditoru';
 
 interface Props {
@@ -26,6 +27,10 @@ interface Props {
   onChangeTarget: () => void;
   /** Hedef kilidinin nedeni değişti (`null`: hedef değiştirilebilir); ekran kapanınca `null`. */
   onTargetLockChange?: (reason: string | null) => void;
+  /** Yazma modu açılmış hedefler; ekran kapansa da korunsun diye sahibi uygulamadır. */
+  writable: WritableTargets;
+  /** 🔒/🔓 düğmesi: hedefin yazma modunu tek tıkla açar ya da kapatır. */
+  onToggleWriteMode: (target: Target) => void;
 }
 
 /** Aynı satırda başlayan birden çok ifadede satır işareti en önemli durumu gösterir. */
@@ -43,12 +48,6 @@ const AUTOCOMMIT_CONNECTION_LOST: ServerEvent = {
 const ANALYSIS_DELAY_MS = 200;
 
 const MODE_LABELS: Record<RunMode, string> = { transaction: 'Transaction', autocommit: 'Autocommit', karisik: 'Karışık' };
-
-/** Script analizden geçmedi: reddedilen ifade var ya da script Karışık. */
-const isBlocked = (analysis: ScriptAnalysis) => analysis.reddedilenler.length > 0 || analysis.mod === 'karisik';
-
-/** Yazma kilidinin anahtarı: kilit editör ve hedef başınadır. */
-const targetKey = (target: NonNullable<Props['target']>) => `${target.connection.id}\u0000${target.database}`;
 
 function useDebounced<T>(value: T, ms: number): T {
   const [debounced, setDebounced] = useState(value);
@@ -78,7 +77,7 @@ function analysisMarks(script: string, statements: Statement[], analysis: Script
  * sağda karar kartı ve ifade kartları. prod hedefte başlık kırmızımsıdır; uygulamanın kırmızı
  * çerçevesi kökte verilir.
  */
-export function ScriptEkrani({ target, onChangeTarget, onTargetLockChange }: Props) {
+export function ScriptEkrani({ target, onChangeTarget, onTargetLockChange, writable, onToggleWriteMode }: Props) {
   const api = useApi();
   const prod = target !== null && isProd(target.connection.envTag);
   const [script, setScript] = useState('');
@@ -88,20 +87,9 @@ export function ScriptEkrani({ target, onChangeTarget, onTargetLockChange }: Pro
   const [deadline, setDeadline] = useState<DecisionTimer | null>(null);
   const editor = useRef<ScriptEditoruHandle>(null);
   const [folderError, setFolderError] = useState<string | null>(null);
-  /** Yazma modu açılmış hedefler; sayfa açık kaldıkça tutulur. */
-  const [writable, setWritable] = useState<ReadonlySet<string>>(() => new Set());
-  const writeMode = target !== null && writable.has(targetKey(target));
+  const targetRef: Target | null = target && { connectionId: target.connection.id, database: target.database };
+  const writeMode = targetRef !== null && isWritable(writable, targetRef);
   const lock = target ? writeLockState(target.connection.envTag, writeMode) : null;
-
-  function toggleWriteMode() {
-    if (!target) return;
-    const key = targetKey(target);
-    setWritable((current) => {
-      const next = new Set(current);
-      if (!next.delete(key)) next.add(key);
-      return next;
-    });
-  }
 
   function openHistoryFolder() {
     setFolderError(null);
@@ -124,20 +112,20 @@ export function ScriptEkrani({ target, onChangeTarget, onTargetLockChange }: Pro
   const analyzed = useDebounced(script, ANALYSIS_DELAY_MS);
   const statements = useMemo(() => splitStatements(analyzed), [analyzed]);
   const analysis = useMemo(() => analyzeScript(statements), [statements]);
-  /** Salt okunur prod'da Autocommit script'i. */
-  const writeBlock = writeLockBlock(analysis.mod, lock);
-  const blocked = isBlocked(analysis) || writeBlock !== null;
+  /** Reddedilen ifadeler, Karışık script ve salt okunur prod'da Autocommit. */
+  const reasons = useMemo(() => runBlockReasons(analyzed, statements, lock, analysis), [analyzed, statements, lock, analysis]);
+  const blocked = reasons.length > 0;
 
   function start() {
-    if (!target || busy) return;
+    if (!targetRef || busy) return;
     // Analiz yazmanın gerisinde kalabilir; çalıştırmadan önce güncel metinle yeniden bakılır.
-    const current = analyzeScript(splitStatements(script));
-    if (isBlocked(current) || writeLockBlock(current.mod, lock)) return;
+    const currentStatements = splitStatements(script);
+    const current = analyzeScript(currentStatements);
+    if (runBlockReasons(script, currentStatements, lock, current).length > 0) return;
     handle.current?.close();
     setRun(startRunView(script));
     setDeadline(null);
-    const request = { target: { connectionId: target.connection.id, database: target.database }, script, yazmaModu: writeMode };
-    handle.current = api.runScript(request, (received) => {
+    handle.current = api.runScript({ target: targetRef, script, yazmaModu: writeMode }, (received) => {
       // Autocommit'te geri alınacak transaction yok; sunucu çalışan ifadeyi iptal eder.
       const event = received === CONNECTION_LOST && current.mod === 'autocommit' ? AUTOCOMMIT_CONNECTION_LOST : received;
       setRun((current) => (current ? applyEvent(current, event) : current));
@@ -183,6 +171,11 @@ export function ScriptEkrani({ target, onChangeTarget, onTargetLockChange }: Pro
                 {target.connection.envTag}
               </span>
             )}
+            {lock && (
+              <span title="Yazma kilidi" className={`kilit-rozeti ${lock}`}>
+                {WRITE_LOCK_LABELS[lock].rozet}
+              </span>
+            )}
           </>
         ) : (
           <>
@@ -212,26 +205,22 @@ export function ScriptEkrani({ target, onChangeTarget, onTargetLockChange }: Pro
           <section aria-label="Script editörü" className="editor-alani">
             <ScriptEditoru ref={editor} value={script} onChange={setScript} readOnly={busy} marks={marks} />
           </section>
-          {!busy && blocked && (
-            <BlockReasons
-              reasons={[...blockReasons(analyzed, statements, analysis), ...(writeBlock ? [{ satir: null, mesaj: writeBlock }] : [])]}
-            />
-          )}
+          {!busy && blocked && <BlockReasons reasons={reasons} />}
           <div className="script-cubugu">
             <span title="Çalıştırma modu" className={`mod-rozeti ${analysis.mod}`}>
               {MODE_LABELS[analysis.mod]}
             </span>
-            {lock && (
+            {lock && targetRef && (
               // Tek tık; onay, şerit ya da tema değişimi yok. Açık transaction'ın kilidi değişmez.
               <button
                 type="button"
                 className={`kilit-dugmesi ${lock}`}
                 aria-pressed={lock === 'yazma-acik'}
-                title={lock === 'yazma-acik' ? 'Salt okunura dön' : 'Yazma modunu aç'}
-                onClick={toggleWriteMode}
+                title={WRITE_LOCK_LABELS[lock].eylem}
+                onClick={() => onToggleWriteMode(targetRef)}
                 disabled={busy}
               >
-                {lock === 'yazma-acik' ? '🔓 Yazma açık' : '🔒 Salt okunur'}
+                {WRITE_LOCK_LABELS[lock].rozet}
               </button>
             )}
             {running ? (
@@ -270,7 +259,7 @@ export function ScriptEkrani({ target, onChangeTarget, onTargetLockChange }: Pro
 }
 
 /** Script neden çalıştırılamıyor: reddedilen ifadeler ve Karışık script. */
-function BlockReasons({ reasons }: { reasons: ReturnType<typeof blockReasons> }) {
+function BlockReasons({ reasons }: { reasons: ReturnType<typeof runBlockReasons> }) {
   return (
     <ul className="analiz-sorunlari kucuk">
       {reasons.map(({ satir, mesaj }) => (

@@ -5,8 +5,12 @@
  * başına, sayfa açık kaldıkça tutulur; tek tıkla açılır, çalıştırmadan önce onay istenmez.
  */
 import { isProd, type EnvTag } from './baglanti';
-import type { WriteLockState } from './calistirma-kaydi';
-import type { RunMode } from './calistirma-modu';
+import { analyzeScript, blockReasons, type ScriptAnalysis } from './calistirma-modu';
+import type { Statement } from './ifade-bolme';
+import { isTarget, type Target } from './veritabani-secimi';
+
+/** Yazma kilidi: prod hedef salt okunur ya da yazma modunda; prod olmayan hedefte `null`. */
+export type WriteLockState = 'salt-okunur' | 'yazma-acik' | null;
 
 /** Hedefin yazma kilidi durumu; prod olmayan hedefte kilit yok (`null`). */
 export function writeLockState(envTag: EnvTag | null | undefined, yazmaModu: boolean): WriteLockState {
@@ -26,13 +30,39 @@ export function beginStatement(lock: WriteLockState): string {
   }
 }
 
+// ---------- Yazma modu açık hedefler ----------
+
+/** Yazma modu açılmış hedefler; listede olmayan prod hedef salt okunurdur. */
+export type WritableTargets = readonly Target[];
+
+export function isWritable(writable: WritableTargets, target: Target): boolean {
+  return writable.some((t) => isTarget(t, target.connectionId, target.database));
+}
+
+/** Hedefin yazma modunu açar ya da kapatır (tek tık). */
+export function toggleWritable(writable: WritableTargets, target: Target): WritableTargets {
+  if (!isWritable(writable, target)) return [...writable, { connectionId: target.connectionId, database: target.database }];
+  return writable.filter((t) => !isTarget(t, target.connectionId, target.database));
+}
+
+// ---------- Çalıştırma engelleri ----------
+
 export const READ_ONLY_AUTOCOMMIT_MESSAGE =
   "Salt okunur prod'da Autocommit script'i çalıştırılamaz; çalıştırmak için yazma modunu açın.";
 
 /**
- * Yazma kilidinin engellediği çalıştırma: salt okunur prod'da Autocommit script'i (her ifadesi
- * anında kalıcıdır) sunucuya hiç gitmeden reddedilir. Engel yoksa `null`.
+ * Script'in bu yazma kilidiyle neden çalıştırılamadığı: önce analiz engelleri (reddedilen
+ * ifadeler, Karışık script), sonra kilit. Salt okunur prod'da Autocommit script'i (her ifadesi
+ * anında kalıcıdır) sunucuya hiç gitmeden reddedilir. Boşsa script çalıştırılabilir; sunucu da
+ * arayüz de aynı metni gösterir.
  */
-export function writeLockBlock(mode: RunMode, lock: WriteLockState): string | null {
-  return mode === 'autocommit' && lock === 'salt-okunur' ? READ_ONLY_AUTOCOMMIT_MESSAGE : null;
+export function runBlockReasons(
+  script: string,
+  statements: Statement[],
+  lock: WriteLockState,
+  analysis: ScriptAnalysis = analyzeScript(statements),
+): { satir: number | null; mesaj: string }[] {
+  const reasons = blockReasons(script, statements, analysis);
+  if (analysis.mod === 'autocommit' && lock === 'salt-okunur') reasons.push({ satir: null, mesaj: READ_ONLY_AUTOCOMMIT_MESSAGE });
+  return reasons;
 }

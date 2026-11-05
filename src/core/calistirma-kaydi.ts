@@ -5,6 +5,7 @@
  * farkı) kayda girmez: ifade özetinde yalnızca sayılar ve hata vardır.
  */
 import type { EnvTag } from './baglanti';
+import type { WriteLockState } from './yazma-kilidi';
 
 /** Satır biçiminin sürümü; okurken daha yeni sürümlü satırlar atlanır. */
 export const RECORD_VERSION = 1;
@@ -20,8 +21,6 @@ export interface TargetSnapshot {
   ortam: EnvTag | null;
 }
 
-/** prod hedefte yazma kilidinin durumu; prod olmayan hedefte `null`. */
-export type WriteLockState = 'salt-okunur' | 'yazma-acik' | null;
 
 export interface StartedLine {
   v: typeof RECORD_VERSION;

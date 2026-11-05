@@ -27,3 +27,9 @@ export const STATUS_LABELS: Record<StatementStatus, string> = {
   sirada: 'sırada',
   calistirilmadi: 'çalıştırılmadı',
 };
+
+/** prod yazma kilidinin rozeti ve düğmenin açıklaması. */
+export const WRITE_LOCK_LABELS: Record<'salt-okunur' | 'yazma-acik', { rozet: string; eylem: string }> = {
+  'salt-okunur': { rozet: '🔒 Salt okunur', eylem: 'Yazma modunu aç' },
+  'yazma-acik': { rozet: '🔓 Yazma açık', eylem: 'Salt okunura dön' },
+};

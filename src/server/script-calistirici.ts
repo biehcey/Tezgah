@@ -2,7 +2,7 @@ import { performance } from 'node:perf_hooks';
 import pg from 'pg';
 import type { WebSocket } from 'ws';
 import type { Connection } from '../core/baglanti';
-import type { RecordResult, StatementSummary, WriteLockState } from '../core/calistirma-kaydi';
+import type { RecordResult, StatementSummary } from '../core/calistirma-kaydi';
 import { errorLocation } from '../core/hata-konumu';
 import {
   commitRequest,
@@ -13,7 +13,7 @@ import {
   startDecision,
   type DecisionTimer,
 } from '../core/karar-suresi';
-import { analyzeScript, blockReasons, type RunMode } from '../core/calistirma-modu';
+import { analyzeScript, type RunMode } from '../core/calistirma-modu';
 import { splitStatements, type Statement } from '../core/ifade-bolme';
 import {
   PREVIEW_ROWS,
@@ -23,8 +23,7 @@ import {
   type Preview,
   type ServerEvent,
 } from '../core/script-calistirma';
-import type { Target } from '../core/veritabani-secimi';
-import { beginStatement, writeLockBlock, writeLockState } from '../core/yazma-kilidi';
+import { beginStatement, runBlockReasons, writeLockState, type WriteLockState } from '../core/yazma-kilidi';
 import type { SettingsStore } from './ayar-deposu';
 import type { RunHistory } from './calistirma-kayitlari';
 import { TargetError, catalogQuery, type PoolManager } from './havuzlar';
@@ -132,18 +131,9 @@ export function createScriptRunner({ store, pools, clock, history, log }: Script
         case 'run': {
           if (run) return warn('mesgul', 'Bu sekmede zaten bir çalıştırma var');
           expired = false;
-          const statements = splitStatements(message.script);
-          const analysis = analyzeScript(statements);
-          send({ type: 'analiz', ...analysis });
-          const [blocked] = blockReasons(message.script, statements, analysis);
-          if (blocked) {
-            const mesaj = blocked.satir === null ? blocked.mesaj : `Satır ${blocked.satir}: ${blocked.mesaj}`;
-            return send({ type: 'bitti', sonuc: 'reddedildi', mesaj });
-          }
           const current: Run = { phase: 'calisiyor', stopping: null, commitAllowed: false, ifadeler: [] };
           run = current;
-          // Engellenmeyen script Karışık değildir.
-          execute(current, message.target, message.script, analysis.mod as Exclude<RunMode, 'karisik'>, message.yazmaModu)
+          start(current, message)
             .catch((err: unknown) => {
               log(`Script çalıştırma hatası: ${String(err)}`);
               send({ type: 'bitti', sonuc: 'hata', mesaj: 'Beklenmeyen bir hata oluştu' });
@@ -181,17 +171,40 @@ export function createScriptRunner({ store, pools, clock, history, log }: Script
       }
     }
 
-    async function execute(current: Run, target: Target, script: string, mode: Exclude<RunMode, 'karisik'>, yazmaModu: boolean) {
+    /**
+     * Script'i istemciye güvenmeden analiz eder ve engelleri sınar; engellenen script (reddedilen
+     * ifade, Karışık script, salt okunur prod'da Autocommit) hiçbir yere bağlanmadan biter ve
+     * kaydedilmez. Kilit bağlantının kayıtlı ortam etiketinden hesaplanır; istemciden yalnızca
+     * yazma modunun açık olup olmadığı gelir.
+     */
+    async function start(current: Run, { target, script, yazmaModu }: Extract<ClientMessage, { type: 'run' }>) {
+      const statements = splitStatements(script);
+      const analysis = analyzeScript(statements);
+      send({ type: 'analiz', ...analysis });
       const connection = (await store.read()).connections.find((c) => c.id === target.connectionId);
+      const lock = writeLockState(connection?.envTag, yazmaModu);
+      const [blocked] = runBlockReasons(script, statements, lock, analysis);
+      if (blocked) {
+        const mesaj = blocked.satir === null ? blocked.mesaj : `Satır ${blocked.satir}: ${blocked.mesaj}`;
+        return send({ type: 'bitti', sonuc: 'reddedildi', mesaj });
+      }
       // Hedefi olmayan çalıştırma kaydedilmez: hiçbir şey çalışmadı.
       if (!connection) return send({ type: 'bitti', sonuc: 'hata', mesaj: 'Bağlantı bulunamadı' });
-      const lock = writeLockState(connection.envTag, yazmaModu);
-      // Salt okunur prod'da Autocommit sunucuya hiç gitmez; analizden geçmeyen script gibi kaydedilmez.
-      const blocked = writeLockBlock(mode, lock);
-      if (blocked) return send({ type: 'bitti', sonuc: 'reddedildi', mesaj: blocked });
+      // Engellenmeyen script Karışık değildir.
+      await execute(current, connection, target.database, script, analysis.mod as Exclude<RunMode, 'karisik'>, lock);
+    }
+
+    async function execute(
+      current: Run,
+      connection: Connection,
+      database: string,
+      script: string,
+      mode: Exclude<RunMode, 'karisik'>,
+      lock: WriteLockState,
+    ) {
       const recorder = history.begin({
         script,
-        hedef: { baglantiId: connection.id, ad: connection.name, veritabani: target.database, ortam: connection.envTag },
+        hedef: { baglantiId: connection.id, ad: connection.name, veritabani: database, ortam: connection.envTag },
         mod: mode,
         deneme: false,
         yazmaKilidi: lock,
@@ -211,8 +224,8 @@ export function createScriptRunner({ store, pools, clock, history, log }: Script
         send({ type: 'bitti', ...event });
       };
       try {
-        await pools.withClient(connection, target.database, (client, discard) => {
-          const session = { client, discard, connection, database: target.database, lock };
+        await pools.withClient(connection, database, (client, discard) => {
+          const session = { client, discard, connection, database, lock };
           return mode === 'autocommit' ? inAutocommit(current, session, script, finish) : inTransaction(current, session, script, finish);
         });
       } catch (err) {

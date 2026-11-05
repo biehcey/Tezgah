@@ -1,10 +1,18 @@
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { useState, type ComponentProps } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { toggleWritable, type WritableTargets } from '../../core/yazma-kilidi';
 import { ApiProvider, CONNECTION_LOST } from '../api/client';
 import { editorCursorLine, editorScript, gutterMarks, setEditorScript } from '../test/eylemler';
 import { connection, createFakeApi, createFakeScriptRuns, renderWithApi } from '../test/sahte-api';
 import { ScriptEkrani } from './ScriptEkrani';
+
+/** Yazma kilidini uygulamanın (App) yerine tutan sarmalayıcı. */
+function Ekran(props: Omit<ComponentProps<typeof ScriptEkrani>, 'writable' | 'onToggleWriteMode'>) {
+  const [writable, setWritable] = useState<WritableTargets>([]);
+  return <ScriptEkrani {...props} writable={writable} onToggleWriteMode={(t) => setWritable((w) => toggleWritable(w, t))} />;
+}
 
 const DK = 60_000;
 const SCRIPT = 'INSERT INTO t VALUES (1);\nSELECT nope FROM t;\nDELETE FROM t';
@@ -14,7 +22,7 @@ function setup({ withTarget = true, openRunHistoryFolder = vi.fn(() => Promise.r
   const fake = createFakeScriptRuns();
   const target = withTarget ? { connection: connection({ id: 'b1', name: 'Yerel' }), database: 'app' } : null;
   const view = renderWithApi(
-    <ScriptEkrani target={target} onChangeTarget={() => {}} />,
+    <Ekran target={target} onChangeTarget={() => {}} />,
     createFakeApi({ runScript: fake.runScript, openRunHistoryFolder }),
   );
   return { user, fake, view, openRunHistoryFolder };
@@ -371,7 +379,7 @@ describe('Script ekranı: prod yazma kilidi', () => {
     const api = createFakeApi({ runScript: fake.runScript });
     const screenFor = (target: ReturnType<typeof prodTarget> | null) => (
       <ApiProvider client={api}>
-        <ScriptEkrani target={target} onChangeTarget={() => {}} />
+        <Ekran target={target} onChangeTarget={() => {}} />
       </ApiProvider>
     );
     const view = render(screenFor(prodTarget()));
@@ -388,6 +396,14 @@ describe('Script ekranı: prod yazma kilidi', () => {
     setEditorScript('SELECT 1');
     await user.click(runButton());
     expect(fake.last().yazmaModu).toBe(false);
+  });
+
+  it('hedef başlığında ortam etiketinin yanında kilit rozeti durumu gösterir', async () => {
+    const { user } = setupProd();
+    const header = screen.getByRole('region', { name: 'Hedef' });
+    expect(within(header).getByTitle('Yazma kilidi')).toHaveTextContent('🔒 Salt okunur');
+    await user.click(lockButton());
+    expect(within(header).getByTitle('Yazma kilidi')).toHaveTextContent('🔓 Yazma açık');
   });
 
   it('düğme yazma modunu tek tıkla açar ve kapatır; çalıştırma onaysız yazma moduyla gider', async () => {

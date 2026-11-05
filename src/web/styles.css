@@ -955,9 +955,19 @@ button.kucuk {
   font-size: 12px;
 }
 
-.kilit-dugmesi.yazma-acik {
+.kilit-dugmesi.yazma-acik,
+.kilit-rozeti.yazma-acik {
   border-color: var(--prod);
   color: var(--prod);
+}
+
+/* Başlıkta ortam etiketinin yanındaki durum rozeti; değiştirmek araç çubuğundaki düğmeyle. */
+.kilit-rozeti {
+  align-self: center;
+  padding: 2px 8px;
+  border: 1px solid var(--cizgi);
+  border-radius: 999px;
+  font-size: 12px;
 }
 
 .uyari-seridi {

@@ -8,6 +8,7 @@ import {
 } from '../core/baglanti';
 import { asksForSessionPassword, isPasswordRejected } from '../core/baglanti-testi';
 import { buildConnectionUrl } from '../core/baglanti-url';
+import { toggleWritable, type WritableTargets } from '../core/yazma-kilidi';
 import { ApiError, connectionRequest, useApi } from './api/client';
 import { HizliGecis, type PaletteCommand } from './hizli-gecis/HizliGecis';
 import { BaglantiFormu } from './baglantilar/BaglantiFormu';
@@ -87,6 +88,9 @@ export function App() {
   const [reveal, setReveal] = useState<Reveal | null>(null);
   /** Script çalışırken ve karar beklenirken hedef değiştirilemez; neden. */
   const [targetLock, setTargetLock] = useState<string | null>(null);
+  /** prod yazma kilidi hedef başına, sayfa açık kaldıkça; script ekranı kapanıp açılınca da korunur. */
+  const [writable, setWritable] = useState<WritableTargets>([]);
+  const toggleWriteMode = useCallback((t: Target) => setWritable((current) => toggleWritable(current, t)), []);
   const urlFormCount = useRef(0);
   /** Başka bir pencere (klasör, onay, şifre) açıkken kısayol paleti onun üstüne açmaz. */
   const dialogOpen = useRef(false);
@@ -517,7 +521,13 @@ export function App() {
             onDelete={setDeleting}
           />
         ) : (
-          <ScriptEkrani target={targetView} onChangeTarget={() => setPaletteOpen(true)} onTargetLockChange={setTargetLock} />
+          <ScriptEkrani
+            target={targetView}
+            onChangeTarget={() => setPaletteOpen(true)}
+            onTargetLockChange={setTargetLock}
+            writable={writable}
+            onToggleWriteMode={toggleWriteMode}
+          />
         )}
       </main>
       {paletteOpen && (
