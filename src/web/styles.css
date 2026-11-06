@@ -224,7 +224,7 @@ button.tehlikeli {
 
 .baglanti-satiri {
   display: grid;
-  grid-template-columns: 10px minmax(0, 1fr) auto auto;
+  grid-template-columns: 10px minmax(0, 1fr) auto auto auto;
   column-gap: 8px;
   align-items: center;
   width: 100%;
@@ -1385,4 +1385,266 @@ button.kucuk {
 .palet-alt {
   padding: 6px 14px;
   border-top: 1px solid var(--cizgi);
+}
+
+/* İçe aktarma */
+
+.baglanti-satiri .ice-izi {
+  display: flex;
+  grid-column: 5;
+  gap: 4px;
+  align-items: center;
+  font-size: 11px;
+}
+
+.rozet {
+  display: inline-block;
+  padding: 0 6px;
+  border: 1px solid var(--cizgi);
+  border-radius: 9px;
+  color: var(--soluk);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 16px;
+}
+
+.test-basarili {
+  color: var(--basarili);
+}
+
+.test-uyari {
+  color: var(--dikkat);
+}
+
+.test-hata {
+  color: var(--uyari);
+}
+
+.bos-liste p {
+  margin: 0 0 8px;
+}
+
+.bos-liste-dugmeleri {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.diyalog.ice-aktarma {
+  display: flex;
+  flex-direction: column;
+  width: min(980px, calc(100vw - 32px));
+  max-height: calc(100vh - 48px);
+}
+
+.ice-aktarma-baslik {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--cizgi);
+}
+
+.kaynak-cipleri {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.cip {
+  padding: 2px 10px;
+  border: 1px solid var(--cizgi);
+  border-radius: 14px;
+  background: none;
+  font-size: 12px;
+}
+
+.cip[aria-pressed='true'] {
+  border-color: var(--vurgu);
+  color: var(--vurgu);
+}
+
+.cip .sayi {
+  font-weight: 600;
+}
+
+.cip.hatali {
+  border-color: var(--uyari);
+  color: var(--uyari);
+  cursor: help;
+}
+
+.yol-satiri {
+  display: flex;
+  gap: 8px;
+}
+
+.yol-satiri input {
+  flex: 1;
+}
+
+.ice-aktarma-govde {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+  min-height: 0;
+  flex: 1;
+}
+
+.sonuc-agaci,
+.aday-ayrintisi {
+  min-height: 240px;
+  padding: 12px 12px 12px 0;
+  overflow: auto;
+}
+
+.aday-ayrintisi {
+  padding-left: 12px;
+  border-left: 1px solid var(--cizgi);
+}
+
+.agac-bolumu {
+  margin-top: 8px;
+}
+
+.agac-basligi {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 2px 0;
+  color: var(--soluk);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.agac-satiri {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  min-height: 28px;
+  padding: 2px 8px;
+  border-left: 3px solid transparent;
+  font-size: 13px;
+}
+
+.agac-satiri.prod-serit {
+  border-left-color: var(--prod);
+}
+
+.agac-satiri.mevcut {
+  color: var(--soluk);
+}
+
+.agac-satiri.aday {
+  background: color-mix(in srgb, var(--basarili) 12%, transparent);
+}
+
+.agac-satiri.aday.secilmemis {
+  background: none;
+  color: var(--soluk);
+}
+
+.agac-satiri.aday.secili {
+  outline: 1px solid var(--vurgu);
+  outline-offset: -1px;
+}
+
+.agac-dugme {
+  display: flex;
+  flex: 1;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  text-align: left;
+}
+
+.agac-adi {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agac-satiri .baglanti-adresi {
+  flex: 1;
+}
+
+.agac-uyari {
+  color: var(--dikkat);
+  font-size: 12px;
+}
+
+.agac-rozeti {
+  margin-left: auto;
+  color: var(--soluk);
+  font-size: 11px;
+}
+
+.agac-satiri.aday:not(.secilmemis) .agac-rozeti {
+  color: var(--basarili);
+}
+
+.ayrinti-listesi {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr);
+  gap: 6px 10px;
+  margin: 0;
+  font-size: 13px;
+}
+
+.ayrinti-listesi dt {
+  color: var(--soluk);
+}
+
+.ayrinti-listesi dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.ayrinti-listesi input:not([type='checkbox']),
+.ayrinti-listesi select {
+  width: 100%;
+}
+
+.duz-liste {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.uyari-listesi {
+  color: var(--dikkat);
+}
+
+.diyalog.ice-aktarma-sonucu {
+  width: min(640px, calc(100vw - 32px));
+}
+
+.sonuc-listesi {
+  margin-top: 12px;
+}
+
+.sonuc-listesi li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1.5fr) auto;
+  gap: 8px;
+  align-items: center;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--cizgi);
+}
+
+@media (max-width: 720px) {
+  .ice-aktarma-govde {
+    grid-template-columns: 1fr;
+  }
+
+  .aday-ayrintisi {
+    padding-left: 0;
+    border-left: 0;
+    border-top: 1px solid var(--cizgi);
+  }
 }

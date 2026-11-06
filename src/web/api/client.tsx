@@ -13,6 +13,7 @@ import type {
   ValidationErrorResponse,
 } from '../../core/baglanti';
 import type { ConnectionTestRequest, ConnectionTestResponse } from '../../core/baglanti-testi';
+import type { ImportApplyRequest, ImportApplyResponse, ImportPreviewRequest, ImportPreviewResponse } from '../../core/ice-aktarma/sozlesme';
 import type { HostKeyForgetRequest, HostKeyForgetResponse, HostKeyTrustRequest, HostKeyTrustResponse } from '../../core/ssh-tuneli';
 import type { ClientMessage, ServerEvent } from '../../core/script-calistirma';
 import type { DatabaseListResponse, SchemaListResponse, TargetErrorResponse } from '../../core/veritabani-secimi';
@@ -58,6 +59,10 @@ export interface ApiClient {
   runScript(request: ScriptRunRequest, onEvent: (event: ServerEvent) => void): ScriptRunHandle;
   /** Çalıştırma kayıtları klasörünü işletim sisteminin dosya yöneticisinde açar. */
   openRunHistoryFolder(): Promise<void>;
+  /** İçe aktarma kaynaklarını (`.pgpass`) tarar; adaylar şifre değeri olmadan gelir. */
+  previewImport(input: ImportPreviewRequest): Promise<ImportPreviewResponse>;
+  /** Seçilen adayları ekler; şifreler sunucuda keychain'e kopyalanır. */
+  applyImport(input: ImportApplyRequest): Promise<ImportApplyResponse>;
 }
 
 /** Çalıştırmanın hedefi, script'i ve (prod'da) yazma kilidi durumu. */
@@ -154,6 +159,8 @@ export function createHttpApiClient(): ApiClient {
     openRunHistoryFolder: async () => {
       await send('POST', '/api/calistirma-kayitlari/klasoru-ac');
     },
+    previewImport: (input) => send('POST', '/api/ice-aktarma/onizleme', input),
+    applyImport: (input) => send('POST', '/api/ice-aktarma/uygula', input),
   };
 }
 

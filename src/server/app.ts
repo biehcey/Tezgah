@@ -15,6 +15,7 @@ import { createTunnelOpener, type SshConnector } from './tunel';
 import type { AgentEnvironment } from '../core/ssh-tuneli';
 import { createSessionPasswords } from './oturum-sifreleri';
 import { createFolderRoutes } from './klasorler';
+import { createImportRoutes, type PgpassEnvironment } from './ice-aktarma';
 import { BodyError, json } from './http';
 import type { Keychain } from './keychain';
 import { systemClock, type Clock } from './saat';
@@ -46,6 +47,8 @@ export interface ServerOptions {
   homeDir?: string;
   /** Agent yolunun varsayılanı için platform ve ortam değişkenleri. */
   agentEnvironment?: AgentEnvironment;
+  /** `.pgpass` araması için platform ve ortam (`PGPASSFILE`, `APPDATA`); testlerde enjekte. */
+  pgpassEnvironment?: PgpassEnvironment;
   log: (line: string) => void;
 }
 
@@ -105,6 +108,13 @@ export async function startServer(options: ServerOptions): Promise<TezgahServer>
 
   const connectionTestRoutes = createConnectionTestRoutes({ store, keychain: options.keychain, openTunnel, log: options.log });
   const hostKeyRoutes = createHostKeyRoutes({ hostKeys });
+  const importRoutes = createImportRoutes({
+    store,
+    keychain: options.keychain,
+    homeDir: options.homeDir ?? homedir(),
+    environment: options.pgpassEnvironment ?? { platform: process.platform, env: process.env },
+    log: options.log,
+  });
 
   async function handle(req: IncomingMessage, res: ServerResponse) {
     const url = requestUrl(req);
@@ -138,6 +148,7 @@ export async function startServer(options: ServerOptions): Promise<TezgahServer>
     if (await hostKeyRoutes(req, res, url.pathname)) return;
     if (await folderRoutes(req, res, url.pathname)) return;
     if (await historyRoutes(req, res, url.pathname)) return;
+    if (await importRoutes(req, res, url.pathname)) return;
     if (url.pathname === '/api' || url.pathname.startsWith('/api/')) return json(res, 404, { hata: 'Bulunamadı' });
     if (req.method !== 'GET' && req.method !== 'HEAD') return sendStatus(res, 405);
     await serveStatic(options.webRoot, url.pathname, res);

@@ -78,7 +78,7 @@ export type FolderNameResult = { ok: true; name: string } | { ok: false; error: 
  * Büyük/küçük harf duyarsız eşitlik. Türkçe çevrim tek başına "BILLING"i "bıllıng" yapar, kök çevrim
  * de "İzmir"i "i̇zmir" yapar; ikisinden biri eşleşirse aynı ad sayılır.
  */
-function sameName(a: string, b: string): boolean {
+export function sameName(a: string, b: string): boolean {
   const tr = (s: string) => s.toLocaleUpperCase('tr').toLocaleLowerCase('tr');
   return tr(a) === tr(b) || a.toLowerCase() === b.toLowerCase();
 }

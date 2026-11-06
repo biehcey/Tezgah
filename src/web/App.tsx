@@ -15,7 +15,11 @@ import { toggleWritable, type WritableTargets } from '../core/yazma-kilidi';
 import { ApiError, connectionRequest, useApi } from './api/client';
 import { HizliGecis, type PaletteCommand } from './hizli-gecis/HizliGecis';
 import { BaglantiFormu } from './baglantilar/BaglantiFormu';
-import { BaglantiListesi } from './baglantilar/BaglantiListesi';
+import { BaglantiListesi, type ImportMarks } from './baglantilar/BaglantiListesi';
+import { IceAktarma } from './ice-aktarma/IceAktarma';
+import { IceAktarmaSonucu } from './ice-aktarma/IceAktarmaSonucu';
+import type { ImportApplyResponse } from '../core/ice-aktarma/sozlesme';
+import { SKIPPED_WITHOUT_PASSWORD, importTestRequest, importTestResult } from '../core/ice-aktarma/toplu-baglanti-testi';
 import { KlasorAdi } from './baglantilar/KlasorAdi';
 import { SifrePenceresi } from './baglantilar/SifrePenceresi';
 import { SilmeOnayi } from './baglantilar/SilmeOnayi';
@@ -105,6 +109,9 @@ export function App() {
   const [writable, setWritable] = useState<WritableTargets>([]);
   const toggleWriteMode = useCallback((t: Target) => setWritable((current) => toggleWritable(current, t)), []);
   const urlFormCount = useRef(0);
+  const [importOpen, setImportOpen] = useState(false);
+  const [importResult, setImportResult] = useState<ImportApplyResponse | null>(null);
+  const [importMarks, setImportMarks] = useState<ImportMarks>({ newIds: [], tests: {} });
   /** Başka bir pencere (klasör, onay, şifre) açıkken kısayol paleti onun üstüne açmaz. */
   const dialogOpen = useRef(false);
 
@@ -306,16 +313,54 @@ export function App() {
 
   const closePalette = useCallback(() => setPaletteOpen(false), []);
   const revealed = useCallback(() => setReveal(null), []);
-  dialogOpen.current = folderDialog !== null || deleting !== null || passwordPrompt !== null || hostKeyPrompt !== null;
+  dialogOpen.current =
+    folderDialog !== null ||
+    deleting !== null ||
+    passwordPrompt !== null ||
+    hostKeyPrompt !== null ||
+    importOpen ||
+    importResult !== null;
   const paletteCommands: PaletteCommand[] = [
     { label: 'Yeni bağlantı', run: () => open({ kind: 'yeni' }) },
     { label: 'Yeni klasör', run: () => setFolderDialog({ kind: 'yeni' }) },
-    { label: 'İçe aktar', disabled: true, hint: 'yakında', run: () => {} },
+    { label: 'İçe aktar', run: () => setImportOpen(true) },
     { label: 'Çalıştırma kayıtları klasörünü aç', run: () => void api.openRunHistoryFolder().catch((err: unknown) => console.error('Kayıt klasörü açılamadı', err)) },
   ];
   const serverDatabases = Object.fromEntries(
     Object.entries(sessions).flatMap(([id, s]) => (s.durum === 'bagli' ? [[id, s.veritabanlari]] : [])),
   );
+
+  const closeImport = useCallback(() => setImportOpen(false), []);
+  const closeImportResult = useCallback(() => setImportResult(null), []);
+
+  /** İçe aktarılanlar listeye eklenir, "yeni" rozeti öncekilerden bunlara geçer; istenirse sırayla test edilir. */
+  async function imported(response: ImportApplyResponse, testAfter: boolean) {
+    const added = response.added.map((a) => a.connection);
+    setFolders((list) => [...list, ...response.folders]);
+    setConnections((list) => [...(list ?? []), ...added]);
+    setImportOpen(false);
+    setImportResult(response);
+    const setTest = (id: string, state: ImportMarks['tests'][string]) =>
+      setImportMarks((m) => ({ ...m, tests: { ...m.tests, [id]: state } }));
+    setImportMarks({
+      newIds: added.map((c) => c.id),
+      tests: testAfter ? Object.fromEntries(added.map((c) => [c.id, 'bekliyor' as const])) : {},
+    });
+    if (!testAfter) return;
+    // Sırayla ve etkileşimsiz: şifre ya da host anahtarı sorulmaz, uyarı olarak kalır.
+    for (const { connection, password } of response.added) {
+      if (password !== 'kaydedildi') {
+        setTest(connection.id, SKIPPED_WITHOUT_PASSWORD);
+        continue;
+      }
+      setTest(connection.id, 'calisiyor');
+      try {
+        setTest(connection.id, importTestResult(await api.testConnection(importTestRequest(connection))));
+      } catch (err) {
+        setTest(connection.id, { sonuc: 'hata', mesaj: errorMessage(err) });
+      }
+    }
+  }
 
   function edit(id: string) {
     setSelectedId(id);
@@ -495,6 +540,15 @@ export function App() {
           <button
             type="button"
             className="ikon-dugme"
+            aria-label="İçe aktar"
+            title="İçe aktar (.pgpass)"
+            onClick={() => setImportOpen(true)}
+          >
+            <span aria-hidden="true">⇩</span>
+          </button>
+          <button
+            type="button"
+            className="ikon-dugme"
             aria-label="Yeni klasör"
             title="Yeni klasör"
             onClick={() => setFolderDialog({ kind: 'yeni' })}
@@ -524,6 +578,9 @@ export function App() {
               onFolderMenu={folderMenu}
               onMove={(connection, folderId) => void move(connection, folderId)}
               revealId={reveal?.connectionId ?? null}
+              importMarks={importMarks}
+              onImport={() => setImportOpen(true)}
+              onNew={() => open({ kind: 'yeni' })}
             />
           )}
         </nav>
@@ -640,6 +697,26 @@ export function App() {
             />
           </div>
         </div>
+      )}
+      {importOpen && (
+        <IceAktarma
+          connections={connections ?? []}
+          folders={folders}
+          onImported={(response, testAfter) => void imported(response, testAfter)}
+          onCancel={closeImport}
+        />
+      )}
+      {importResult && (
+        <IceAktarmaSonucu
+          result={importResult}
+          folders={folders}
+          tests={importMarks.tests}
+          onOpenForm={(id) => {
+            setImportResult(null);
+            edit(id);
+          }}
+          onClose={closeImportResult}
+        />
       )}
       {deleting && <SilmeOnayi connection={deleting} onConfirm={() => confirmDelete(deleting)} onCancel={cancelDelete} />}
     </div>

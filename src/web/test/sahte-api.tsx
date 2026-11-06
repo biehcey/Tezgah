@@ -40,6 +40,8 @@ export function createFakeApi(overrides: Partial<ApiClient> = {}): ApiClient {
     updateDatabaseSelection: missing('updateDatabaseSelection'),
     disconnect: missing('disconnect'),
     openRunHistoryFolder: missing('openRunHistoryFolder'),
+    previewImport: missing('previewImport'),
+    applyImport: missing('applyImport'),
     runScript: () => {
       throw new Error('Sahte API: runScript tanımlı değil');
     },

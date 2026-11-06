@@ -3,6 +3,13 @@ import type { Folder } from '../../core/ayarlar';
 import { connectionAddress, isProd, type Connection } from '../../core/baglanti';
 import { menuBelow, type MenuPosition } from '../ortak/Menu';
 import type { ConnectionSession } from '../veritabanlari/hedef';
+import { TEST_ICONS, type ImportTestState } from '../../core/ice-aktarma/toplu-baglanti-testi';
+
+/** Son içe aktarmanın izleri: bir sonraki içe aktarmaya kadar "yeni" rozeti ve toplu test sonucu. */
+export interface ImportMarks {
+  newIds: readonly string[];
+  tests: Readonly<Record<string, ImportTestState>>;
+}
 
 interface Props {
   connections: Connection[];
@@ -19,6 +26,10 @@ interface Props {
   onMove: (connection: Connection, folderId: string | null) => void;
   /** Hızlı geçişte Alt+Enter ile gösterilen bağlantı: klasörü kapalıysa açılır. */
   revealId?: string | null;
+  importMarks?: ImportMarks;
+  /** Boş listedeki düğmeler. */
+  onImport: () => void;
+  onNew: () => void;
 }
 
 /** Sürüklenen bağlantının kimliğini taşıyan veri türü; başka sürüklemeler bırakılamaz. */
@@ -43,6 +54,9 @@ export function BaglantiListesi({
   onFolderMenu,
   onMove,
   revealId = null,
+  importMarks = { newIds: [], tests: {} },
+  onImport,
+  onNew,
 }: Props) {
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   const [dropTarget, setDropTarget] = useState<string | null>(null);
@@ -60,7 +74,19 @@ export function BaglantiListesi({
   }, [revealFolder, revealId]);
 
   if (connections.length === 0 && folders.length === 0) {
-    return <p className="bos-liste">Henüz bağlantı yok. Başlıktaki + ile ekleyin.</p>;
+    return (
+      <div className="bos-liste">
+        <p>Henüz bağlantı yok.</p>
+        <div className="bos-liste-dugmeleri">
+          <button type="button" onClick={onImport}>
+            İçe aktar…
+          </button>
+          <button type="button" onClick={onNew}>
+            Yeni bağlantı…
+          </button>
+        </div>
+      </div>
+    );
   }
 
   const rows = (list: Connection[]) => (
@@ -68,6 +94,8 @@ export function BaglantiListesi({
       {list.map((c) => {
         const session = sessions[c.id];
         const status = session && STATUS[session.durum];
+        const test = importMarks.tests[c.id];
+        const isNew = importMarks.newIds.includes(c.id);
         return (
           <li key={c.id} className="baglanti-ogesi">
             <button
@@ -97,6 +125,21 @@ export function BaglantiListesi({
               {session && status && (
                 <span className={`durum durum-${session.durum}`} role="img" aria-label={status.label} title={status.label}>
                   {status.icon}
+                </span>
+              )}
+              {(isNew || (test !== undefined && test !== 'bekliyor')) && (
+                <span className="ice-izi">
+                  {isNew && <span className="rozet">yeni</span>}
+                  {test === 'calisiyor' && (
+                    <span role="img" aria-label="test ediliyor" title="test ediliyor">
+                      ◌
+                    </span>
+                  )}
+                  {typeof test === 'object' && (
+                    <span className={`test-${test.sonuc}`} role="img" aria-label={`test: ${test.mesaj}`} title={test.mesaj}>
+                      {TEST_ICONS[test.sonuc]}
+                    </span>
+                  )}
                 </span>
               )}
               {c.id === targetConnectionId && <span className="hedef-isareti">● hedef</span>}

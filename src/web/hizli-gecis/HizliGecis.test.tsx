@@ -2,6 +2,7 @@ import { screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import { App } from '../App';
+import { HizliGecis } from './HizliGecis';
 import { setEditorScript } from '../test/eylemler';
 import { connection, createFakeConnections, createFakeScriptRuns, folder, renderWithApi, type FakeConnections } from '../test/sahte-api';
 
@@ -164,16 +165,15 @@ describe('Cmd/Ctrl+K paleti: komutlar', () => {
     expect(opened).toEqual(['acildi']);
   });
 
-  it('yeni bağlantı formu ve yeni klasör penceresi açılır; henüz olmayanlar pasif', async () => {
+  it('yeni bağlantı formu ve yeni klasör penceresi açılır', async () => {
     const { user } = await setup();
     await user.keyboard('{Control>}k{/Control}');
     expect(options('Komutlar')).toEqual([
       'Yeni bağlantı',
       'Yeni klasör',
-      'İçe aktaryakında',
+      'İçe aktar',
       'Çalıştırma kayıtları klasörünü aç',
     ]);
-    expect(within(group('Komutlar')).getByRole('option', { name: /İçe aktar/ })).toHaveAttribute('aria-disabled', 'true');
 
     await user.type(search(), 'yeni bag');
     expect(within(palette()).queryByRole('group', { name: 'Hedefler' })).not.toBeInTheDocument();
@@ -187,12 +187,27 @@ describe('Cmd/Ctrl+K paleti: komutlar', () => {
   });
 
   it('pasif komut Enter ya da tıklamayla çalışmaz, gezinmede atlanır', async () => {
-    const { user } = await setup();
-    await user.keyboard('{Control>}k{/Control}');
-    await user.type(search(), 'ice aktar');
+    const user = userEvent.setup();
+    const ran: string[] = [];
+    renderWithApi(
+      <HizliGecis
+        connections={[]}
+        serverDatabases={{}}
+        target={null}
+        targetLock={null}
+        commands={[{ label: 'Dışa aktar', disabled: true, hint: 'yakında', run: () => ran.push('calisti') }]}
+        onSelectTarget={() => true}
+        onSelectAndShow={() => {}}
+        onReveal={() => {}}
+        onNewFromUrl={() => {}}
+        onClose={() => ran.push('kapandi')}
+      />,
+    );
+    expect(within(group('Komutlar')).getByRole('option', { name: /Dışa aktar/ })).toHaveAttribute('aria-disabled', 'true');
+    await user.type(search(), 'disa');
     await user.keyboard('{Enter}');
-    await user.click(within(group('Komutlar')).getByRole('option', { name: /İçe aktar/ }));
-    expect(palette()).toBeInTheDocument();
+    await user.click(within(group('Komutlar')).getByRole('option', { name: /Dışa aktar/ }));
+    expect(ran).toEqual([]);
   });
 });
 
