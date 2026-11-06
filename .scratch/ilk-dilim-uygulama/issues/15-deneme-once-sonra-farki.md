@@ -52,3 +52,4 @@ Uygulama notları (2026-11-05):
   - server: sahte PG ile `deneme.test.ts`.
   - web: `ScriptEkrani.test.tsx`.
   - Gerçek PG testleri sürüme göre koşullu yazıldı ama `TEZGAH_TEST_PG_URL` olmadığından **koşturulamadı**. Ticket 14'ün testleri PK'sız (UNIQUE'li) tabloya taşındı; PK'lı tabloda PG18+ ise fark, değilse yedek sınanıyor.
+- **Gerçek PG18 doğrulaması (2026-11-06)**: embedded-postgres 18.4 ile tüm sunucu testleri koşturuldu, `deneme.test.ts` (24 test) dahil hepsi geçti. Ortaya çıkan tek sorun ticket 11'in "soket koparsa" testindeydi. `admin` `BEGIN` içinde kilit tutarken `pg_stat_activity` transaction boyunca aynı anlık görüntüyü döndürüyordu. Yoklamadan önce artık `pg_stat_clear_snapshot()` çağrılıyor. Uygulama kodunda değişiklik gerekmedi.

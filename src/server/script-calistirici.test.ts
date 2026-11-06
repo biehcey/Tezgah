@@ -111,6 +111,9 @@ describePg('script çalıştırma: Transaction modu, gerçek Postgres', () => {
 
   /** Tezgah'ın sunucudaki oturumlarının durumları. */
   async function tezgahStates(): Promise<string[]> {
+    // `pg_stat_activity` transaction boyunca ilk okumadaki anlık görüntüyü verir; admin kilit
+    // tutarken (BEGIN içinde) yoklanınca her seferinde taze okunmalı.
+    await admin.query('SELECT pg_stat_clear_snapshot()');
     const { rows } = await admin.query<{ state: string }>(
       `SELECT state FROM pg_stat_activity WHERE application_name = 'Tezgah' AND pid <> pg_backend_pid()`,
     );
