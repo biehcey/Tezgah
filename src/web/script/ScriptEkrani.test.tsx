@@ -465,6 +465,53 @@ describe('Script ekranı: prod yazma kilidi', () => {
   });
 });
 
+describe('Script ekranı: prod’da deneme', () => {
+  const strip = () => screen.queryByRole('note', { name: 'Deneme yan etki uyarısı' });
+
+  function setupTarget(envTag: 'prod' | 'staging') {
+    const user = userEvent.setup();
+    const fake = createFakeScriptRuns();
+    const api = createFakeApi({ runScript: fake.runScript });
+    const screenFor = (tag: 'prod' | 'staging') => (
+      <ApiProvider client={api}>
+        <Ekran target={{ connection: connection({ id: 'p1', name: 'Canlı', envTag: tag }), database: 'app' }} onChangeTarget={() => {}} />
+      </ApiProvider>
+    );
+    const view = render(screenFor(envTag));
+    return { user, fake, showTarget: (tag: 'prod' | 'staging') => view.rerender(screenFor(tag)) };
+  }
+
+  it('salt okunur prod’da Dene onaysız başlar; deneme sürdükçe ve bitince kapatılamayan yan etki şeridi', async () => {
+    const { user, fake } = setupTarget('prod');
+    setEditorScript('UPDATE t SET a = 1');
+    expect(strip()).toBeNull();
+    await user.click(screen.getByRole('button', { name: '⟲ Dene' }));
+    expect(fake.last()).toMatchObject({ deneme: true, yazmaModu: false });
+    expect(strip()).toHaveTextContent(
+      "Deneme prod'da çalışır: satır kilitleri alır, sequence'ler ilerler (nextval geri alınmaz), tetikleyici/FDW/dblink dış etkileri geri alınmaz.",
+    );
+    expect(within(strip()!).queryByRole('button')).toBeNull();
+    fake.last().emit({ type: 'bitti', sonuc: 'deneme' });
+    expect(await screen.findByText(/Deneme geri alındı/)).toBeInTheDocument();
+    expect(strip()).toBeInTheDocument();
+
+    // Normal çalıştırmada şerit yok.
+    await user.click(runButton());
+    expect(strip()).toBeNull();
+  });
+
+  it('prod dışında şerit yok; hedef sonradan prod’a değişse de o deneme için çıkmaz', async () => {
+    const { user, fake, showTarget } = setupTarget('staging');
+    setEditorScript('UPDATE t SET a = 1');
+    await user.click(screen.getByRole('button', { name: '⟲ Dene' }));
+    expect(strip()).toBeNull();
+    fake.last().emit({ type: 'bitti', sonuc: 'deneme' });
+    await screen.findByText(/Deneme geri alındı/);
+    showTarget('prod');
+    expect(strip()).toBeNull();
+  });
+});
+
 describe('Script ekranı: Deneme modu', () => {
   const tryButton = () => screen.getByRole('button', { name: '⟲ Dene' });
   const tabs = () => within(column()).getAllByRole('tab').map((t) => [t.textContent, t.getAttribute('aria-selected')]);

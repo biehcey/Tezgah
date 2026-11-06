@@ -5,9 +5,27 @@
  *   `RETURNING *` (UPDATE'te yeni hâl, INSERT'te eklenen, DELETE'te silinen satır) ve nedeni.
  * - Hedef tablo: DML'in ve tablo DDL'inin dokunduğu tablo adları; katalogdan PK ve şema okuması.
  */
+import { isProd, type EnvTag } from './baglanti';
 import { PREVIEW_ROWS } from './script-calistirma';
 import type { ColumnSchema, Counts, RowChanges, TableRef, TableSchema } from './deneme-farki';
 import { WORD_CHAR, WORD_START, skipBlockComment, type Statement } from './ifade-bolme';
+
+// ---------- prod'da satır kilidi beklemesi (wayfinder 20) ----------
+
+/**
+ * prod'da denemenin satır kilidi beklemesi transaction başında 3 sn ile sınırlanır: deneme prod
+ * trafiğinin tuttuğu satırları uzun süre beklemesin. prod dışında `null`. `statement_timeout`
+ * yoktur; uzun sorguyu kullanıcı iptal eder.
+ */
+export function denemeLockTimeout(envTag: EnvTag | null | undefined): string | null {
+  return isProd(envTag) ? "SET LOCAL lock_timeout = '3s'" : null;
+}
+
+/** `lock_not_available`: satır kilidi `lock_timeout` içinde alınamadı. */
+export const LOCK_NOT_AVAILABLE = '55P03';
+
+/** prod denemesinin `55P03` hatasında Postgres'in iletisi ("lock timeout") yerine gösterilir. */
+export const LOCK_NOT_AVAILABLE_MESSAGE = 'Kilit alınamadı, prod trafiği bu satırları tutuyor.';
 
 /** Değişiklik önizlemesi verilen komutlar ve başlıktaki fiilleri. */
 export const DML_VERBS: Readonly<Record<string, string>> = { INSERT: 'eklendi', UPDATE: 'güncellendi', DELETE: 'silindi' };

@@ -985,6 +985,11 @@ button.kucuk {
   color: var(--dikkat);
 }
 
+.uyari-seridi.deneme-prod {
+  background: color-mix(in srgb, var(--uyari) 12%, var(--zemin));
+  color: var(--uyari);
+}
+
 .analiz-sorunlari {
   margin: 0;
   padding: 6px 12px 0 28px;

@@ -16,9 +16,12 @@ import {
 import { analyzeScript, type RunMode } from '../core/calistirma-modu';
 import {
   DML_VERBS,
+  LOCK_NOT_AVAILABLE,
+  LOCK_NOT_AVAILABLE_MESSAGE,
   OLD_NEW_MIN_VERSION,
   ddlTargets,
   decodeOldNew,
+  denemeLockTimeout,
   dmlTarget,
   oldNewSelect,
   parseServerVersion,
@@ -315,12 +318,13 @@ export function createScriptRunner({ store, pools, clock, history, log }: Script
         current.cancel = () => (cancelSent ??= cancelBackend(session, pid));
 
         // Sürüm transaction'dan önce okunur: beklenmedik bir hata transaction'ı bozmasın.
-        const deneme = session.deneme ? { surum: await serverVersion(client) } : null;
-        // Salt okunur prod'da `BEGIN READ ONLY`; yazma modunda pool varsayılanı `READ WRITE` ile aşılır.
-        await client.query(beginStatement(session.lock));
+        const deneme = session.deneme ? { surum: await serverVersion(client), lockTimeout: denemeLockTimeout(connection.envTag) } : null;
+        // Salt okunur prod'da `BEGIN READ ONLY`; yazma modunda ve denemede pool varsayılanı `READ WRITE` ile aşılır.
+        await client.query(beginStatement(session.lock, { deneme: session.deneme }));
         const sureMs = decisionDurationMs(connection.envTag);
         // Yedek: Node zamanlayıcısı işlemezken (uyku) uzak sunucuda transaction açık kalmasın.
         await client.query(`SET LOCAL idle_in_transaction_session_timeout = ${serverIdleTimeoutMs(sureMs)}`);
+        if (deneme?.lockTimeout) await client.query(deneme.lockTimeout);
         const { outcome } = await runStatements(current, client, script, deneme);
         if (outcome === 'baglantiKoptu') broken = true;
         if (broken) return await lost();
@@ -482,7 +486,9 @@ export function createScriptRunner({ store, pools, clock, history, log }: Script
         const e = result.error as Partial<pg.DatabaseError>;
         const position = e.position ? Number(e.position) - result.prefix : undefined;
         const location = errorLocation(script, statement, position !== undefined && position >= 1 ? position : undefined);
-        const hata = { kod: e.code ?? null, mesaj: e.message ?? String(result.error), satir: location.satir };
+        const kod = e.code ?? null;
+        const mesaj = deneme?.lockTimeout && kod === LOCK_NOT_AVAILABLE ? LOCK_NOT_AVAILABLE_MESSAGE : (e.message ?? String(result.error));
+        const hata = { kod, mesaj, satir: location.satir };
         send({ type: 'error', i, ms, sqlstate: hata.kod, mesaj: hata.mesaj, ...location });
         current.ifadeler.push({ offset: statement.start, ms, komut: statement.keywords[0] ?? '', satirSayisi: null, hata });
         return { outcome: result.error instanceof pg.DatabaseError ? 'hata' : 'baglantiKoptu', applied };
@@ -525,6 +531,8 @@ async function rollback(client: pg.PoolClient): Promise<boolean> {
 interface DenemeContext {
   /** `server_version_num`; okunamadıysa 0. */
   surum: number;
+  /** prod'da satır kilidi beklemesini sınırlayan `SET LOCAL`; varsa `55P03` nedeniyle anlatılır. */
+  lockTimeout: string | null;
 }
 
 async function serverVersion(client: pg.PoolClient): Promise<number> {

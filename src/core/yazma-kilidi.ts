@@ -18,8 +18,13 @@ export function writeLockState(envTag: EnvTag | null | undefined, yazmaModu: boo
   return yazmaModu ? 'yazma-acik' : 'salt-okunur';
 }
 
-/** Transaction modunun açılış ifadesi. */
-export function beginStatement(lock: WriteLockState): string {
+/**
+ * Transaction modunun açılış ifadesi. Deneme (wayfinder 20) kilitten bağımsız `BEGIN READ WRITE`
+ * ile açılır: sonu her zaman rollback'tir, kalıcı yazamaz. Pool'un salt okunur varsayılanına
+ * dokunulmaz; yalnızca bu transaction aşılır.
+ */
+export function beginStatement(lock: WriteLockState, { deneme = false }: { deneme?: boolean } = {}): string {
+  if (deneme) return 'BEGIN READ WRITE';
   switch (lock) {
     case 'salt-okunur':
       return 'BEGIN READ ONLY';

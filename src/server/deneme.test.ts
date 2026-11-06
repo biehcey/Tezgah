@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import pg from 'pg';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { parseRecords } from '../core/calistirma-kaydi';
-import { OLD_NEW_MIN_VERSION, parseServerVersion } from '../core/deneme';
+import { LOCK_NOT_AVAILABLE_MESSAGE, OLD_NEW_MIN_VERSION, parseServerVersion } from '../core/deneme';
 import { mergeChanges } from '../core/deneme-farki';
 import type { ServerEvent } from '../core/script-calistirma';
 import { DENEME_NON_TRANSACTIONAL_MESSAGE } from '../core/yazma-kilidi';
@@ -151,6 +151,48 @@ describe('Deneme modu: sahte Postgres', () => {
     expect(fake.attempts).toEqual([]);
     expect(await records()).toEqual([]);
   });
+  describe('prod’da deneme', () => {
+    async function prodConnection(envTag = 'prod'): Promise<string> {
+      const res = await t.api('POST', '/api/baglantilar', {
+        name: 'Canlı',
+        host: '127.0.0.1',
+        port: fake.port,
+        user: 'postgres',
+        password: 'gizli',
+        sslmode: 'disable',
+        envTag,
+      });
+      return res.body.connection.id;
+    }
+    const transactionStart = () => fake.queries.filter((q) => q.startsWith('BEGIN') || q.startsWith('SET'));
+
+    it('salt okunur prod’da kilitten bağımsız BEGIN READ WRITE ve 3 sn lock_timeout; pool ayarına dokunulmaz', async () => {
+      dene(await prodConnection(), 'postgres', 'SELECT 1');
+      expect(await ws.waitFor('bitti')).toEqual({ type: 'bitti', sonuc: 'deneme' });
+      expect(transactionStart()).toEqual([
+        'BEGIN READ WRITE',
+        expect.stringMatching(/^SET LOCAL idle_in_transaction_session_timeout = /),
+        "SET LOCAL lock_timeout = '3s'",
+      ]);
+      expect(fake.queries.at(-1)).toBe('ROLLBACK');
+    });
+
+    it('prod dışında lock_timeout uygulanmaz', async () => {
+      dene(await prodConnection('staging'), 'postgres', 'SELECT 1');
+      await ws.waitFor('bitti');
+      expect(transactionStart()).toEqual(['BEGIN READ WRITE', expect.stringMatching(/^SET LOCAL idle_in_transaction_session_timeout = /)]);
+    });
+
+    it('55P03: hatalı satır işaretlenir, prod trafiği kilidi tutuyor denir', async () => {
+      fake.failOn = (sql) => (sql.includes('FROM kilitli') ? { code: '55P03', message: 'canceling statement due to lock timeout' } : undefined);
+      dene(await prodConnection(), 'postgres', 'SELECT 1;\nDELETE FROM kilitli');
+      expect(await ws.waitFor('bitti')).toEqual({ type: 'bitti', sonuc: 'deneme' });
+      expect(ws.events.find((e) => e.type === 'error')).toMatchObject({ i: 1, satir: 2, sqlstate: '55P03', mesaj: LOCK_NOT_AVAILABLE_MESSAGE });
+      const [record] = await records();
+      expect(record).toMatchObject({ bitti: { ifadeler: [{}, { hata: { kod: '55P03', satir: 2, mesaj: LOCK_NOT_AVAILABLE_MESSAGE } }] } });
+    });
+  });
+
   describe('önce/sonra farkı (PG18+) ve yedek', () => {
     const OLD_NEW = /^WITH tezgah_onizleme AS \(.* RETURNING WITH \(OLD AS tezgah_once/;
     const info = (anahtar: string[], kolonlar: [number, string, string][] = [[1, 'id', 'integer'], [2, 'ad', 'text']]) =>
@@ -439,5 +481,43 @@ describePg('Deneme modu: gerçek Postgres', () => {
     expect(ws.events.find((e) => e.type === 'error')).toMatchObject({ i: 1, sqlstate: '23505', satir: 2 });
     expect(await rows()).toHaveLength(150);
     expect((await rows())[0]).toEqual({ id: 1, ad: 'a1' });
+  });
+
+  describe('salt okunur prod', () => {
+    let prodId: string;
+    beforeEach(async () => {
+      const res = await t.api('POST', '/api/baglantilar', { name: 'Canlı', envTag: 'prod', ...real });
+      prodId = res.body.connection.id;
+    });
+
+    it('yazma modu kapalıyken deneme DML’i çalıştırır; veri değişmez', async () => {
+      const before = await rows();
+      dene(prodId, real.database, `UPDATE ${TABLE} SET ad = 'b' WHERE id = 1;\nDELETE FROM ${TABLE} WHERE id = 2;\nSHOW lock_timeout`);
+      expect(await ws.waitFor('bitti')).toEqual({ type: 'bitti', sonuc: 'deneme' });
+      expect(ws.events.some((e) => e.type === 'error')).toBe(false);
+      const [update, del, show] = done(ws.events);
+      expect(update).toMatchObject({ rowCount: 1, degisiklik: { satirlar: [['1', 'b']] } });
+      expect(del).toMatchObject({ rowCount: 1 });
+      expect(show).toMatchObject({ onizleme: { satirlar: [['3s']] } });
+      expect(await rows()).toEqual(before);
+    });
+
+    it('prod trafiğinin tuttuğu satırda 3 sn sonra 55P03; hatalı satır işaretlenir', async () => {
+      const holder = new pg.Client(real);
+      await holder.connect();
+      try {
+        await holder.query('BEGIN');
+        await holder.query(`SELECT * FROM ${TABLE} WHERE id = 1 FOR UPDATE`);
+        const started = Date.now();
+        dene(prodId, real.database, `SELECT 1;\nUPDATE ${TABLE} SET ad = 'b' WHERE id = 1`);
+        expect(await ws.waitFor('bitti')).toEqual({ type: 'bitti', sonuc: 'deneme' });
+        expect(Date.now() - started).toBeGreaterThanOrEqual(2900);
+        expect(ws.events.find((e) => e.type === 'error')).toMatchObject({ i: 1, satir: 2, sqlstate: '55P03', mesaj: LOCK_NOT_AVAILABLE_MESSAGE });
+      } finally {
+        await holder.query('ROLLBACK');
+        await holder.end();
+      }
+      expect((await rows())[0]).toEqual({ id: 1, ad: 'a1' });
+    }, 15_000);
   });
 });

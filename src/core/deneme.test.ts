@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ddlTargets, decodeOldNew, dmlTarget, oldNewSelect, parseServerVersion, parseTableInfo, qualifiedName, tableInfoQuery, withReturning } from './deneme';
+import { ddlTargets, denemeLockTimeout, decodeOldNew, dmlTarget, oldNewSelect, parseServerVersion, parseTableInfo, qualifiedName, tableInfoQuery, withReturning } from './deneme';
 import { splitStatements } from './ifade-bolme';
 
 const rewrite = (sql: string) => withReturning(splitStatements(sql)[0]!);
@@ -186,5 +186,15 @@ describe('oldNewSelect / decodeOldNew: önce/sonra sarmalının sorgusu ve sonuc
       satirlar: [],
       gorulmeyen: { eklendi: 0, guncellendi: 0, silindi: 0 },
     });
+  });
+});
+
+describe('prod’da satır kilidi beklemesi', () => {
+  it('prod’da 3 sn ile sınırlanır', () => {
+    expect(denemeLockTimeout('prod')).toBe("SET LOCAL lock_timeout = '3s'");
+  });
+
+  it.each(['staging', 'local', null] as const)('%s ortamında sınırlanmaz', (envTag) => {
+    expect(denemeLockTimeout(envTag)).toBeNull();
   });
 });

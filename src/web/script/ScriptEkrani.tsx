@@ -92,6 +92,8 @@ export function ScriptEkrani({ target, onChangeTarget, onTargetLockChange, writa
   const prod = target !== null && isProd(target.connection.envTag);
   const [script, setScript] = useState('');
   const [run, setRun] = useState<RunView | null>(null);
+  /** Son çalıştırma prod hedefte başladı; hedef sonradan değişse de şerit o çalıştırmaya göre kalır. */
+  const [runOnProd, setRunOnProd] = useState(false);
   const handle = useRef<ScriptRunHandle | null>(null);
   /** Sunucunun son bildirdiği kalan süreden kurulan yerel geri sayım; yetkili sayaç sunucudadır. */
   const [deadline, setDeadline] = useState<DecisionTimer | null>(null);
@@ -147,6 +149,7 @@ export function ScriptEkrani({ target, onChangeTarget, onTargetLockChange, writa
     if (runBlockReasons(script, currentStatements, lock, { analysis: current, deneme }).length > 0) return;
     handle.current?.close();
     setRun(startRunView(script, { deneme }));
+    setRunOnProd(prod);
     setTab(deneme ? 'degisiklikler' : 'log');
     setDeadline(null);
     handle.current = api.runScript({ target: targetRef, script, yazmaModu: writeMode, deneme }, (received) => {
@@ -222,6 +225,13 @@ export function ScriptEkrani({ target, onChangeTarget, onTargetLockChange, writa
       {analysis.mod === 'autocommit' && (
         <div role="note" aria-label="Autocommit uyarısı" className="uyari-seridi autocommit">
           ⚠ {analysis.transactionDisi.length} ifade anında kalıcı uygulanır, geri alınamaz
+        </div>
+      )}
+      {runOnProd && run?.deneme && (
+        // Sabit metin, kapatılamaz (wayfinder 20): rollback'in geri almadığı yan etkiler.
+        <div role="note" aria-label="Deneme yan etki uyarısı" className="uyari-seridi deneme-prod">
+          ⚠ Deneme prod'da çalışır: satır kilitleri alır, sequence'ler ilerler (<code>nextval</code> geri alınmaz),
+          tetikleyici/FDW/dblink dış etkileri geri alınmaz.
         </div>
       )}
       <div className="script-govde">

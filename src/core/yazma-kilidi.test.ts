@@ -29,6 +29,10 @@ describe('yazma kilidi', () => {
   ] as const)('%s kilidinde transaction %s ile açılır', (lock, expected) => {
     expect(beginStatement(lock)).toBe(expected);
   });
+
+  it.each(['salt-okunur', 'yazma-acik', null] as const)('denemede %s kilidinden bağımsız BEGIN READ WRITE', (lock) => {
+    expect(beginStatement(lock, { deneme: true })).toBe('BEGIN READ WRITE');
+  });
 });
 
 describe('yazma modu açık hedefler', () => {
