@@ -60,6 +60,47 @@ export const DEFAULT_DATABASE = 'postgres';
 /** Windows Credential Manager blob sınırı 2560 bayt (UTF-16); güvenli pay bırakılır. */
 export const MAX_PASSWORD_LENGTH = 1024;
 
+export const SSH_AUTHS = ['password', 'key', 'agent'] as const;
+export type SshAuth = (typeof SSH_AUTHS)[number];
+export const DEFAULT_SSH_PORT = 22;
+
+/**
+ * Tünel ayarı. Özel anahtar diskte yerinde kalır, yalnızca yolu saklanır. `agentPath` boşsa platform
+ * varsayılanı (macOS `SSH_AUTH_SOCK`, Windows OpenSSH agent pipe'ı); Pageant'ın pipe'ı elle girilir.
+ * Kullanılmayan yol (ör. agent'tayken `keyPath`) saklanır, yöntem değişince kaybolmasın.
+ * İleride ProxyJump için `jumps[]` eklenebilir.
+ */
+export interface SshSettings {
+  host: string;
+  port: number;
+  user: string;
+  auth: SshAuth;
+  keyPath: string | null;
+  agentPath: string | null;
+  /** SSH şifresi ya da passphrase keychain'e (`<id>:ssh`) kaydedilsin mi; değilse ilk açılışta sorulur. */
+  saveSecret: boolean;
+}
+
+/** SSH alanlarının hata anahtarları (formdaki alanlarla aynı adlar). */
+export type SshField =
+  | 'ssh'
+  | 'sshHost'
+  | 'sshPort'
+  | 'sshUser'
+  | 'sshAuth'
+  | 'sshKeyPath'
+  | 'sshAgentPath'
+  | 'sshSaveSecret'
+  | 'sshSecret';
+
+export const SSH_AUTH_LABELS: Record<SshAuth, string> = { password: 'şifre', key: 'anahtar', agent: 'agent' };
+
+/** Kapalı SSH bölümünün tek satırlık özeti: `deploy@bastion · anahtar`. */
+export function sshSummary(ssh: Pick<SshSettings, 'host' | 'port' | 'user' | 'auth'> | null): string {
+  if (!ssh) return 'kapalı';
+  return `${ssh.user}@${ssh.host}${ssh.port === DEFAULT_SSH_PORT ? '' : `:${ssh.port}`} · ${SSH_AUTH_LABELS[ssh.auth]}`;
+}
+
 /** Veritabanı seçimi: görünür veritabanı ve görünür şemaları (`null`: varsayılan görünürlük). */
 export interface DatabaseSelection {
   database: string;
@@ -80,6 +121,8 @@ export interface Connection extends SslSettings {
   color: string | null;
   /** Şifre keychain'e kaydedilsin mi; değilse ilk bağlanmada sorulur, yalnızca bellekte tutulur. */
   savePassword: boolean;
+  /** Tünel; `null` ise doğrudan bağlanılır. */
+  ssh: SshSettings | null;
   databaseSelection: DatabaseSelection[];
 }
 
@@ -87,9 +130,13 @@ export interface Connection extends SslSettings {
  * Oluşturma/güncelleme girdisi. `password` verilmezse kayıtlı şifreye dokunulmaz;
  * boş dize kayıtlı şifreyi siler.
  */
-export type ConnectionInput = Omit<Connection, 'id' | 'databaseSelection'> & { password: string | undefined };
+export type ConnectionInput = Omit<Connection, 'id' | 'databaseSelection'> & {
+  password: string | undefined;
+  /** SSH şifresi ya da passphrase; `password` ile aynı kurallar (`<id>:ssh` keychain girdisi). */
+  sshSecret: string | undefined;
+};
 
-export type ConnectionField = keyof ConnectionInput;
+export type ConnectionField = Exclude<keyof ConnectionInput, 'ssh'> | SshField;
 
 export type ParseResult =
   | { ok: true; value: ConnectionInput }
@@ -119,13 +166,55 @@ export function connectionFieldReader(input: Record<string, unknown>, errors: Pa
       errors.port = 'Port 1–65535 arasında bir tam sayı olmalı';
       return DEFAULT_PORT;
     },
-    password(): string | undefined {
-      const value = input.password;
+    password(field: 'password' | 'sshSecret' = 'password'): string | undefined {
+      const value = input[field];
       if (value === undefined) return undefined;
-      if (typeof value !== 'string') errors.password = 'Geçersiz şifre';
-      else if (value.length > MAX_PASSWORD_LENGTH) errors.password = `Şifre en fazla ${MAX_PASSWORD_LENGTH} karakter olabilir`;
+      if (typeof value !== 'string') errors[field] = 'Geçersiz şifre';
+      else if (value.length > MAX_PASSWORD_LENGTH) errors[field] = `Şifre en fazla ${MAX_PASSWORD_LENGTH} karakter olabilir`;
       else return value;
       return undefined;
+    },
+    /** Tünel ayarı; verilmezse ya da `null`'sa tünel yok. Yalnızca seçilen yöntemin yolu doğrulanır. */
+    ssh(): SshSettings | null {
+      const raw = input.ssh;
+      if (raw === undefined || raw === null) return null;
+      if (typeof raw !== 'object' || Array.isArray(raw)) {
+        errors.ssh = 'Geçersiz SSH ayarı';
+        return null;
+      }
+      const ssh = raw as Record<string, unknown>;
+      const text = (field: string, key: SshField, label: string): string => {
+        const value = ssh[field];
+        if (typeof value === 'string' && value.trim() !== '') return value.trim();
+        errors[key] = `${label} gerekli`;
+        return '';
+      };
+      const optionalPath = (field: string): string | null => {
+        const value = ssh[field];
+        return typeof value === 'string' && value.trim() !== '' ? value.trim() : null;
+      };
+      const host = text('host', 'sshHost', 'SSH host');
+      const user = text('user', 'sshUser', 'SSH kullanıcısı');
+      let port = DEFAULT_SSH_PORT;
+      if (ssh.port !== undefined) {
+        if (typeof ssh.port === 'number' && Number.isInteger(ssh.port) && ssh.port >= 1 && ssh.port <= 65535) port = ssh.port;
+        else errors.sshPort = 'Port 1–65535 arasında bir tam sayı olmalı';
+      }
+      let auth: SshAuth = 'password';
+      if (SSH_AUTHS.includes(ssh.auth as SshAuth)) auth = ssh.auth as SshAuth;
+      else errors.sshAuth = `Kimlik doğrulama şunlardan biri olmalı: ${SSH_AUTHS.join(', ')}`;
+      const keyPath = optionalPath('keyPath');
+      const agentPath = optionalPath('agentPath');
+      if (auth === 'key') {
+        if (keyPath === null) errors.sshKeyPath = 'Anahtar dosyası gerekli';
+        else if (!ABSOLUTE_PATH.test(keyPath)) errors.sshKeyPath = 'Anahtar dosyası için tam yol girin (ör. ~/.ssh/id_ed25519)';
+      }
+      let saveSecret = true;
+      if (ssh.saveSecret !== undefined) {
+        if (typeof ssh.saveSecret === 'boolean') saveSecret = ssh.saveSecret;
+        else errors.sshSaveSecret = 'Geçersiz değer';
+      }
+      return { host, port, user, auth, keyPath, agentPath, saveSecret };
     },
     /**
      * `sslmode` ve dosya yolları. Yalnızca modun kullandığı yollar doğrulanır (sertifika ile anahtar
@@ -201,11 +290,13 @@ export function parseConnectionInput(raw: unknown): ParseResult {
 
   const password = read.password();
   const ssl = read.ssl();
+  const ssh = read.ssh();
+  const sshSecret = read.password('sshSecret');
 
   if (Object.keys(errors).length > 0) return { ok: false, errors };
   return {
     ok: true,
-    value: { name, folderId, host, port, user, database, envTag, color, savePassword, password, ...ssl },
+    value: { name, folderId, host, port, user, database, envTag, color, savePassword, password, ...ssl, ssh, sshSecret },
   };
 }
 
@@ -215,7 +306,7 @@ export function isProd(tag: EnvTag | null | undefined): boolean {
 }
 
 /** Yeni bağlantı: Veritabanı seçiminde yalnızca başlangıç veritabanı, şemalar varsayılan görünürlükte. */
-export function newConnection(id: string, { password, ...fields }: ConnectionInput): Connection {
+export function newConnection(id: string, { password, sshSecret, ...fields }: ConnectionInput): Connection {
   return { id, ...fields, databaseSelection: [{ database: fields.database, schemas: null }] };
 }
 
@@ -245,14 +336,19 @@ export type PasswordStatus = 'bulundu' | 'yok' | 'reddedildi';
 export interface SaveConnectionResponse {
   connection: Connection;
   password: PasswordWriteOutcome;
+  /** SSH şifresi ya da passphrase'e (`<id>:ssh`) ne olduğu. */
+  sshSecret: PasswordWriteOutcome;
 }
 
 export interface DeleteConnectionResponse {
   password: 'silindi' | 'yok' | 'reddedildi';
+  sshSecret: 'silindi' | 'yok' | 'reddedildi';
 }
 
 export interface PasswordStatusResponse {
   password: PasswordStatus;
+  /** Tünel yoksa, sır kaydı kapalıysa ya da agent'ta `yok`. */
+  sshSecret: PasswordStatus;
 }
 
 export interface ValidationErrorResponse<F extends string = ConnectionField> {
@@ -280,7 +376,11 @@ export function copyConnection(source: Connection, id: string, taken: readonly s
 export interface SessionPasswordRequest {
   password: string;
   saveToKeychain: boolean;
+  /** Hangi sır: veritabanı şifresi ya da SSH şifresi/passphrase. */
+  secret: SessionSecret;
 }
+
+export type SessionSecret = 'veritabani' | 'ssh';
 
 /** Şifre nereye kondu: yalnızca bellekte, keychain'de; ya da keychain reddetti ve bellekte kaldı. */
 export type SessionPasswordOutcome = 'oturumda' | 'kaydedildi' | 'reddedildi';
@@ -294,9 +394,10 @@ export function parseSessionPasswordInput(
   raw: unknown,
 ): { ok: true; value: SessionPasswordRequest } | { ok: false; error: string } {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return { ok: false, error: 'Geçersiz şifre girdisi' };
-  const { password, saveToKeychain = false } = raw as Record<string, unknown>;
+  const { password, saveToKeychain = false, secret = 'veritabani' } = raw as Record<string, unknown>;
   if (typeof password !== 'string' || password === '') return { ok: false, error: 'Şifre gerekli' };
   if (password.length > MAX_PASSWORD_LENGTH) return { ok: false, error: `Şifre en fazla ${MAX_PASSWORD_LENGTH} karakter olabilir` };
   if (typeof saveToKeychain !== 'boolean') return { ok: false, error: 'Geçersiz değer' };
-  return { ok: true, value: { password, saveToKeychain } };
+  if (secret !== 'veritabani' && secret !== 'ssh') return { ok: false, error: 'Geçersiz sır türü' };
+  return { ok: true, value: { password, saveToKeychain, secret } };
 }

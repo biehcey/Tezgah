@@ -1,7 +1,7 @@
 import { DEFAULT_SSL, type Connection } from './baglanti';
 
 /** `tezgah.json` şemasının sürümü. Şema değiştiğinde artırılır ve `MIGRATIONS`'a adım eklenir. */
-export const SETTINGS_VERSION = 2;
+export const SETTINGS_VERSION = 3;
 
 /** Tek düzey klasör (iç içe yok). */
 export interface Folder {
@@ -27,6 +27,14 @@ const MIGRATIONS: Record<number, Migration> = {
     version: 2,
     connections: Array.isArray(settings.connections)
       ? settings.connections.map((c: unknown) => (typeof c === 'object' && c !== null ? { ...DEFAULT_SSL, ...c } : c))
+      : settings.connections,
+  }),
+  // 3: bağlantılara SSH tüneli (ticket 17); eski bağlantılar tünelsiz.
+  2: (settings) => ({
+    ...settings,
+    version: 3,
+    connections: Array.isArray(settings.connections)
+      ? settings.connections.map((c: unknown) => (typeof c === 'object' && c !== null ? { ssh: null, ...c } : c))
       : settings.connections,
   }),
 };

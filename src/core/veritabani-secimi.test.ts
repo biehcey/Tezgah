@@ -23,9 +23,20 @@ function connection(): Connection {
     color: null,
     savePassword: true,
     ...DEFAULT_SSL,
+    ssh: null,
     databaseSelection: [{ database: 'postgres', schemas: null }],
   };
 }
+
+const TUNNEL = {
+  host: 'bastion',
+  port: 22,
+  user: 'deploy',
+  auth: 'key',
+  keyPath: '~/.ssh/id_ed25519',
+  agentPath: null,
+  saveSecret: true,
+} as const satisfies Connection['ssh'];
 
 const ALL = ['information_schema', 'pg_catalog', 'pg_toast', 'public', 'raporlar'];
 
@@ -155,7 +166,21 @@ describe('changesServerSession', () => {
     ['CA yolu', { sslrootcert: '/ca.pem' }, true],
     ['keychain seçeneği', { savePassword: false }, true],
     ['ortam etiketi (prod salt okunur pool)', { envTag: 'prod' as const }, true],
+    ['tünel eklendi', { ssh: TUNNEL }, true],
   ])('%s değişince: %s', (_, change, expected) => {
     expect(changesServerSession(before, { ...before, ...change })).toBe(expected);
+  });
+
+  it.each([
+    ['aynı tünel', {}, false],
+    ['SSH host', { host: 'baska' }, true],
+    ['SSH portu', { port: 2222 }, true],
+    ['kimlik doğrulama', { auth: 'agent' as const }, true],
+    ['anahtar yolu', { keyPath: '/k' }, true],
+    ['sır keychain seçeneği', { saveSecret: false }, true],
+  ])('tünelde %s: %s', (_, change, expected) => {
+    const tunneled = { ...before, ssh: TUNNEL };
+    expect(changesServerSession(tunneled, { ...before, ssh: { ...TUNNEL, ...change } })).toBe(expected);
+    expect(changesServerSession(tunneled, { ...before, ssh: null })).toBe(true);
   });
 });

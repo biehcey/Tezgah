@@ -39,7 +39,8 @@ export function createDatabaseRoutes({ store, pools }: DatabaseRouteDeps) {
       });
     } catch (err) {
       if (!(err instanceof TargetError)) throw err;
-      const body: TargetErrorResponse = { hata: err.failure.mesaj, kod: err.failure.kod };
+      const { mesaj: hata, kod, hostAnahtari } = err.failure;
+      const body: TargetErrorResponse = { hata, kod, ...(hostAnahtari && { hostAnahtari }) };
       json(res, 502, body);
       return null;
     }

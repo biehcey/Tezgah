@@ -19,6 +19,9 @@ export const KEYCHAIN_SERVICE = 'tezgah';
 /** DB şifresinin keychain hesabı. */
 export const passwordAccount = (connectionId: string) => connectionId;
 
+/** SSH şifresinin ya da passphrase'in keychain hesabı (oturumluk sırlarda da aynı anahtar). */
+export const sshSecretAccount = (connectionId: string) => `${connectionId}:ssh`;
+
 /**
  * `@napi-rs/keyring` ile gerçek implementasyon. Native modül ilk kullanımda yüklenir; böylece
  * açılış ve keychain'e dokunmayan testler ona bağlı değildir.

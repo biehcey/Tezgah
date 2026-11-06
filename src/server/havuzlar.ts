@@ -11,10 +11,11 @@ import {
   toDriverError,
   type StepFailure,
 } from '../core/baglanti-testi';
-import { passwordAccount, type Keychain } from './keychain';
+import { passwordAccount, sshSecretAccount, type Keychain } from './keychain';
 import type { SessionPasswords } from './oturum-sifreleri';
 import type { Clock } from './saat';
 import { readSslFiles } from './ssl-dosyalari';
+import { TunnelError, type OpenTunnel, type Tunnel } from './tunel';
 
 /** Hedef başına pool'un en fazla client sayısı. */
 const MAX_CLIENTS = 3;
@@ -57,15 +58,21 @@ export interface PoolManagerDeps {
   /** Keychain'e kaydedilmeyen bağlantıların oturumluk şifreleri (bağlantı kimliği → şifre). */
   sessionPasswords: SessionPasswords;
   clock: Clock;
+  openTunnel: OpenTunnel;
   log: (line: string) => void;
 }
+
+/** Tünel üzerinde `pg`'ye verilen host: IP olmalı ki `pg` TLS SNI'yi bununla ezmesin (gerçek host SSL nesnesinde). */
+const TUNNEL_PG_HOST = '127.0.0.1';
 
 /**
  * Hedef (bağlantı + veritabanı) başına tembel `pg.Pool`. İlk kullanımda açılır, hiç client
  * kullanılmadan `POOL_IDLE_MS` geçince kapanır. Açılışta hiçbir yere bağlanmaz.
  */
-export function createPoolManager({ keychain, sessionPasswords, clock, log }: PoolManagerDeps) {
+export function createPoolManager({ keychain, sessionPasswords, clock, openTunnel, log }: PoolManagerDeps) {
   const entries = new Map<string, Entry>();
+  /** Bağlantı başına tek tünel; o bağlantının tüm pool'ları paylaşır. */
+  const tunnels = new Map<string, Promise<Tunnel>>();
   /** Pool'un sunucuya sunduğu şifre; ret (`28P01`) hangi şifreye geldi bilinsin. */
   const poolPasswords = new WeakMap<pg.Pool, string | undefined>();
   const keyOf = (connectionId: string, database: string) => `${connectionId}\u0000${database}`;
@@ -75,10 +82,75 @@ export function createPoolManager({ keychain, sessionPasswords, clock, log }: Po
     if (entries.get(key) !== entry) return Promise.resolve();
     entries.delete(key);
     clock.clearTimeout(entry.idleTimer);
-    return entry.pool.then(
+    const closed = entry.pool.then(
       (pool) => pool.end().catch(() => {}),
       () => {},
     );
+    // Son pool kapanınca tünel de kapanır.
+    return closed.then(() => {
+      if (![...entries.values()].some((e) => e.connectionId === entry.connectionId)) closeTunnel(entry.connectionId);
+    });
+  }
+
+  function closeTunnel(connectionId: string) {
+    const tunnel = tunnels.get(connectionId);
+    if (!tunnel) return;
+    tunnels.delete(connectionId);
+    tunnel.then((t) => t.close(), () => {});
+  }
+
+  /** Tembel: bağlantının ilk pool'u açılırken. Kopunca bağlantının tüm pool'ları atılır; yeniden bağlanma yok. */
+  function tunnelFor(connection: Connection): Promise<Tunnel> {
+    const existing = tunnels.get(connection.id);
+    if (existing) return existing;
+    const opening = (async () => {
+      const secret = await readSshSecret(connection);
+      try {
+        return await openTunnel(connection.ssh!, secret);
+      } catch (err) {
+        if (!(err instanceof TunnelError)) throw err;
+        if (err.failure.kod === 'sshSirReddedildi' && !connection.ssh!.saveSecret) {
+          sessionPasswords.forgetRejected(sshSecretAccount(connection.id), secret);
+        }
+        throw new TargetError(err.failure);
+      }
+    })();
+    tunnels.set(connection.id, opening);
+    opening.then(
+      (tunnel) =>
+        tunnel.onClose(() => {
+          if (tunnels.get(connection.id) !== opening) return;
+          tunnels.delete(connection.id);
+          log(`Tünel koptu (${connection.name}); bağlantının pool'ları atıldı.`);
+          void dropPools(connection.id);
+        }),
+      () => {
+        if (tunnels.get(connection.id) === opening) tunnels.delete(connection.id);
+      },
+    );
+    return opening;
+  }
+
+  function dropPools(connectionId: string): Promise<void> {
+    const closing = [...entries].filter(([, e]) => e.connectionId === connectionId).map(([key, e]) => remove(key, e));
+    return Promise.all(closing).then(() => closeTunnel(connectionId));
+  }
+
+  async function readSshSecret(connection: Connection): Promise<string | undefined> {
+    const ssh = connection.ssh!;
+    if (ssh.auth === 'agent') return undefined;
+    if (!ssh.saveSecret) return sessionPasswords.get(sshSecretAccount(connection.id));
+    const read = await keychain.get(sshSecretAccount(connection.id));
+    if (read.result === 'reddedildi') {
+      log(`Keychain okuma reddedildi (${connection.id}:ssh): ${read.message}`);
+      throw new TargetError({
+        kod: 'reddedildi',
+        mesaj: "Keychain'e erişilemedi (erişim reddedildi ya da keychain kilitli); kayıtlı SSH sırrı okunamadı.",
+        alan: 'sshSecret',
+        oneriler: ['tekrarDene'],
+      });
+    }
+    return read.result === 'bulundu' ? read.value : undefined;
   }
 
   function scheduleIdle(key: string, entry: Entry) {
@@ -129,6 +201,7 @@ export function createPoolManager({ keychain, sessionPasswords, clock, log }: Po
   }
 
   async function openPool(connection: Connection, database: string): Promise<pg.Pool> {
+    const tunnel = connection.ssh ? await tunnelFor(connection) : null;
     const password = await readPassword(connection);
     const files = await readSslFiles(connection);
     if (!files.ok) throw new TargetError(files.failure);
@@ -142,11 +215,11 @@ export function createPoolManager({ keychain, sessionPasswords, clock, log }: Po
 
     // İlk client pool'u sınar; prefer'de sunucu SSL desteklemiyorsa bir kez düz bağlantı.
     let ssl = built.ssl;
-    let pool = createPool(connection, database, password, ssl);
+    let pool = createPool(connection, database, password, ssl, tunnel);
     let probe = await tryConnect(pool);
     if (!probe.ok && connection.sslmode === 'prefer' && shouldRetryWithoutSsl(toDriverError(probe.error))) {
       ssl = false;
-      pool = createPool(connection, database, password, ssl);
+      pool = createPool(connection, database, password, ssl, tunnel);
       probe = await tryConnect(pool);
     }
     if (!probe.ok) throw new TargetError(authFailure(probe.error, connection, database, { triedSsl: ssl !== false, password }));
@@ -181,10 +254,18 @@ export function createPoolManager({ keychain, sessionPasswords, clock, log }: Po
     return failure;
   }
 
-  function createPool(connection: Connection, database: string, password: string | undefined, ssl: PgSsl): pg.Pool {
+  function createPool(
+    connection: Connection,
+    database: string,
+    password: string | undefined,
+    ssl: PgSsl,
+    tunnel: Tunnel | null,
+  ): pg.Pool {
     const pool = new pg.Pool({
-      host: connection.host,
+      host: tunnel ? TUNNEL_PG_HOST : connection.host,
       port: connection.port,
+      // Her client için tünelden yeni kanal; yerel port açılmaz.
+      ...(tunnel && { stream: () => tunnel.socket(connection.host, connection.port) }),
       user: connection.user,
       database,
       // Şifre yalnızca sunucu isterse sorulur; yoksa pg'nin .pgpass'a bakmasına izin verilmez.
@@ -221,14 +302,12 @@ export function createPoolManager({ keychain, sessionPasswords, clock, log }: Po
   return {
     withClient,
 
-    /** Bağlantının tüm pool'larını kapatır (bağlantıyı kes, ayar değişti, silindi). */
-    async disconnect(connectionId: string): Promise<void> {
-      const closing = [...entries].filter(([, e]) => e.connectionId === connectionId).map(([key, e]) => remove(key, e));
-      await Promise.all(closing);
-    },
+    /** Bağlantının tüm pool'larını ve tünelini kapatır (bağlantıyı kes, ayar değişti, silindi). */
+    disconnect: dropPools,
 
     async closeAll(): Promise<void> {
       await Promise.all([...entries].map(([key, e]) => remove(key, e)));
+      for (const id of [...tunnels.keys()]) closeTunnel(id);
     },
   };
 }

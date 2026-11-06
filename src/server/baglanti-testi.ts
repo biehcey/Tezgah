@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { connect as netConnect } from 'node:net';
 import { checkServerIdentity, type PeerCertificate } from 'node:tls';
 import pg from 'pg';
-import type { ValidationErrorResponse } from '../core/baglanti';
+import { sshSummary, type ValidationErrorResponse } from '../core/baglanti';
 import { buildSslOptions, type PgSsl } from '../core/baglanti-ssl';
 import {
   PASSWORD_REQUIRED,
@@ -21,14 +21,20 @@ import {
 } from '../core/baglanti-testi';
 import type { SettingsStore } from './ayar-deposu';
 import { json, methodNotAllowed, readJson } from './http';
-import { passwordAccount, type Keychain } from './keychain';
+import { passwordAccount, sshSecretAccount, type Keychain } from './keychain';
 import { readSslFiles } from './ssl-dosyalari';
+import { TunnelError, type OpenTunnel, type Tunnel } from './tunel';
 
 export interface ConnectionTestDeps {
   store: SettingsStore;
   keychain: Keychain;
+  openTunnel: OpenTunnel;
   log: (line: string) => void;
 }
+
+/** Tünelde `pg`'ye verilen host (SNI'yi ezmesin diye IP); gerçek host SSL nesnesindedir. */
+const TUNNEL_PG_HOST = '127.0.0.1';
+const KEYCHAIN_DENIED = "Keychain'e erişilemedi (erişim reddedildi ya da keychain kilitli)";
 
 /** Ulaşma, bağlanma ve sorgu için ayrı ayrı süre sınırı. */
 const TIMEOUT_MS = 10_000;
@@ -55,47 +61,96 @@ export function createConnectionTestRoutes(deps: ConnectionTestDeps) {
 
 /**
  * Formdaki kaydedilmemiş değerlerle adımları sırayla koşar; hiçbir şey kaydetmez.
- * Sırlar → sunucuya ulaşma → TLS → kimlik doğrulama → veritabanlarını listeleme.
+ * Sırlar → SSH tüneli → sunucuya ulaşma → TLS → kimlik doğrulama → veritabanlarını listeleme.
  */
-export async function runConnectionTest(
-  input: ConnectionTestRequest,
-  { store, keychain, log }: ConnectionTestDeps,
-): Promise<ConnectionTestResponse> {
-  const savedId = input.password === undefined && input.savePassword ? await savedConnectionId(store, input) : null;
-  const run = new TestRun(testPlan({ readsKeychain: savedId !== null }));
+export async function runConnectionTest(input: ConnectionTestRequest, deps: ConnectionTestDeps): Promise<ConnectionTestResponse> {
+  const { store, keychain, openTunnel, log } = deps;
+  const savedId = await savedConnectionId(store, input);
+  const readsPassword = savedId !== null && input.password === undefined && input.savePassword;
+  const ssh = input.ssh;
+  const readsSshSecret = savedId !== null && ssh !== null && ssh.auth !== 'agent' && ssh.saveSecret && input.sshSecret === undefined;
+  const run = new TestRun(testPlan({ readsKeychain: readsPassword || readsSshSecret, ssh: ssh !== null }));
 
   let password = input.password;
-  if (savedId !== null) {
-    const read = await keychain.get(passwordAccount(savedId));
-    if (read.result === 'reddedildi') {
-      log(`Keychain okuma reddedildi (${savedId}): ${read.message}`);
+  let sshSecret = input.sshSecret;
+  if (savedId !== null && (readsPassword || readsSshSecret)) {
+    const read = {
+      password: readsPassword ? await keychain.get(passwordAccount(savedId)) : null,
+      ssh: readsSshSecret ? await keychain.get(sshSecretAccount(savedId)) : null,
+    };
+    if (read.password?.result === 'reddedildi') {
+      log(`Keychain okuma reddedildi (${savedId}): ${read.password.message}`);
       run.fail('sirlar', {
         kod: 'reddedildi',
-        mesaj: "Keychain'e erişilemedi (erişim reddedildi ya da keychain kilitli); kayıtlı şifre okunamadı.",
+        mesaj: `${KEYCHAIN_DENIED}; kayıtlı şifre okunamadı.`,
         alan: 'password',
         oneriler: ['tekrarDene', 'sifreGir'],
       });
       return run.result();
     }
-    if (read.result === 'yok') {
+    if (read.ssh?.result === 'reddedildi') {
+      log(`Keychain okuma reddedildi (${savedId}:ssh): ${read.ssh.message}`);
+      run.fail('sirlar', {
+        kod: 'reddedildi',
+        mesaj: `${KEYCHAIN_DENIED}; kayıtlı SSH sırrı okunamadı.`,
+        alan: 'sshSecret',
+        oneriler: ['tekrarDene', 'sshSirriDuzelt'],
+      });
+      return run.result();
+    }
+    if (read.password?.result === 'bulundu') password = read.password.value;
+    if (read.ssh?.result === 'bulundu') sshSecret = read.ssh.value;
+    if (read.password?.result === 'yok') {
       run.warn('sirlar', {
         kod: 'sirYok',
         mesaj: "Keychain'de kayıtlı şifre yok; şifresiz deneniyor.",
         alan: 'password',
         oneriler: ['sifreGir'],
       });
+    } else if (read.ssh?.result === 'yok' && ssh?.auth === 'password') {
+      run.warn('sirlar', {
+        kod: 'sirYok',
+        mesaj: "Keychain'de kayıtlı SSH şifresi yok.",
+        alan: 'sshSecret',
+        oneriler: ['sshSirriDuzelt'],
+      });
     } else {
-      password = read.value;
-      run.ok('sirlar', "Şifre keychain'den okundu.");
+      const which = [read.password && 'Şifre', read.ssh?.result === 'bulundu' && 'SSH sırrı'].filter(Boolean).join(' ve ');
+      run.ok('sirlar', which ? `${which} keychain'den okundu.` : "Keychain'de kayıtlı passphrase yok; anahtar şifresiz deneniyor.");
     }
   }
 
-  const unreachable = await probeTcp(input.host, input.port);
+  let tunnel: Tunnel | null = null;
+  if (ssh) {
+    try {
+      tunnel = await openTunnel(ssh, sshSecret);
+    } catch (err) {
+      if (!(err instanceof TunnelError)) throw err;
+      run.fail('ssh', err.failure);
+      return run.result();
+    }
+    run.ok('ssh', `${sshSummary(ssh)}: host anahtarı doğrulandı, giriş yapıldı.`);
+  }
+  try {
+    return await afterTunnel(input, password, run, tunnel);
+  } finally {
+    tunnel?.close();
+  }
+}
+
+/** Sunucuya ulaşma → TLS → kimlik doğrulama → listeleme; tünel varsa her şey onun üzerinden. */
+async function afterTunnel(
+  input: ConnectionTestRequest,
+  password: string | undefined,
+  run: TestRun,
+  tunnel: Tunnel | null,
+): Promise<ConnectionTestResponse> {
+  const unreachable = tunnel ? await probeTunnel(tunnel, input.host, input.port) : await probeTcp(input.host, input.port);
   if (unreachable) {
     run.fail('ulasma', classifyReachError(unreachable, input));
     return run.result();
   }
-  run.ok('ulasma', `${input.host}:${input.port} yanıt veriyor.`);
+  run.ok('ulasma', `${input.host}:${input.port} yanıt veriyor${tunnel ? ' (tünel üzerinden)' : ''}.`);
 
   const files = await readSslFiles(input);
   if (!files.ok) {
@@ -115,10 +170,10 @@ export async function runConnectionTest(
 
   // prefer: önce doğrulamasız SSL; yalnızca sunucu SSL desteklemiyorsa bir kez düz bağlantı.
   let ssl = built.ssl;
-  let attempt = await connect(input, password, ssl);
+  let attempt = await connect(input, password, ssl, tunnel);
   if (!attempt.ok && input.sslmode === 'prefer' && shouldRetryWithoutSsl(attempt.error)) {
     ssl = false;
-    attempt = await connect(input, password, ssl);
+    attempt = await connect(input, password, ssl, tunnel);
   }
   const tls = { sslmode: input.sslmode, withoutSsl: ssl === false, ca: files.contents.ca !== null };
 
@@ -156,10 +211,11 @@ export async function runConnectionTest(
 
 type Attempt = { ok: true; client: pg.Client } | { ok: false; error: DriverError };
 
-async function connect(input: ConnectionTestRequest, password: string | undefined, ssl: PgSsl): Promise<Attempt> {
+async function connect(input: ConnectionTestRequest, password: string | undefined, ssl: PgSsl, tunnel: Tunnel | null): Promise<Attempt> {
   const client = new pg.Client({
-    host: input.host,
+    host: tunnel ? TUNNEL_PG_HOST : input.host,
     port: input.port,
+    ...(tunnel && { stream: () => tunnel.socket(input.host, input.port) }),
     user: input.user,
     database: input.database,
     // Şifre yalnızca sunucu isterse sorulur; yoksa pg'nin .pgpass'a bakmasına izin verilmez.
@@ -189,6 +245,16 @@ async function connect(input: ConnectionTestRequest, password: string | undefine
 async function savedConnectionId(store: SettingsStore, { connectionId }: ConnectionTestRequest): Promise<string | null> {
   if (connectionId === null) return null;
   return (await store.read()).connections.some((c) => c.id === connectionId) ? connectionId : null;
+}
+
+/** SSH sunucusu hedefe kanal açabiliyor mu; açamıyorsa hatayı döndürür. */
+async function probeTunnel(tunnel: Tunnel, host: string, port: number): Promise<DriverError | null> {
+  try {
+    await tunnel.probe(host, port);
+    return null;
+  } catch (err) {
+    return toDriverError(err);
+  }
 }
 
 /** TCP ile ulaşılabiliyor mu; ulaşılamıyorsa hatayı döndürür. */

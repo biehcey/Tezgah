@@ -58,6 +58,7 @@ describe('bağlantı oluşturma', () => {
         sslrootcert: null,
         sslcert: null,
         sslkey: null,
+        ssh: null,
         databaseSelection: [{ database: 'postgres', schemas: null }],
       },
     ]);
@@ -94,6 +95,7 @@ describe('bağlantı güncelleme', () => {
         color: '#dc2626',
       },
       password: 'degismedi',
+      sshSecret: 'degismedi',
     });
     expect((await settingsFile()).connections).toEqual([updated.body.connection]);
     expect(t.keychain.entries.get(connection.id)).toBe('gizli-sifre');
@@ -134,7 +136,7 @@ describe('bağlantı silme', () => {
     const { connection } = (await api('POST', '/api/baglantilar', input)).body;
     const other = (await api('POST', '/api/baglantilar', { ...input, name: 'Diğer' })).body.connection;
     const res = await api('DELETE', `/api/baglantilar/${connection.id}`);
-    expect(res).toEqual({ status: 200, body: { password: 'silindi' } });
+    expect(res).toEqual({ status: 200, body: { password: 'silindi', sshSecret: 'yok' } });
     expect((await api('GET', '/api/baglantilar')).body).toEqual([other]);
     expect((await settingsFile()).connections).toEqual([other]);
     expect([...t.keychain.entries.keys()]).toEqual([other.id]);
@@ -142,7 +144,7 @@ describe('bağlantı silme', () => {
 
   it('keychain\'de şifresi olmayan bağlantı da silinir', async () => {
     const { connection } = (await api('POST', '/api/baglantilar', { ...input, password: undefined })).body;
-    expect((await api('DELETE', `/api/baglantilar/${connection.id}`)).body).toEqual({ password: 'yok' });
+    expect((await api('DELETE', `/api/baglantilar/${connection.id}`)).body).toEqual({ password: 'yok', sshSecret: 'yok' });
   });
 
   it('olmayan bağlantı 404 döner', async () => {
@@ -155,9 +157,9 @@ describe('kayıtlı şifre bilgisi', () => {
     const withPw = (await api('POST', '/api/baglantilar', input)).body.connection;
     const withoutPw = (await api('POST', '/api/baglantilar', { ...input, password: undefined })).body.connection;
     const res = await t.authed(`/api/baglantilar/${withPw.id}/sifre`);
-    expect(JSON.parse(res.body)).toEqual({ password: 'bulundu' });
+    expect(JSON.parse(res.body)).toEqual({ password: 'bulundu', sshSecret: 'yok' });
     expect(res.body).not.toContain('gizli-sifre');
-    expect((await api('GET', `/api/baglantilar/${withoutPw.id}/sifre`)).body).toEqual({ password: 'yok' });
+    expect((await api('GET', `/api/baglantilar/${withoutPw.id}/sifre`)).body).toEqual({ password: 'yok', sshSecret: 'yok' });
   });
 
   it('olmayan bağlantı 404 döner', async () => {
@@ -179,7 +181,7 @@ describe('keychain erişimi reddedilince ("Deny")', () => {
   it('kayıtlı şifre bilgisi "yok"tan ayrı olarak reddedildi döner', async () => {
     const { connection } = (await api('POST', '/api/baglantilar', input)).body;
     t.keychain.deny = true;
-    expect((await api('GET', `/api/baglantilar/${connection.id}/sifre`)).body).toEqual({ password: 'reddedildi' });
+    expect((await api('GET', `/api/baglantilar/${connection.id}/sifre`)).body).toEqual({ password: 'reddedildi', sshSecret: 'yok' });
   });
 
   it('bağlantı kaydedilir ama şifre sonucu reddedildi olur', async () => {
@@ -196,7 +198,7 @@ describe('keychain erişimi reddedilince ("Deny")', () => {
   it('silmede ayar silinir, keychain sonucu reddedildi olarak bildirilir', async () => {
     const { connection } = (await api('POST', '/api/baglantilar', input)).body;
     t.keychain.deny = true;
-    expect((await api('DELETE', `/api/baglantilar/${connection.id}`)).body).toEqual({ password: 'reddedildi' });
+    expect((await api('DELETE', `/api/baglantilar/${connection.id}`)).body).toEqual({ password: 'reddedildi', sshSecret: 'reddedildi' });
     expect((await settingsFile()).connections).toEqual([]);
   });
 });
@@ -292,6 +294,7 @@ describe('bağlantı kopyalama', () => {
     expect(copied.body).toEqual({
       connection: { ...first, id: expect.not.stringMatching(first.id), name: 'Yerel (kopya)' },
       password: 'kaydedildi',
+      sshSecret: 'degismedi',
     });
     expect((await api('GET', '/api/baglantilar')).body).toEqual([first, copy, last]);
     expect(t.keychain.entries.get(copy.id)).toBe('gizli-sifre');

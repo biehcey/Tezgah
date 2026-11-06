@@ -1,5 +1,6 @@
 import { STATUS_CODES, createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { homedir } from 'node:os';
 import type { Duplex } from 'node:stream';
 import { WebSocketServer } from 'ws';
 import pkg from '../../package.json' with { type: 'json' };
@@ -9,6 +10,9 @@ import { createConnectionRoutes } from './baglantilar';
 import { createRunHistory, createRunHistoryRoutes } from './calistirma-kayitlari';
 import { createAccessPolicy } from './erisim';
 import { createPoolManager } from './havuzlar';
+import { createHostKeyRoutes, createHostKeyStore } from './host-anahtarlari';
+import { createTunnelOpener, type SshConnector } from './tunel';
+import type { AgentEnvironment } from '../core/ssh-tuneli';
 import { createSessionPasswords } from './oturum-sifreleri';
 import { createFolderRoutes } from './klasorler';
 import { BodyError, json } from './http';
@@ -36,6 +40,12 @@ export interface ServerOptions {
   clock?: Clock;
   /** Çalıştırma kayıtları klasörünü OS dosya yöneticisinde açar; testlerde sahte. */
   openFolder?: (dir: string) => void;
+  /** SSH protokolü; verilmezse ssh2 (ilk tünelde yüklenir). Testlerde sahte tünel. */
+  sshConnector?: SshConnector;
+  /** Kullanıcının ev dizini (`~/.ssh/known_hosts` buradan salt okunur); testlerde geçici dizin. */
+  homeDir?: string;
+  /** Agent yolunun varsayılanı için platform ve ortam değişkenleri. */
+  agentEnvironment?: AgentEnvironment;
   log: (line: string) => void;
 }
 
@@ -70,8 +80,14 @@ export async function startServer(options: ServerOptions): Promise<TezgahServer>
   // Oturumluk şifreler yalnızca bu süreçte; diske yazılmaz.
   const sessionPasswords = createSessionPasswords();
   const clock = options.clock ?? systemClock;
-  // Pool'lar tembel: açılışta hiçbir sunucuya bağlanılmaz.
-  const pools = createPoolManager({ keychain: options.keychain, sessionPasswords, clock, log: options.log });
+  const hostKeys = createHostKeyStore({ configDir: options.configDir, homeDir: options.homeDir ?? homedir() });
+  const openTunnel = createTunnelOpener({
+    connector: options.sshConnector ?? (async (o) => (await import('./ssh2-baglayici')).ssh2Connector(o)),
+    hostKeys,
+    agentEnvironment: options.agentEnvironment ?? { platform: process.platform, env: process.env },
+  });
+  // Pool'lar ve tüneller tembel: açılışta hiçbir sunucuya bağlanılmaz.
+  const pools = createPoolManager({ keychain: options.keychain, sessionPasswords, clock, openTunnel, log: options.log });
   const connectionRoutes = createConnectionRoutes({
     store,
     keychain: options.keychain,
@@ -87,7 +103,8 @@ export async function startServer(options: ServerOptions): Promise<TezgahServer>
   const attachScriptRunner = createScriptRunner({ store, pools, clock, history, log: options.log });
   wss.on('connection', attachScriptRunner);
 
-  const connectionTestRoutes = createConnectionTestRoutes({ store, keychain: options.keychain, log: options.log });
+  const connectionTestRoutes = createConnectionTestRoutes({ store, keychain: options.keychain, openTunnel, log: options.log });
+  const hostKeyRoutes = createHostKeyRoutes({ hostKeys });
 
   async function handle(req: IncomingMessage, res: ServerResponse) {
     const url = requestUrl(req);
@@ -118,6 +135,7 @@ export async function startServer(options: ServerOptions): Promise<TezgahServer>
     if (await connectionRoutes(req, res, url.pathname)) return;
     if (await databaseRoutes(req, res, url.pathname)) return;
     if (await connectionTestRoutes(req, res, url.pathname)) return;
+    if (await hostKeyRoutes(req, res, url.pathname)) return;
     if (await folderRoutes(req, res, url.pathname)) return;
     if (await historyRoutes(req, res, url.pathname)) return;
     if (url.pathname === '/api' || url.pathname.startsWith('/api/')) return json(res, 404, { hata: 'Bulunamadı' });

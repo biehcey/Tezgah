@@ -5,9 +5,12 @@ import {
   type Connection,
   type DatabaseSelection,
   type PasswordWriteOutcome,
+  type SessionSecret,
 } from '../core/baglanti';
 import { asksForSessionPassword, isPasswordRejected } from '../core/baglanti-testi';
 import { buildConnectionUrl } from '../core/baglanti-url';
+import { asksForSshSecret, type HostKeyProblem } from '../core/ssh-tuneli';
+import { HostAnahtariKutusu } from './baglantilar/HostAnahtariKutusu';
 import { toggleWritable, type WritableTargets } from '../core/yazma-kilidi';
 import { ApiError, connectionRequest, useApi } from './api/client';
 import { HizliGecis, type PaletteCommand } from './hizli-gecis/HizliGecis';
@@ -48,8 +51,17 @@ type PasswordPrompt = {
   /** Her soruşta yeni: kapanıp hemen yeniden açılan pencere (28P01) baştan kurulsun. */
   key: number;
   connection: Connection;
+  /** Sorulan sır: veritabanı şifresi ya da SSH tünelinin şifresi/passphrase'i. */
+  secret: SessionSecret;
   rejection: string | null;
   resolve: (next: Connection | null) => void;
+};
+
+/** Listeden bağlanırken çıkan host anahtarı sorunu; `true` ile çözülürse istek yeniden denenir. */
+type HostKeyPrompt = {
+  problem: HostKeyProblem;
+  kind: 'hostKeyUnknown' | 'hostKeyMismatch';
+  resolve: (retry: boolean) => void;
 };
 
 function errorMessage(err: unknown): string {
@@ -84,6 +96,7 @@ export function App() {
   const [sessions, setSessions] = useState<Record<string, ConnectionSession>>({});
   const [passwordPrompt, setPasswordPrompt] = useState<PasswordPrompt | null>(null);
   const promptCount = useRef(0);
+  const [hostKeyPrompt, setHostKeyPrompt] = useState<HostKeyPrompt | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [reveal, setReveal] = useState<Reveal | null>(null);
   /** Script çalışırken ve karar beklenirken hedef değiştirilemez; neden. */
@@ -152,20 +165,57 @@ export function App() {
    */
   function askPassword(connection: Connection, err: unknown): Promise<Connection | null> {
     const kod = err instanceof ApiError ? err.body?.kod : undefined;
-    if (!asksForSessionPassword(connection, kod)) return Promise.resolve(null);
+    const ssh = asksForSshSecret(connection, kod);
+    if (!ssh && !asksForSessionPassword(connection, kod)) return Promise.resolve(null);
+    const rejected = ssh ? kod === 'sshSirReddedildi' : isPasswordRejected(kod);
     return new Promise((resolve) =>
       setPasswordPrompt({
         key: ++promptCount.current,
         connection,
-        rejection: isPasswordRejected(kod) ? errorMessage(err) : null,
+        secret: ssh ? 'ssh' : 'veritabani',
+        rejection: rejected ? errorMessage(err) : null,
         resolve,
       }),
     );
   }
 
+  /**
+   * Tünelin host anahtarı bilinmiyor ya da uyuşmuyorsa kutuyu pencere olarak açar. Bilinmeyen
+   * anahtara güvenilirse `true` (istek yeniden denenir); uyuşmazlıkta devam yok, her zaman `false`.
+   */
+  function askHostKey(err: unknown): Promise<boolean> {
+    const body = err instanceof ApiError ? err.body : undefined;
+    const kind = body?.kod;
+    if (!body?.hostAnahtari || (kind !== 'hostKeyUnknown' && kind !== 'hostKeyMismatch')) return Promise.resolve(false);
+    const problem = body.hostAnahtari;
+    return new Promise((resolve) => setHostKeyPrompt({ problem, kind, resolve }));
+  }
+
+  function closeHostKey(prompt: HostKeyPrompt, retry: boolean) {
+    setHostKeyPrompt(null);
+    prompt.resolve(retry);
+  }
+
+  async function trustHostKey(prompt: HostKeyPrompt) {
+    const { host, port, anahtar } = prompt.problem;
+    await api.trustHostKey({ host, port, anahtar });
+    closeHostKey(prompt, true);
+  }
+
+  async function forgetHostKey(prompt: HostKeyPrompt) {
+    const { host, port } = prompt.problem;
+    const { silinen } = await api.forgetHostKey({ host, port });
+    setNotice(
+      silinen > 0
+        ? `${host} için Tezgah'taki kayıtlı host anahtarı silindi; yeniden bağlanınca yeni anahtar sorulur.`
+        : `${host} için Tezgah'ta kayıtlı host anahtarı yok.`,
+    );
+    closeHostKey(prompt, false);
+  }
+
   async function submitPassword(prompt: PasswordPrompt, password: string, saveToKeychain: boolean): Promise<string | null> {
     try {
-      const result = await api.giveSessionPassword(prompt.connection.id, { password, saveToKeychain });
+      const result = await api.giveSessionPassword(prompt.connection.id, { password, saveToKeychain, secret: prompt.secret });
       setConnections((list) => (list ?? []).map((c) => (c.id === result.connection.id ? result.connection : c)));
       setNotice(
         result.password === 'reddedildi'
@@ -198,6 +248,7 @@ export function App() {
         setSession(current.id, { durum: 'bagli', veritabanlari });
         return;
       } catch (err) {
+        if (await askHostKey(err)) continue;
         const next = await askPassword(current, err);
         if (next) {
           current = next;
@@ -255,7 +306,7 @@ export function App() {
 
   const closePalette = useCallback(() => setPaletteOpen(false), []);
   const revealed = useCallback(() => setReveal(null), []);
-  dialogOpen.current = folderDialog !== null || deleting !== null || passwordPrompt !== null;
+  dialogOpen.current = folderDialog !== null || deleting !== null || passwordPrompt !== null || hostKeyPrompt !== null;
   const paletteCommands: PaletteCommand[] = [
     { label: 'Yeni bağlantı', run: () => open({ kind: 'yeni' }) },
     { label: 'Yeni klasör', run: () => setFolderDialog({ kind: 'yeni' }) },
@@ -571,10 +622,24 @@ export function App() {
         <SifrePenceresi
           key={passwordPrompt.key}
           connection={passwordPrompt.connection}
+          secret={passwordPrompt.secret}
           rejection={passwordPrompt.rejection}
           onSubmit={(password, save) => submitPassword(passwordPrompt, password, save)}
           onCancel={cancelPassword}
         />
+      )}
+      {hostKeyPrompt && (
+        <div className="perde">
+          <div role="dialog" aria-modal="true" aria-label="Host anahtarı" className="diyalog">
+            <HostAnahtariKutusu
+              problem={hostKeyPrompt.problem}
+              kind={hostKeyPrompt.kind}
+              onTrust={() => trustHostKey(hostKeyPrompt)}
+              onForget={() => forgetHostKey(hostKeyPrompt)}
+              onCancel={() => closeHostKey(hostKeyPrompt, false)}
+            />
+          </div>
+        </div>
       )}
       {deleting && <SilmeOnayi connection={deleting} onConfirm={() => confirmDelete(deleting)} onCancel={cancelDelete} />}
     </div>

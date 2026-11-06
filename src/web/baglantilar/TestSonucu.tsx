@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import {
   STEP_LABELS,
   STEP_SECTION,
@@ -5,6 +6,7 @@ import {
   type ConnectionTestResponse,
   type FixId,
   type TestSection,
+  type TestStep,
 } from '../../core/baglanti-testi';
 
 /** Formdaki test durumu: sürüyor ya da son yanıt. */
@@ -22,6 +24,12 @@ export const FIX_LABELS: Record<FixId, string> = {
   requireYap: 'require yap',
   caDosyasiSec: 'CA dosyası seç',
   verifyCaDene: 'verify-ca dene',
+  sshHostuDuzelt: "SSH host'unu düzelt",
+  sshPortuDuzelt: 'SSH portunu düzelt',
+  sshKullaniciyiDuzelt: 'SSH kullanıcısını düzelt',
+  sshSirriDuzelt: 'SSH şifresini/passphrase’i düzelt',
+  anahtarDosyasiniDuzelt: 'Anahtar dosyasını düzelt',
+  agentYolunuDuzelt: 'Agent yolunu düzelt',
 };
 
 const ICONS = { basarili: '✓', uyari: '⚠', hata: '✗', calistirilmadi: '·' } as const;
@@ -60,11 +68,14 @@ export function TestAdimlari({
   section,
   onFix,
   canFix,
+  below,
 }: {
   state: TestState | null;
   section: TestSection;
   onFix: (fix: FixId) => void;
   canFix: (fix: FixId) => boolean;
+  /** Adım satırının altında gösterilecek ek içerik (ör. SSH adımının host anahtarı kutusu). */
+  below?: (step: TestStep) => ReactNode;
 }) {
   if (state?.durum !== 'bitti') return null;
   const steps = state.yanit.adimlar.filter((s) => STEP_SECTION[s.id] === section);
@@ -96,16 +107,21 @@ export function TestAdimlari({
               ))}
             </span>
           )}
+          {below?.(s)}
         </li>
       ))}
     </ul>
   );
 }
 
-/** Kapalı SSL/TLS bölümünün özetindeki son TLS adımı sonucu. */
-export function TlsDurumu({ state }: { state: TestState | null }) {
+/** Kapalı SSL/TLS ya da SSH bölümünün özetindeki son adım sonucu. */
+export function AdimDurumu({ state, step }: { state: TestState | null; step: 'tls' | 'ssh' }) {
   if (state?.durum !== 'bitti') return null;
-  const tls = state.yanit.adimlar.find((s) => s.id === 'tls');
-  if (!tls || tls.sonuc === 'calistirilmadi') return null;
-  return <span className={`test-ikonu ${tls.sonuc}`}> {ICONS[tls.sonuc]}</span>;
+  const found = state.yanit.adimlar.find((s) => s.id === step);
+  if (!found || found.sonuc === 'calistirilmadi') return null;
+  return <span className={`test-ikonu ${found.sonuc}`}> {ICONS[found.sonuc]}</span>;
+}
+
+export function TlsDurumu({ state }: { state: TestState | null }) {
+  return <AdimDurumu state={state} step="tls" />;
 }

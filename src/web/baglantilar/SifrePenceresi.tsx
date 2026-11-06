@@ -1,8 +1,10 @@
 import { useEffect, useId, useState, type FormEvent } from 'react';
-import { connectionAddress, type Connection } from '../../core/baglanti';
+import { connectionAddress, type Connection, type SessionSecret } from '../../core/baglanti';
 
 interface Props {
   connection: Connection;
+  /** `ssh`: tünelin SSH şifresi ya da anahtar passphrase'i sorulur. */
+  secret?: SessionSecret;
   /** Sunucunun önceki şifreyi reddetme nedeni (`28P01`); ilk soruşta `null`. */
   rejection: string | null;
   /** Hata mesajı döndürürse pencere açık kalır ve mesaj gösterilir. */
@@ -14,7 +16,10 @@ interface Props {
  * Oturumluk şifre penceresi: keychain'e kaydedilmeyen bağlantı açılırken sorulur. Şifre Tezgah
  * kapanana kadar bellekte kalır; istenirse keychain'e kaydedilir (bağlantı ayarı değişir).
  */
-export function SifrePenceresi({ connection, rejection, onSubmit, onCancel }: Props) {
+export function SifrePenceresi({ connection, secret = 'veritabani', rejection, onSubmit, onCancel }: Props) {
+  const ssh = secret === 'ssh' ? connection.ssh : null;
+  const label = ssh ? (ssh.auth === 'password' ? 'SSH şifresi' : 'Passphrase') : 'Şifre';
+  const address = ssh ? `${ssh.user}@${ssh.host}${ssh.port === 22 ? '' : `:${ssh.port}`}` : connectionAddress(connection);
   const id = useId();
   const [password, setPassword] = useState('');
   const [saveToKeychain, setSaveToKeychain] = useState(false);
@@ -29,7 +34,7 @@ export function SifrePenceresi({ connection, rejection, onSubmit, onCancel }: Pr
 
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (password === '') return setError('Şifre gerekli');
+    if (password === '') return setError(`${label} gerekli`);
     setBusy(true);
     const failure = await onSubmit(password, saveToKeychain);
     setBusy(false);
@@ -41,7 +46,7 @@ export function SifrePenceresi({ connection, rejection, onSubmit, onCancel }: Pr
       <form
         role="dialog"
         aria-modal="true"
-        aria-label={`${connection.name} şifresi`}
+        aria-label={ssh ? `${connection.name} ${label}` : `${connection.name} şifresi`}
         className="diyalog sifre-penceresi"
         onSubmit={submit}
         noValidate
@@ -50,9 +55,9 @@ export function SifrePenceresi({ connection, rejection, onSubmit, onCancel }: Pr
           <span className="ortam-noktasi" style={{ backgroundColor: connection.color ?? 'transparent' }} aria-hidden="true" />
           {connection.name}
         </h2>
-        <p className="soluk">{connectionAddress(connection)}</p>
+        <p className="soluk">{ssh ? `SSH tüneli · ${address}` : address}</p>
         <div className="alan">
-          <label htmlFor={`${id}-sifre`}>Şifre</label>
+          <label htmlFor={`${id}-sifre`}>{label}</label>
           <input
             id={`${id}-sifre`}
             type="password"

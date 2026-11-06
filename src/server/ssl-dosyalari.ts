@@ -6,7 +6,7 @@ import type { SslFileContents } from '../core/baglanti-ssl';
 import { classifySslFileError, toDriverError, type StepFailure } from '../core/baglanti-testi';
 
 /** `~/` ile başlayan yolu ev dizinine çevirir; diğer yollar (ayrıştırmada mutlak olduğu doğrulandı) aynen. */
-function resolvePath(path: string): string {
+export function resolveHomePath(path: string): string {
   return /^~[\\/]/.test(path) ? join(homedir(), path.slice(2)) : path;
 }
 
@@ -20,7 +20,7 @@ export async function readSslFiles(input: SslSettings): Promise<SslFiles> {
     const path = input[field];
     if (path === null) continue;
     try {
-      contents[target[field]] = await readFile(resolvePath(path), 'utf8');
+      contents[target[field]] = await readFile(resolveHomePath(path), 'utf8');
     } catch (err) {
       return { ok: false, failure: classifySslFileError(field, path, toDriverError(err)) };
     }

@@ -7,10 +7,13 @@ import {
   type Connection,
   SSL_PATH_LABELS,
   connectionFieldReader,
+  type SshField,
+  type SshSettings,
   type SslMode,
   type SslPathField,
   type SslSettings,
 } from './baglanti';
+import type { HostKeyProblem } from './ssh-tuneli';
 
 /** Adımlar bu sırayla koşar; uygulanmayan adım (sır okunmuyorsa `sirlar`, tünel yoksa `ssh`) listede yoktur. */
 export const TEST_STEPS = ['sirlar', 'ssh', 'ulasma', 'tls', 'kimlik', 'listeleme'] as const;
@@ -30,10 +33,28 @@ export type FixId =
   | 'postgresKullan'
   | 'requireYap'
   | 'caDosyasiSec'
-  | 'verifyCaDene';
+  | 'verifyCaDene'
+  | 'sshHostuDuzelt'
+  | 'sshPortuDuzelt'
+  | 'sshKullaniciyiDuzelt'
+  | 'sshSirriDuzelt'
+  | 'anahtarDosyasiniDuzelt'
+  | 'agentYolunuDuzelt';
 
 /** Bir adımın sorumlu tuttuğu form alanı (formda kırmızı gösterilir). */
-export type TestField = 'host' | 'port' | 'user' | 'password' | 'database' | SslPathField;
+export type TestField =
+  | 'host'
+  | 'port'
+  | 'user'
+  | 'password'
+  | 'database'
+  | SslPathField
+  | 'sshHost'
+  | 'sshPort'
+  | 'sshUser'
+  | 'sshKeyPath'
+  | 'sshAgentPath'
+  | 'sshSecret';
 
 /** Tezgah'ın kendi yapısal kodları; sürücü ya da ağ bir kod vermediğinde ya da durum sürücü hatası değilse. */
 export const TEST_CODES = [
@@ -47,6 +68,15 @@ export const TEST_CODES = [
   'ulasilamadi',
   'baglanilamadi',
   'listelenemedi',
+  'hostKeyUnknown',
+  'hostKeyMismatch',
+  'sshSirGerekli',
+  'sshSirReddedildi',
+  'sshKimlik',
+  'agentYok',
+  'anahtarOkunamadi',
+  'sshHatasi',
+  'tunelKoptu',
 ] as const;
 export type TestCode = (typeof TEST_CODES)[number];
 
@@ -67,6 +97,8 @@ export interface TestStep {
   mesaj: string;
   alan: TestField | null;
   oneriler: FixId[];
+  /** Yalnızca `hostKeyUnknown` ve `hostKeyMismatch`'te: arayüzdeki host anahtarı kutusunun içeriği. */
+  hostAnahtari?: HostKeyProblem;
 }
 
 /** Adım satırının gösterildiği form bölümü. */
@@ -99,6 +131,9 @@ export interface ConnectionTestRequest extends SslSettings {
   database: string;
   password: string | undefined;
   savePassword: boolean;
+  ssh: SshSettings | null;
+  /** SSH şifresi ya da passphrase; verilmezse ve `ssh.saveSecret` ise keychain'den okunur. */
+  sshSecret: string | undefined;
 }
 
 export interface ConnectionTestResponse {
@@ -107,7 +142,9 @@ export interface ConnectionTestResponse {
   sunucu: { surum: string; veritabaniSayisi: number } | null;
 }
 
-export type TestInputField = Exclude<keyof ConnectionTestRequest, 'connectionId' | 'savePassword'>;
+export type TestInputField =
+  | Exclude<keyof ConnectionTestRequest, 'connectionId' | 'savePassword' | 'ssh'>
+  | SshField;
 export type TestParseResult =
   | { ok: true; value: ConnectionTestRequest }
   | { ok: false; errors: Partial<Record<TestInputField, string>> };
@@ -125,12 +162,14 @@ export function parseConnectionTestInput(raw: unknown): TestParseResult {
   const port = read.port();
   const password = read.password();
   const ssl = read.ssl();
+  const ssh = read.ssh();
+  const sshSecret = read.password('sshSecret');
 
   const connectionId = typeof input.connectionId === 'string' ? input.connectionId : null;
   const savePassword = typeof input.savePassword === 'boolean' ? input.savePassword : true;
 
   if (Object.keys(errors).length > 0) return { ok: false, errors };
-  return { ok: true, value: { connectionId, host, port, user, database, password, savePassword, ...ssl } };
+  return { ok: true, value: { connectionId, host, port, user, database, password, savePassword, ...ssl, ssh, sshSecret } };
 }
 
 /** Sürücüden ya da ağdan gelen hata; yalnızca `code` ve `message` okunur. */
@@ -139,7 +178,7 @@ export interface DriverError {
   message: string;
 }
 
-export type StepFailure = Pick<TestStep, 'kod' | 'mesaj' | 'alan' | 'oneriler'>;
+export type StepFailure = Pick<TestStep, 'kod' | 'mesaj' | 'alan' | 'oneriler' | 'hostAnahtari'>;
 
 /** Testin gittiği adres ve başlangıç veritabanı (mesaj ve önerilerde kullanılır). */
 interface TestAddress {
@@ -343,9 +382,16 @@ export function testSummary(adimlar: readonly TestStep[]): TestSummary {
   return { sonuc: 'basarili', adim: null };
 }
 
-/** Uygulanacak adımlar, sırasıyla. Tünel (ticket 17) gelene kadar `ssh` yoktur. */
-export function testPlan({ readsKeychain }: { readsKeychain: boolean }): TestStepId[] {
-  return [...(readsKeychain ? (['sirlar'] as const) : []), 'ulasma', 'tls', 'kimlik', 'listeleme'];
+/** Uygulanacak adımlar, sırasıyla: `sirlar` yalnızca keychain okunacaksa, `ssh` yalnızca tünel varsa. */
+export function testPlan({ readsKeychain, ssh = false }: { readsKeychain: boolean; ssh?: boolean }): TestStepId[] {
+  return [
+    ...(readsKeychain ? (['sirlar'] as const) : []),
+    ...(ssh ? (['ssh'] as const) : []),
+    'ulasma',
+    'tls',
+    'kimlik',
+    'listeleme',
+  ];
 }
 
 /** Adım sonuçlarını sırayla biriktirir; ilk hatadan sonra plandaki kalan adımlar "çalıştırılmadı" olur. */

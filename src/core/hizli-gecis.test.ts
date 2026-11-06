@@ -15,6 +15,7 @@ function connection(overrides: Partial<Connection> = {}): Connection {
     color: null,
     savePassword: true,
     ...DEFAULT_SSL,
+    ssh: null,
     databaseSelection: [{ database: 'postgres', schemas: null }],
     ...overrides,
   };

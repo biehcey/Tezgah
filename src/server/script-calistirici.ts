@@ -34,6 +34,7 @@ import {
 } from '../core/deneme';
 import type { SchemaChange, TableSchema } from '../core/deneme-farki';
 import { splitStatements, type Statement } from '../core/ifade-bolme';
+import { TUNNEL_CLOSED } from '../core/ssh-tuneli';
 import {
   PREVIEW_ROWS,
   autocommitSummary,
@@ -85,6 +86,11 @@ type Decision = 'commit' | 'rollback' | 'kopma' | 'sureDoldu' | 'baglantiKoptu';
 const EXPIRED = 'Süre doldu; transaction geri alındı';
 const LATE_COMMIT = `${EXPIRED}; commit yapılamaz.`;
 const SESSION_TIMED_OUT = 'Oturum sunucuda zaman aşımına uğradı; transaction geri alındı';
+
+/** Bağlantı tünel koptuğu için mi düştü (tünel üzerindeki soketin hata kodu). */
+function isTunnelClosed(err: unknown): boolean {
+  return (err as { code?: unknown } | null)?.code === TUNNEL_CLOSED;
+}
 /** Postgres oturumu `idle_in_transaction_session_timeout` ile kapattı. */
 const IDLE_IN_TRANSACTION_TIMEOUT = '25P03';
 /** Hata alan transaction'da yalnızca ROLLBACK kabul edilir; diğer sorgular bununla döner. */
@@ -284,6 +290,8 @@ export function createScriptRunner({ store, pools, clock, history, log }: Script
       let clean = false;
       /** Postgres oturumu `idle_in_transaction_session_timeout` ile kapattı (ör. dizüstü uykudayken). */
       let timedOut = false;
+      /** Bağlantı, tünel koptuğu için düştü. */
+      let tunnelLost = false;
       let expiry: unknown;
       const markBroken = () => {
         broken = true;
@@ -293,12 +301,21 @@ export function createScriptRunner({ store, pools, clock, history, log }: Script
       // Checkout sırasında pool'un dinleyicisi yok; bağlantı düşerse süreç çökmesin.
       const onError = (err: Error) => {
         if ((err as Partial<pg.DatabaseError>).code === IDLE_IN_TRANSACTION_TIMEOUT) timedOut = true;
+        if (isTunnelClosed(err)) tunnelLost = true;
         log(`Script bağlantısı düştü (${where}): ${err.message}`);
         markBroken();
       };
       client.on('error', onError);
       const lost = () =>
-        finish({ sonuc: 'hata', mesaj: timedOut ? SESSION_TIMED_OUT : 'Bağlantı koptu; transaction sunucuda geri alındı.' }, 'hata');
+        finish(
+          {
+            sonuc: 'hata',
+            mesaj: timedOut
+              ? SESSION_TIMED_OUT
+              : `${tunnelLost ? 'Tünel' : 'Bağlantı'} koptu; transaction sunucuda geri alındı.`,
+          },
+          'hata',
+        );
       /** İptal ya da soket kopması: transaction geri alındı. */
       const stopped = (reason: 'iptal' | 'kopma') => finish({ sonuc: 'iptal' }, reason === 'kopma' ? 'kopma-rollback' : 'iptal');
       const rolledBack = async (reason: Decision | 'iptal') => {
@@ -397,7 +414,8 @@ export function createScriptRunner({ store, pools, clock, history, log }: Script
           return await finish({ sonuc: 'commit' }, 'commit');
         }
         if (!(commitError instanceof pg.DatabaseError)) {
-          return await finish({ sonuc: 'hata', mesaj: 'Commit sonucu bilinmiyor: bağlantı koptu.' }, 'hata');
+          const what = tunnelLost || isTunnelClosed(commitError) ? 'tünel' : 'bağlantı';
+          return await finish({ sonuc: 'hata', mesaj: `Commit sonucu bilinmiyor: ${what} koptu.` }, 'hata');
         }
         // Postgres başarısız COMMIT'te transaction'ı geri alır.
         clean = true;
@@ -423,8 +441,10 @@ export function createScriptRunner({ store, pools, clock, history, log }: Script
       let unlocked = false;
       /** Gönderilen iptal sinyali; geç varabilir, client bu yüzden pool'a dönmez. */
       let cancelSent: Promise<void> | null = null;
+      let tunnelLost = false;
       const onError = (err: Error) => {
         log(`Script bağlantısı düştü (${where}): ${err.message}`);
+        if (isTunnelClosed(err)) tunnelLost = true;
         broken = true;
       };
       client.on('error', onError);
@@ -443,7 +463,8 @@ export function createScriptRunner({ store, pools, clock, history, log }: Script
         const { outcome, applied } = await runStatements(current, client, script, null);
         const ozet = autocommitSummary(total, applied, outcome !== 'tamam');
         if (outcome === 'baglantiKoptu' || broken) {
-          return await finish({ sonuc: 'hata', mesaj: 'Bağlantı koptu; çalışan ifadenin sonucu bilinmiyor.', ozet }, 'hata');
+          const mesaj = `${tunnelLost ? 'Tünel' : 'Bağlantı'} koptu; çalışan ifadenin sonucu bilinmiyor, kalan ifadeler çalıştırılmadı.`;
+          return await finish({ sonuc: 'hata', mesaj, ozet }, 'hata');
         }
         if (current.stopping) {
           await cancelSent;

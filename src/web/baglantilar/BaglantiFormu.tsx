@@ -18,6 +18,8 @@ import {
 import { parseConnectionTestInput, type FixId, type TestField } from '../../core/baglanti-testi';
 import { isConnectionUrl, parseConnectionUrl } from '../../core/baglanti-url';
 import { ApiError, useApi, type ConnectionRequest, type ConnectionTestBody } from '../api/client';
+import { WINDOWS_AGENT_PIPE, type HostKeyProblem } from '../../core/ssh-tuneli';
+import { SSH_ERROR_FIELDS, SshBolumu, sshForm, sshSettings, usesSshSecret, type SshForm, type StoredSecret } from './SshBolumu';
 import { SslBolumu, sslForm, sslSettings, type SslForm } from './SslBolumu';
 import { TestAdimlari, TestOzeti, type TestState } from './TestSonucu';
 
@@ -43,7 +45,18 @@ const FIX_FIELDS: Partial<Record<FixId, TestField>> = {
   sifreGir: 'password',
   veritabaniniDuzelt: 'database',
   caDosyasiSec: 'sslrootcert',
+  sshHostuDuzelt: 'sshHost',
+  sshPortuDuzelt: 'sshPort',
+  sshKullaniciyiDuzelt: 'sshUser',
+  sshSirriDuzelt: 'sshSecret',
+  anahtarDosyasiniDuzelt: 'sshKeyPath',
+  agentYolunuDuzelt: 'sshAgentPath',
 };
+
+const isSshField = (field: string | null | undefined) => field === 'ssh' || (field?.startsWith('ssh') ?? false);
+
+/** Agent yolu boşken sunucunun kullandığı varsayılan (yalnızca açıklama). */
+const AGENT_DEFAULT = /Win/.test(navigator.platform) ? WINDOWS_AGENT_PIPE : 'SSH_AUTH_SOCK';
 
 const SSL_ERROR_FIELDS = ['sslmode', ...SSL_PATH_FIELDS] as const;
 
@@ -70,6 +83,13 @@ export function BaglantiFormu({ connection, folders, onSaved, onCancel, onDelete
   const [urlError, setUrlError] = useState<string | null>(null);
   const [urlNote, setUrlNote] = useState<UrlNote | null>(null);
   const [ssl, setSsl] = useState<SslForm>(() => sslForm(connection ?? DEFAULT_SSL));
+  const [ssh, setSsh] = useState<SshForm>(() => sshForm(connection?.ssh ?? null));
+  const [sshSecret, setSshSecret] = useState('');
+  const [sshStored, setSshStored] = useState<StoredSecret>(
+    connection?.ssh?.saveSecret && connection.ssh.auth !== 'agent' ? 'yukleniyor' : 'yok',
+  );
+  const [sshChanging, setSshChanging] = useState(false);
+  const [sshOpen, setSshOpen] = useState(false);
   const [name, setName] = useState(connection?.name ?? '');
   const [folderId, setFolderId] = useState<string | null>(connection?.folderId ?? null);
   // Form açıkken bağlantı listeden başka klasöre taşınırsa Kaydet onu eski klasörüne geri götürmesin.
@@ -106,17 +126,26 @@ export function BaglantiFormu({ connection, folders, onSaved, onCancel, onDelete
 
   const connectionId = connection?.id;
   const checkKeychain = connection?.savePassword ?? false;
+  const checkSshKeychain = Boolean(connection?.ssh?.saveSecret && connection.ssh.auth !== 'agent');
   useEffect(() => {
-    if (!connectionId || !checkKeychain) return;
+    if (!connectionId || (!checkKeychain && !checkSshKeychain)) return;
     let active = true;
     api.passwordStatus(connectionId).then(
-      (s) => active && setStored(s.password),
-      () => active && setStored('bilinmiyor'),
+      (s) => {
+        if (!active) return;
+        if (checkKeychain) setStored(s.password);
+        if (checkSshKeychain) setSshStored(s.sshSecret);
+      },
+      () => {
+        if (!active) return;
+        if (checkKeychain) setStored('bilinmiyor');
+        if (checkSshKeychain) setSshStored('bilinmiyor');
+      },
     );
     return () => {
       active = false;
     };
-  }, [api, connectionId, checkKeychain]);
+  }, [api, connectionId, checkKeychain, checkSshKeychain]);
 
   /**
    * URL'i alanlara dağıtır; URL'in kendisi hiçbir yerde tutulmaz. URL'de olmayan alanlara dokunulmaz,
@@ -172,11 +201,19 @@ export function BaglantiFormu({ connection, folders, onSaved, onCancel, onDelete
     setColor(tag ? DEFAULT_ENV_COLORS[tag] : null);
   }
 
-  /** Alan hataları SSL bölümündeyse bölüm açılır. */
+  /** Alan hataları SSL ya da SSH bölümündeyse bölüm açılır. */
   function showErrors(next: Errors) {
     setErrors(next);
     if (SSL_ERROR_FIELDS.some((f) => next[f])) setSslOpen(true);
+    if (SSH_ERROR_FIELDS.some((f) => next[f])) setSshOpen(true);
   }
+
+  /**
+   * Gönderilecek SSH sırrı: alan boşsa kayıtlı sır kullanılır. Keychain kapalıyken alan yalnızca
+   * teste gider; kaydedilmez (bağlanırken oturumluk pencere sorar).
+   */
+  const sshSecretToSend = (purpose: 'test' | 'kayit') =>
+    usesSshSecret(ssh) && sshSecret !== '' && (purpose === 'test' || ssh.saveSecret) ? sshSecret : undefined;
 
   /** Formdaki kaydedilmemiş değerlerle test; hiçbir şey kaydedilmez. */
   async function runTest(overrides: Partial<ConnectionTestBody> = {}) {
@@ -188,10 +225,13 @@ export function BaglantiFormu({ connection, folders, onSaved, onCancel, onDelete
       database,
       savePassword,
       ...sslSettings(ssl),
+      ssh: sshSettings(ssh),
       ...overrides,
     };
     // Kaydet'teki gibi: boş alan kayıtlı şifreyi kullanır (sunucu keychain'den okur).
     if (password !== '' && body.password === undefined) body.password = password;
+    const secret = sshSecretToSend('test');
+    if (secret !== undefined && body.sshSecret === undefined) body.sshSecret = secret;
     const parsed = parseConnectionTestInput(body);
     if (!parsed.ok) return showErrors(parsed.errors);
     setErrors({});
@@ -205,6 +245,7 @@ export function BaglantiFormu({ connection, folders, onSaved, onCancel, onDelete
       if (failed?.id === 'tls' || isSslPathField(failed?.alan)) {
         setSslOpen(true);
       }
+      if (failed?.id === 'ssh' || isSshField(failed?.alan)) setSshOpen(true);
     } catch (err) {
       setTestState({ durum: 'basarisiz', hata: err instanceof ApiError && err.body?.hata ? err.body.hata : 'sunucuya ulaşılamadı' });
     }
@@ -215,6 +256,7 @@ export function BaglantiFormu({ connection, folders, onSaved, onCancel, onDelete
     const target = FIX_FIELDS[fix];
     // Şifre alanı "Keychain'e kaydet" kapalıyken yok (oturumluk şifre ayrı bir akış).
     if (target === 'password') return savePassword;
+    if (target === 'sshSecret') return usesSshSecret(ssh);
     return target !== undefined;
   }
 
@@ -232,8 +274,25 @@ export function BaglantiFormu({ connection, folders, onSaved, onCancel, onDelete
     const target = FIX_FIELDS[fix];
     if (!target) return;
     if (target === 'password') setChanging(true);
+    if (target === 'sshSecret') setSshChanging(true);
     if (isSslPathField(target)) setSslOpen(true);
+    if (isSshField(target)) setSshOpen(true);
     setFocusField(target);
+  }
+
+  /** "Güven ve tekrar dene": anahtar Tezgah'ın deposuna yazılır, test baştan koşar. */
+  async function trustHostKey(problem: HostKeyProblem) {
+    await api.trustHostKey({ host: problem.host, port: problem.port, anahtar: problem.anahtar });
+    await runTest();
+  }
+
+  async function forgetHostKey(host: string, port: number): Promise<string> {
+    try {
+      const { silinen } = await api.forgetHostKey({ host, port });
+      return silinen > 0 ? "Tezgah'taki kayıtlı host anahtarı silindi." : "Tezgah'ta bu host için kayıtlı anahtar yok.";
+    } catch (err) {
+      return err instanceof ApiError && err.body?.hata ? err.body.hata : 'Silinemedi.';
+    }
   }
 
   const invalid = (key: ConnectionField) => (errors[key] || testField === key ? true : undefined);
@@ -251,9 +310,12 @@ export function BaglantiFormu({ connection, folders, onSaved, onCancel, onDelete
       color,
       savePassword,
       ...sslSettings(ssl),
+      ssh: sshSettings(ssh),
     };
     // Boş alan kayıtlı şifreye dokunmaz; şifreyi keychain'den kaldırmanın yolu "Keychain'e kaydet"i kapatmak.
     if (savePassword && password !== '') request.password = password;
+    const secret = sshSecretToSend('kayit');
+    if (secret !== undefined) request.sshSecret = secret;
 
     const parsed = parseConnectionInput(request);
     if (!parsed.ok) return showErrors(parsed.errors);
@@ -468,6 +530,34 @@ export function BaglantiFormu({ connection, folders, onSaved, onCancel, onDelete
         testState={testState}
         onFix={applyFix}
         canFix={canFix}
+      />
+
+      <SshBolumu
+        id={id}
+        value={ssh}
+        onChange={(next) => {
+          setSsh(next);
+          if (isSshField(testField)) setTestField(null);
+        }}
+        secret={sshSecret}
+        onSecretChange={(value) => {
+          setSshSecret(value);
+          if (testField === 'sshSecret') setTestField(null);
+        }}
+        stored={sshStored}
+        changing={sshChanging}
+        onChangeStored={() => setSshChanging(true)}
+        open={sshOpen}
+        onToggle={() => setSshOpen((open) => !open)}
+        errors={errors}
+        invalid={(field) => testField === field}
+        testState={testState}
+        onFix={applyFix}
+        canFix={canFix}
+        onTrust={trustHostKey}
+        onForget={forgetHostKey}
+        onDismissHostKey={() => setTestState(null)}
+        agentDefault={AGENT_DEFAULT}
       />
 
       {(errors.genel || errors.folderId) && (

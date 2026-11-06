@@ -95,6 +95,7 @@ describe('yeni bağlantı formu', () => {
           password: 's3cret',
           sslmode: 'prefer',
           sslrootcert: null,
+          ssh: null,
           sslcert: null,
           sslkey: null,
         },

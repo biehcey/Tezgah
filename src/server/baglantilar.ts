@@ -18,7 +18,7 @@ import {
 import { changesServerSession } from '../core/veritabani-secimi';
 import type { SettingsStore } from './ayar-deposu';
 import { json, methodNotAllowed, notFound as notFoundWith, readJson } from './http';
-import { passwordAccount, type Keychain, type SecretDelete, type SecretRead, type SecretWrite } from './keychain';
+import { passwordAccount, sshSecretAccount, type Keychain, type SecretDelete, type SecretRead, type SecretWrite } from './keychain';
 import type { SessionPasswords } from './oturum-sifreleri';
 
 export interface ConnectionDeps {
@@ -47,6 +47,7 @@ export function createConnectionRoutes({ store, keychain, sessionPasswords, log,
     const body: SaveConnectionResponse = {
       connection,
       password: await writePassword(connection.id, parsed.value, { isNew: true }),
+      sshSecret: await writeSshSecret(connection.id, parsed.value, { isNew: true }),
     };
     json(res, 201, body);
   }
@@ -54,7 +55,7 @@ export function createConnectionRoutes({ store, keychain, sessionPasswords, log,
   async function update(req: IncomingMessage, res: ServerResponse, id: string) {
     const parsed = parseConnectionInput(await readJson(req));
     if (!parsed.ok) return invalid(res, parsed.errors);
-    const { password, ...fields } = parsed.value;
+    const { password, sshSecret, ...fields } = parsed.value;
     const outcome = await store.update((settings) => {
       const index = settings.connections.findIndex((c) => c.id === id);
       const existing = settings.connections[index];
@@ -67,9 +68,11 @@ export function createConnectionRoutes({ store, keychain, sessionPasswords, log,
     if (outcome.status === 'yok') return notFound(res);
     if (outcome.status === 'klasor-yok') return invalid(res, { folderId: 'Klasör bulunamadı' });
     const passwordOutcome = await writePassword(id, parsed.value, { isNew: false });
-    // Şifre yazıldıktan sonra: arada açılan pool eski şifreyle kalmasın.
-    if (outcome.changed || passwordOutcome === 'kaydedildi' || passwordOutcome === 'silindi') onChanged?.(id);
-    const body: SaveConnectionResponse = { connection: outcome.connection, password: passwordOutcome };
+    const sshOutcome = await writeSshSecret(id, parsed.value, { isNew: false });
+    // Sırlar yazıldıktan sonra: arada açılan pool ya da tünel eski sırla kalmasın.
+    const secretChanged = [passwordOutcome, sshOutcome].some((o) => o === 'kaydedildi' || o === 'silindi');
+    if (outcome.changed || secretChanged) onChanged?.(id);
+    const body: SaveConnectionResponse = { connection: outcome.connection, password: passwordOutcome, sshSecret: sshOutcome };
     json(res, 200, body);
   }
 
@@ -81,11 +84,14 @@ export function createConnectionRoutes({ store, keychain, sessionPasswords, log,
     });
     if (!removed) return notFound(res);
     sessionPasswords.forget(id);
+    sessionPasswords.forget(sshSecretAccount(id));
     onChanged?.(id);
     // Ayar silindikten sonra keychain: erişim reddedilse de bağlantı silinmiş kalır, sonuç bildirilir.
     const result = await keychain.delete(passwordAccount(id));
     logDenied('silme', id, result);
-    const body: DeleteConnectionResponse = { password: result.result };
+    const ssh = await keychain.delete(sshSecretAccount(id));
+    logDenied('silme', `${id}:ssh`, ssh);
+    const body: DeleteConnectionResponse = { password: result.result, sshSecret: ssh.result };
     json(res, 200, body);
   }
 
@@ -100,27 +106,35 @@ export function createConnectionRoutes({ store, keychain, sessionPasswords, log,
       return connection;
     });
     if (!copied) return notFound(res);
-    const body: SaveConnectionResponse = { connection: copied, password: await copyPassword(id, copied) };
+    const body: SaveConnectionResponse = {
+      connection: copied,
+      password: copied.savePassword ? await copySecret(passwordAccount(id), passwordAccount(copied.id)) : 'degismedi',
+      sshSecret: storesSshSecret(copied.ssh) ? await copySecret(sshSecretAccount(id), sshSecretAccount(copied.id)) : 'degismedi',
+    };
     json(res, 201, body);
   }
 
-  async function copyPassword(sourceId: string, copy: Connection): Promise<SaveConnectionResponse['password']> {
-    if (!copy.savePassword) return 'degismedi';
-    const read = await keychain.get(passwordAccount(sourceId));
-    logDenied('okuma', sourceId, read);
+  async function copySecret(from: string, to: string): Promise<SaveConnectionResponse['password']> {
+    const read = await keychain.get(from);
+    logDenied('okuma', from, read);
     if (read.result === 'yok') return 'degismedi';
     if (read.result === 'reddedildi') return 'reddedildi';
-    const written = await keychain.set(passwordAccount(copy.id), read.value);
-    logDenied('yazma', copy.id, written);
+    const written = await keychain.set(to, read.value);
+    logDenied('yazma', to, written);
     return written.result;
   }
 
   async function passwordStatus(res: ServerResponse, id: string) {
-    const { connections } = await store.read();
-    if (!connections.some((c) => c.id === id)) return notFound(res);
+    const connection = (await store.read()).connections.find((c) => c.id === id);
+    if (!connection) return notFound(res);
     const result = await keychain.get(passwordAccount(id));
     logDenied('okuma', id, result);
-    const body: PasswordStatusResponse = { password: result.result };
+    let ssh: SecretRead | { result: 'yok' } = { result: 'yok' };
+    if (storesSshSecret(connection.ssh)) {
+      ssh = await keychain.get(sshSecretAccount(id));
+      logDenied('okuma', `${id}:ssh`, ssh);
+    }
+    const body: PasswordStatusResponse = { password: result.result, sshSecret: ssh.result };
     json(res, 200, body);
   }
 
@@ -133,24 +147,27 @@ export function createConnectionRoutes({ store, keychain, sessionPasswords, log,
     if (!parsed.ok) return json(res, 400, { hata: parsed.error });
     let connection = (await store.read()).connections.find((c) => c.id === id);
     if (!connection) return notFound(res);
-    const { password, saveToKeychain } = parsed.value;
+    const { password, saveToKeychain, secret } = parsed.value;
+    if (secret === 'ssh' && !connection.ssh) return json(res, 400, { hata: 'Bağlantının SSH tüneli yok' });
+    const account = secret === 'ssh' ? sshSecretAccount(id) : passwordAccount(id);
     let outcome: SessionPasswordResponse['password'] = 'oturumda';
     if (saveToKeychain) {
-      const written = await keychain.set(passwordAccount(id), password);
-      logDenied('yazma', id, written);
+      const written = await keychain.set(account, password);
+      logDenied('yazma', account, written);
       outcome = written.result;
     }
     if (outcome === 'kaydedildi') {
       const updated = await store.update((settings) => {
         const found = settings.connections.find((c) => c.id === id);
-        if (found) found.savePassword = true;
+        if (found && secret === 'ssh' && found.ssh) found.ssh.saveSecret = true;
+        else if (found) found.savePassword = true;
         return found;
       });
       if (!updated) return notFound(res);
       connection = updated;
-      sessionPasswords.forget(id);
+      sessionPasswords.forget(account);
     } else {
-      sessionPasswords.remember(id, password);
+      sessionPasswords.remember(account, password);
     }
     // Açık pool'lar eski (reddedilen) şifreyle kalmasın.
     onChanged?.(id);
@@ -175,6 +192,29 @@ export function createConnectionRoutes({ store, keychain, sessionPasswords, log,
       case 'yaz': {
         const result = await keychain.set(account, input.password!);
         logDenied('yazma', id, result);
+        return result.result;
+      }
+    }
+  }
+
+  /** SSH sırrı: şifre ya da passphrase; agent'ta sır yok, tünel kaldırılınca kayıtlı sır silinir. */
+  async function writeSshSecret(
+    id: string,
+    { ssh, sshSecret }: Pick<ConnectionInput, 'ssh' | 'sshSecret'>,
+    { isNew }: { isNew: boolean },
+  ): Promise<SaveConnectionResponse['sshSecret']> {
+    const account = sshSecretAccount(id);
+    switch (passwordAction({ savePassword: storesSshSecret(ssh), password: sshSecret }, { isNew })) {
+      case 'dokunma':
+        return 'degismedi';
+      case 'sil': {
+        const result = await keychain.delete(account);
+        logDenied('silme', account, result);
+        return result.result === 'yok' ? 'degismedi' : result.result;
+      }
+      case 'yaz': {
+        const result = await keychain.set(account, sshSecret!);
+        logDenied('yazma', account, result);
         return result.result;
       }
     }
@@ -209,6 +249,11 @@ export function createConnectionRoutes({ store, keychain, sessionPasswords, log,
     else methodNotAllowed(res);
     return true;
   };
+}
+
+/** SSH sırrı keychain'de tutulur mu: tünel var, sır kaydı açık ve yöntem agent değil. */
+function storesSshSecret(ssh: Connection['ssh']): boolean {
+  return ssh !== null && ssh.saveSecret && ssh.auth !== 'agent';
 }
 
 function folderExists(settings: Settings, folderId: string | null) {

@@ -27,8 +27,13 @@ describe('migrateSettings', () => {
     const settings = migrateSettings({ version: 1, folders: [], connections: [v1] });
     expect(settings.version).toBe(SETTINGS_VERSION);
     expect(settings.connections).toEqual([
-      { ...v1, sslmode: 'prefer', sslrootcert: null, sslcert: null, sslkey: null },
+      { ...v1, sslmode: 'prefer', sslrootcert: null, sslcert: null, sslkey: null, ssh: null },
     ]);
+  });
+
+  it('sürüm 2 bağlantıları tünelsiz kalır', () => {
+    const v2 = { id: 'b1', name: 'Yerel', host: 'localhost', port: 5432, user: 'postgres', sslmode: 'require' };
+    expect(migrateSettings({ version: 2, folders: [], connections: [v2] }).connections).toEqual([{ ...v2, ssh: null }]);
   });
 
   it('daha yeni bir Tezgah\'ın yazdığı ayarı reddeder', () => {

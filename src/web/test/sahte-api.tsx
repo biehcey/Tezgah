@@ -13,6 +13,7 @@ import {
   type PasswordStatus,
   type PasswordWriteOutcome,
 } from '../../core/baglanti';
+import type { HostKeyProblem } from '../../core/ssh-tuneli';
 import { ApiError, ApiProvider, type ApiClient, type ConnectionRequest } from '../api/client';
 
 /** Testlerde gerçek sunucu yerine kullanılan API istemcisi; verilmeyen işlemler hata fırlatır. */
@@ -28,6 +29,8 @@ export function createFakeApi(overrides: Partial<ApiClient> = {}): ApiClient {
     passwordStatus: missing('passwordStatus'),
     giveSessionPassword: missing('giveSessionPassword'),
     testConnection: missing('testConnection'),
+    trustHostKey: missing('trustHostKey'),
+    forgetHostKey: missing('forgetHostKey'),
     listFolders: missing('listFolders'),
     createFolder: missing('createFolder'),
     renameFolder: missing('renameFolder'),
@@ -94,6 +97,7 @@ export function connection(overrides: Partial<Connection> = {}): Connection {
     color: null,
     savePassword: true,
     ...DEFAULT_SSL,
+    ssh: null,
     databaseSelection: [{ database: 'postgres', schemas: null }],
     ...overrides,
   };
@@ -116,8 +120,16 @@ export interface FakeConnections {
   servers: Map<string, FakeServer>;
   /** Veritabanı paneli istekleri (`listele`, `semalar/<db>`, `kes`), bağlantı kimliğiyle. */
   databaseRequests: string[];
-  /** Sunucunun bellekteki oturumluk şifreleri (bağlantı kimliği → şifre). */
+  /** Sunucunun bellekteki oturumluk şifreleri (bağlantı kimliği → şifre; SSH sırrı `<id>:ssh`). */
   sessionPasswords: Map<string, string>;
+  /** Keychain'deki SSH sırları (bağlantı kimliği → değer). */
+  sshSecrets: Map<string, string>;
+  /** Tezgah'ın `known_hosts`'una yazılan anahtarlar (`host:port anahtar`). */
+  trustedHostKeys: string[];
+  /** "Unut" istekleri (`host:port`). */
+  forgottenHostKeys: string[];
+  /** Host anahtarı kutusunda/testte gösterilecek bilinmeyen anahtar; güvenilene kadar bağlanılmaz. */
+  unknownHostKey: HostKeyProblem | null;
 }
 
 export interface FakeServer {
@@ -125,6 +137,8 @@ export interface FakeServer {
   databases: Record<string, string[]>;
   /** Verilirse sunucu şifre ister; keychain'e kaydedilmeyen bağlantıda oturumluk şifreyle karşılaştırılır. */
   password?: string;
+  /** Verilirse tünelin SSH sunucusu bu şifreyi ister. */
+  sshSecret?: string;
 }
 
 export const PASSWORD_REQUIRED = new ApiError(502, { hata: 'Sunucu şifre istedi ama şifre girilmedi.', kod: 'sifreGerekli' });
@@ -157,6 +171,10 @@ export function createFakeConnections(
     servers: new Map(),
     databaseRequests: [],
     sessionPasswords: new Map(),
+    sshSecrets: new Map(),
+    trustedHostKeys: [],
+    forgottenHostKeys: [],
+    unknownHostKey: null,
     api: undefined as unknown as ApiClient,
   };
   let next = 1;
@@ -169,7 +187,16 @@ export function createFakeConnections(
     state.passwords.set(id, body.password!);
     return 'kaydedildi';
   };
-  const fieldsOf = ({ password, ...rest }: ConnectionRequest) => rest;
+  const writeSshSecret = (id: string, body: ConnectionRequest, isNew: boolean): PasswordWriteOutcome => {
+    const stores = Boolean(body.ssh && body.ssh.saveSecret && body.ssh.auth !== 'agent');
+    const action = passwordAction({ savePassword: stores, password: body.sshSecret }, { isNew });
+    if (action === 'dokunma') return 'degismedi';
+    if (state.deny) return 'reddedildi';
+    if (action === 'sil') return state.sshSecrets.delete(id) ? 'silindi' : 'degismedi';
+    state.sshSecrets.set(id, body.sshSecret!);
+    return 'kaydedildi';
+  };
+  const fieldsOf = ({ password, sshSecret, ...rest }: ConnectionRequest) => ({ ...rest, ssh: rest.ssh ?? null });
   const find = (id: string) => {
     const found = state.connections.find((c) => c.id === id);
     if (!found) throw new ApiError(404, { hata: 'Bağlantı bulunamadı' });
@@ -177,6 +204,21 @@ export function createFakeConnections(
   };
   /** Sunucunun bağlanırken yaptığı şifre denetimi; `28P01`'de oturumluk şifre unutulur. */
   const authenticate = (connection: Connection, server: FakeServer) => {
+    if (connection.ssh) {
+      const key = state.unknownHostKey;
+      if (key && !state.trustedHostKeys.includes(`${key.host}:${key.port} ${key.anahtar}`)) {
+        throw new ApiError(502, { hata: `${key.host} host anahtarı tanınmıyor.`, kod: 'hostKeyUnknown', hostAnahtari: key });
+      }
+      if (server.sshSecret !== undefined) {
+        const sessionKey = `${connection.id}:ssh`;
+        const offered = connection.ssh.saveSecret ? state.sshSecrets.get(connection.id) : state.sessionPasswords.get(sessionKey);
+        if (offered === undefined) throw new ApiError(502, { hata: 'SSH şifresi gerekli.', kod: 'sshSirGerekli' });
+        if (offered !== server.sshSecret) {
+          if (!connection.ssh.saveSecret) state.sessionPasswords.delete(sessionKey);
+          throw new ApiError(502, { hata: 'SSH sunucusu şifreyi kabul etmedi.', kod: 'sshSirReddedildi' });
+        }
+      }
+    }
     if (server.password === undefined) return;
     const offered = connection.savePassword ? state.passwords.get(connection.id) : state.sessionPasswords.get(connection.id);
     if (offered === undefined) throw PASSWORD_REQUIRED;
@@ -191,9 +233,13 @@ export function createFakeConnections(
     listConnections: async () => structuredClone(state.connections),
     async createConnection(body) {
       state.requests.push({ method: 'POST', body });
-      const created = newConnection(`yeni-${next++}`, { ...body, password: body.password });
+      const created = newConnection(`yeni-${next++}`, { ...fieldsOf(body), password: body.password, sshSecret: body.sshSecret });
       state.connections.push(created);
-      return { connection: structuredClone(created), password: writePassword(created.id, body, true) };
+      return {
+        connection: structuredClone(created),
+        password: writePassword(created.id, body, true),
+        sshSecret: writeSshSecret(created.id, body, true),
+      };
     },
     async updateConnection(id, body) {
       state.requests.push({ method: 'PUT', id, body });
@@ -203,14 +249,17 @@ export function createFakeConnections(
       }
       const updated = { ...existing, ...fieldsOf(body) };
       state.connections = state.connections.map((c) => (c.id === id ? updated : c));
-      return { connection: structuredClone(updated), password: writePassword(id, body, false) };
+      return { connection: structuredClone(updated), password: writePassword(id, body, false), sshSecret: writeSshSecret(id, body, false) };
     },
     async deleteConnection(id) {
       state.requests.push({ method: 'DELETE', id });
       find(id);
       state.connections = state.connections.filter((c) => c.id !== id);
-      if (state.deny) return { password: 'reddedildi' };
-      return { password: state.passwords.delete(id) ? 'silindi' : 'yok' };
+      if (state.deny) return { password: 'reddedildi', sshSecret: 'reddedildi' };
+      return {
+        password: state.passwords.delete(id) ? 'silindi' : 'yok',
+        sshSecret: state.sshSecrets.delete(id) ? 'silindi' : 'yok',
+      };
     },
     async copyConnection(id) {
       state.requests.push({ method: 'POST', id: `${id}/kopya` });
@@ -226,7 +275,19 @@ export function createFakeConnections(
           password = 'kaydedildi';
         }
       }
-      return { connection: structuredClone(copy), password };
+      const storedSsh = state.sshSecrets.get(id);
+      if (storedSsh !== undefined && !state.deny) state.sshSecrets.set(copy.id, storedSsh);
+      return { connection: structuredClone(copy), password, sshSecret: storedSsh !== undefined ? 'kaydedildi' : 'degismedi' };
+    },
+    async trustHostKey({ host, port, anahtar }) {
+      state.trustedHostKeys.push(`${host}:${port} ${anahtar}`);
+      return { parmakIzi: state.unknownHostKey?.parmakIzi ?? 'SHA256:?' };
+    },
+    async forgetHostKey({ host, port }) {
+      state.forgottenHostKeys.push(`${host}:${port}`);
+      const before = state.trustedHostKeys.length;
+      state.trustedHostKeys = state.trustedHostKeys.filter((k) => !k.startsWith(`${host}:${port} `));
+      return { silinen: before - state.trustedHostKeys.length };
     },
     listFolders: async () => structuredClone(state.folders),
     async createFolder(name) {
@@ -278,9 +339,18 @@ export function createFakeConnections(
       find(id);
       state.databaseRequests.push(`${id}: kes`);
     },
-    async giveSessionPassword(id, { password, saveToKeychain }) {
-      state.requests.push({ method: 'POST', id: `${id}/oturum-sifresi` });
+    async giveSessionPassword(id, { password, saveToKeychain, secret }) {
+      state.requests.push({ method: 'POST', id: `${id}/oturum-sifresi${secret === 'ssh' ? ':ssh' : ''}` });
       const found = find(id);
+      if (secret === 'ssh') {
+        if (saveToKeychain && !state.deny && found.ssh) {
+          state.sshSecrets.set(id, password);
+          found.ssh.saveSecret = true;
+          return { connection: structuredClone(found), password: 'kaydedildi' };
+        }
+        state.sessionPasswords.set(`${id}:ssh`, password);
+        return { connection: structuredClone(found), password: saveToKeychain ? 'reddedildi' : 'oturumda' };
+      }
       if (saveToKeychain && !state.deny) {
         state.passwords.set(id, password);
         found.savePassword = true;
@@ -293,7 +363,8 @@ export function createFakeConnections(
     async passwordStatus(id) {
       find(id);
       const password: PasswordStatus = state.deny ? 'reddedildi' : state.passwords.has(id) ? 'bulundu' : 'yok';
-      return { password };
+      const sshSecret: PasswordStatus = state.deny ? 'reddedildi' : state.sshSecrets.has(id) ? 'bulundu' : 'yok';
+      return { password, sshSecret };
     },
     ...overrides,
   });

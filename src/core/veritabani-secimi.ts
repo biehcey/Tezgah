@@ -3,6 +3,7 @@
  * Sunucu (doğrulama, kayıt) ve Veritabanı paneli aynı kuralları kullanır.
  */
 import { SSL_PATH_FIELDS, isProd, type Connection, type DatabaseSelection } from './baglanti';
+import type { HostKeyProblem } from './ssh-tuneli';
 
 /** Varsayılan görünürlükte gizli sistem şemaları; diğer şemalar görünür. */
 export const HIDDEN_SCHEMAS: readonly string[] = ['pg_catalog', 'information_schema', 'pg_toast'];
@@ -99,7 +100,18 @@ export function defaultTargetDatabase(connection: Pick<Connection, 'database' | 
  */
 export function changesServerSession(before: Connection, after: Connection): boolean {
   const fields = ['host', 'port', 'user', 'database', 'sslmode', 'savePassword', ...SSL_PATH_FIELDS] as const;
-  return fields.some((f) => before[f] !== after[f]) || isProd(before.envTag) !== isProd(after.envTag);
+  return (
+    fields.some((f) => before[f] !== after[f]) ||
+    isProd(before.envTag) !== isProd(after.envTag) ||
+    !sameTunnel(before.ssh, after.ssh)
+  );
+}
+
+/** Tünelin herhangi bir alanı (sır seçeneği dahil) değiştiyse tünel yeniden açılmalı. */
+function sameTunnel(a: Connection['ssh'], b: Connection['ssh']): boolean {
+  if (a === null || b === null) return a === b;
+  const fields = ['host', 'port', 'user', 'auth', 'keyPath', 'agentPath', 'saveSecret'] as const;
+  return fields.every((f) => a[f] === b[f]);
 }
 
 // --- REST sözleşmesi ---
@@ -117,6 +129,8 @@ export interface SchemaListResponse {
 /** Hedefe bağlanılamadı ya da listeleme başarısız oldu (502). */
 export interface TargetErrorResponse {
   hata: string;
-  /** Bağlantı testiyle aynı kodlar: `ECONNREFUSED`, `28P01`, `sifreGerekli`…; bilinmiyorsa `null`. */
+  /** Bağlantı testiyle aynı kodlar: `ECONNREFUSED`, `28P01`, `sifreGerekli`, `hostKeyUnknown`…; bilinmiyorsa `null`. */
   kod: string | null;
+  /** Host anahtarı bilinmiyor ya da uyuşmuyor: listeden bağlanırken de aynı kutu gösterilir. */
+  hostAnahtari?: HostKeyProblem;
 }

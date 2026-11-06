@@ -7,6 +7,7 @@ import {
   parseConnectionInput,
   parseSessionPasswordInput,
   passwordAction,
+  sshSummary,
   type ConnectionInput,
 } from './baglanti';
 
@@ -31,6 +32,8 @@ describe('parseConnectionInput', () => {
         sslrootcert: null,
         sslcert: null,
         sslkey: null,
+        ssh: null,
+        sshSecret: undefined,
       },
     });
   });
@@ -100,6 +103,78 @@ describe('parseConnectionInput', () => {
   });
 });
 
+describe('parseConnectionInput: SSH tüneli', () => {
+  const ssh = { host: 'bastion.example.com', user: 'deploy', auth: 'key', keyPath: '~/.ssh/id_ed25519' };
+  const PAGEANT = String.raw`\\.\pipe\pageant.kullanici`;
+
+  it('tünel verilmezse ya da null ise tünel yok', () => {
+    const result = parseConnectionInput({ ...minimal, ssh: null });
+    expect(result.ok && result.value.ssh).toBeNull();
+  });
+
+  it("varsayılanlar: port 22, sır keychain'e kaydedilir; kullanılmayan yollar korunur", () => {
+    const result = parseConnectionInput({ ...minimal, ssh: { ...ssh, host: ' bastion.example.com ', agentPath: PAGEANT } });
+    expect(result.ok && result.value.ssh).toEqual({
+      host: 'bastion.example.com',
+      port: 22,
+      user: 'deploy',
+      auth: 'key',
+      keyPath: '~/.ssh/id_ed25519',
+      agentPath: PAGEANT,
+      saveSecret: true,
+    });
+  });
+
+  it('SSH sırrı (şifre ya da passphrase) ayrı okunur', () => {
+    const result = parseConnectionInput({ ...minimal, ssh: { ...ssh, auth: 'password' }, sshSecret: 'gizli' });
+    expect(result.ok && result.value.sshSecret).toBe('gizli');
+  });
+
+  it('agent yolu boşsa platform varsayılanı kullanılır (null)', () => {
+    const result = parseConnectionInput({ ...minimal, ssh: { ...ssh, auth: 'agent', keyPath: null, agentPath: '' } });
+    expect(result.ok && result.value.ssh).toMatchObject({ auth: 'agent', agentPath: null, keyPath: null });
+  });
+
+  it.each([
+    [{ ...ssh, host: '' }, 'sshHost'],
+    [{ ...ssh, user: ' ' }, 'sshUser'],
+    [{ ...ssh, port: 0 }, 'sshPort'],
+    [{ ...ssh, port: '22' }, 'sshPort'],
+    [{ ...ssh, auth: 'pageant' }, 'sshAuth'],
+    [{ ...ssh, keyPath: '' }, 'sshKeyPath'],
+    [{ ...ssh, keyPath: 'id_rsa' }, 'sshKeyPath'],
+    [{ ...ssh, saveSecret: 'evet' }, 'sshSaveSecret'],
+    ['bastion', 'ssh'],
+  ])('geçersiz SSH alanını adıyla bildirir (%#)', (input, field) => {
+    const result = parseConnectionInput({ ...minimal, ssh: input });
+    expect(!result.ok && Object.keys(result.errors)).toEqual([field]);
+  });
+
+  it('uzun SSH sırrını reddeder', () => {
+    const result = parseConnectionInput({ ...minimal, ssh, sshSecret: 'x'.repeat(MAX_PASSWORD_LENGTH + 1) });
+    expect(!result.ok && Object.keys(result.errors)).toEqual(['sshSecret']);
+  });
+
+  it('yeni bağlantı tüneli saklar, sırrı saklamaz', () => {
+    const parsed = parseConnectionInput({ ...minimal, ssh, sshSecret: 'gizli' });
+    if (!parsed.ok) throw new Error('girdi geçersiz');
+    const connection = newConnection('id-1', parsed.value);
+    expect(connection.ssh).toMatchObject({ host: 'bastion.example.com' });
+    expect(connection).not.toHaveProperty('sshSecret');
+  });
+});
+
+describe('sshSummary', () => {
+  it.each([
+    [null, 'kapalı'],
+    [{ host: 'bastion', port: 22, user: 'deploy', auth: 'key' }, 'deploy@bastion · anahtar'],
+    [{ host: 'bastion', port: 2222, user: 'deploy', auth: 'agent' }, 'deploy@bastion:2222 · agent'],
+    [{ host: 'b', port: 22, user: 'u', auth: 'password' }, 'u@b · şifre'],
+  ] as const)('%o → %s', (ssh, expected) => {
+    expect(sshSummary(ssh)).toBe(expected);
+  });
+});
+
 describe('passwordAction', () => {
   it.each([
     [{ savePassword: true, password: 'p' }, false, 'yaz'],
@@ -151,11 +226,11 @@ describe('parseSessionPasswordInput', () => {
   it('keychain seçeneği verilmezse şifre yalnızca bellekte tutulur', () => {
     expect(parseSessionPasswordInput({ password: 'gizli' })).toEqual({
       ok: true,
-      value: { password: 'gizli', saveToKeychain: false },
+      value: { password: 'gizli', saveToKeychain: false, secret: 'veritabani' },
     });
-    expect(parseSessionPasswordInput({ password: 'gizli', saveToKeychain: true })).toEqual({
+    expect(parseSessionPasswordInput({ password: 'gizli', saveToKeychain: true, secret: 'ssh' })).toEqual({
       ok: true,
-      value: { password: 'gizli', saveToKeychain: true },
+      value: { password: 'gizli', saveToKeychain: true, secret: 'ssh' },
     });
   });
 
@@ -164,6 +239,7 @@ describe('parseSessionPasswordInput', () => {
     expect(parseSessionPasswordInput({ password: 42 })).toEqual({ ok: false, error: 'Şifre gerekli' });
     expect(parseSessionPasswordInput({ password: 'x'.repeat(MAX_PASSWORD_LENGTH + 1) }).ok).toBe(false);
     expect(parseSessionPasswordInput({ password: 'x', saveToKeychain: 'evet' }).ok).toBe(false);
+    expect(parseSessionPasswordInput({ password: 'x', secret: 'agent' }).ok).toBe(false);
     expect(parseSessionPasswordInput(['gizli']).ok).toBe(false);
     expect(parseSessionPasswordInput(null).ok).toBe(false);
   });

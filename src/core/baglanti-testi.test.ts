@@ -32,6 +32,8 @@ describe('parseConnectionTestInput', () => {
         sslrootcert: null,
         sslcert: null,
         sslkey: null,
+        ssh: null,
+        sshSecret: undefined,
       },
     });
   });

@@ -9,9 +9,11 @@ import type {
   SaveConnectionResponse,
   SessionPasswordRequest,
   SessionPasswordResponse,
+  SshSettings,
   ValidationErrorResponse,
 } from '../../core/baglanti';
 import type { ConnectionTestRequest, ConnectionTestResponse } from '../../core/baglanti-testi';
+import type { HostKeyForgetRequest, HostKeyForgetResponse, HostKeyTrustRequest, HostKeyTrustResponse } from '../../core/ssh-tuneli';
 import type { ClientMessage, ServerEvent } from '../../core/script-calistirma';
 import type { DatabaseListResponse, SchemaListResponse, TargetErrorResponse } from '../../core/veritabani-secimi';
 
@@ -33,6 +35,10 @@ export interface ApiClient {
   giveSessionPassword(id: string, input: SessionPasswordRequest): Promise<SessionPasswordResponse>;
   /** Formdaki kaydedilmemiş değerlerle bağlantıyı adım adım sınar; hiçbir şey kaydetmez. */
   testConnection(input: ConnectionTestBody): Promise<ConnectionTestResponse>;
+  /** "Güven ve tekrar dene": host anahtarını Tezgah'ın `known_hosts`'una yazar. */
+  trustHostKey(input: HostKeyTrustRequest): Promise<HostKeyTrustResponse>;
+  /** "Kayıtlı host anahtarını unut": yalnızca Tezgah'ın `known_hosts`'undan siler. */
+  forgetHostKey(input: HostKeyForgetRequest): Promise<HostKeyForgetResponse>;
   listFolders(): Promise<Folder[]>;
   createFolder(name: string): Promise<Folder>;
   renameFolder(id: string, name: string): Promise<Folder>;
@@ -69,11 +75,22 @@ export const CONNECTION_LOST: ServerEvent = {
   mesaj: 'Tezgah sunucusuyla bağlantı koptu; açık transaction sunucuda geri alındı.',
 };
 
-/** Oluşturma/güncelleme gövdesi; `password` verilmezse kayıtlı şifreye dokunulmaz, boş dize siler. */
-export type ConnectionRequest = Omit<ConnectionInput, 'password'> & { password?: string };
+/**
+ * Oluşturma/güncelleme gövdesi; `password`/`sshSecret` verilmezse kayıtlı sırra dokunulmaz, boş dize
+ * siler. `ssh` verilmezse tünel yok.
+ */
+export type ConnectionRequest = Omit<ConnectionInput, 'password' | 'sshSecret' | 'ssh'> & {
+  password?: string;
+  sshSecret?: string;
+  ssh?: SshSettings | null;
+};
 
-/** Test gövdesi; `password` verilmezse kayıtlı bağlantının keychain'deki şifresi kullanılır. */
-export type ConnectionTestBody = Omit<ConnectionTestRequest, 'password'> & { password?: string };
+/** Test gövdesi; `password`/`sshSecret` verilmezse kayıtlı bağlantının keychain'deki sırrı kullanılır. */
+export type ConnectionTestBody = Omit<ConnectionTestRequest, 'password' | 'sshSecret' | 'ssh'> & {
+  password?: string;
+  sshSecret?: string;
+  ssh?: SshSettings | null;
+};
 
 /** Kayıtlı bağlantının alanlarıyla güncelleme gövdesi; şifreye dokunmaz. */
 export function connectionRequest({ id: _id, databaseSelection: _selection, ...fields }: Connection): ConnectionRequest {
@@ -121,6 +138,8 @@ export function createHttpApiClient(): ApiClient {
     passwordStatus: (id) => request(`${connectionUrl(id)}/sifre`),
     giveSessionPassword: (id, input) => send('POST', `${connectionUrl(id)}/oturum-sifresi`, input),
     testConnection: (input) => send('POST', '/api/baglanti-testi', input),
+    trustHostKey: (input) => send('POST', '/api/host-anahtarlari', input),
+    forgetHostKey: (input) => send('POST', '/api/host-anahtarlari/unut', input),
     listFolders: () => request<Folder[]>('/api/klasorler'),
     createFolder: (name) => send('POST', '/api/klasorler', { name }),
     renameFolder: (id, name) => send('PUT', folderUrl(id), { name }),

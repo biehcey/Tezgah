@@ -46,6 +46,7 @@ describe('URL’den doldurma', () => {
       password: 's@cret',
       sslmode: 'prefer',
       sslrootcert: null,
+      ssh: null,
       sslcert: null,
       sslkey: null,
     });

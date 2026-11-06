@@ -91,6 +91,7 @@ describe('Bağlantıyı test et', () => {
         savePassword: true,
         sslmode: 'prefer',
         sslrootcert: null,
+        ssh: null,
         sslcert: null,
         sslkey: null,
       },
