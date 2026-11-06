@@ -71,8 +71,6 @@ const CURSOR_PREFIX = `DECLARE ${WRAPPER} NO SCROLL CURSOR FOR `;
  */
 const CHANGES_PREFIX = `WITH ${WRAPPER} AS (`;
 const CHANGES_SUFFIX = `) SELECT count(*) OVER (), * FROM ${WRAPPER} LIMIT ${PREVIEW_ROWS}`;
-/** PG18+ önce/sonra sarmalının kapanışı. */
-const OLD_NEW_SUFFIX = oldNewSelect(WRAPPER);
 /** Katalog okumalarının savepoint'i: beklenmedik bir hata kullanıcının transaction'ını bozmasın. */
 const CATALOG_SAVEPOINT = 'tezgah_katalog';
 /** İmleçle çalıştırılmaya çalışılan ifade türleri; olmazsa (ör. `SELECT … INTO`) düz çalışır. */
@@ -644,9 +642,9 @@ async function readTable(client: pg.PoolClient, by: Parameters<typeof tableInfoQ
  * çekilir, türlere göre sayılar sunucuda sayılır. Sarmal reddedilirse `null` döner.
  */
 function runWithOldNew(client: pg.PoolClient, statement: Statement, info: TableInfo): Promise<StatementResult | null> {
-  const { text } = withReturning(statement, info.anahtar);
+  const { text, turKolonu } = withReturning(statement, { anahtar: info.anahtar, kolonlar: info.sema.kolonlar.map((k) => k.ad) });
   return withWrapper(client, CHANGES_PREFIX, async () => {
-    const result = await client.query({ text: CHANGES_PREFIX + text + OLD_NEW_SUFFIX, rowMode: 'array', types: RAW_TYPES });
+    const result = await client.query({ text: CHANGES_PREFIX + text + oldNewSelect(WRAPPER, turKolonu!), rowMode: 'array', types: RAW_TYPES });
     const { rowCount, ...fark } = decodeOldNew(
       result.fields.map((f) => f.name),
       result.rows,

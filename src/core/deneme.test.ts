@@ -49,6 +49,7 @@ describe('dmlTarget: DML ifadesinin hedef tablosu', () => {
     ['DELETE FROM /* yorum */ s.t WHERE id = 1', { sema: 's', ad: 't' }],
     ['update "a""b" set x = 1', { ad: 'a"b' }],
     ['DELETE FROM ONLY t', { ad: 't' }],
+    ['DELETE FROM /* dış /* iç */ hâlâ yorum */ t', { ad: 't' }],
   ])('%s', (sql, expected) => {
     expect(target(sql)).toEqual(expected);
   });
@@ -85,16 +86,25 @@ describe('qualifiedName', () => {
 });
 
 describe('withReturning: PG18+ ve PK’lı tabloda önce/sonra', () => {
-  it('işlem türü PK’nın eski/yeni değerinin NULL’luğundan, ardından old.* ve new.*', () => {
-    expect(withReturning(splitStatements('UPDATE t SET a = 1')[0]!, ['Id', 'b'])).toEqual({
-      text: `UPDATE t SET a = 1 RETURNING CASE WHEN old."Id" IS NULL THEN 'I' WHEN new."Id" IS NULL THEN 'D' ELSE 'U' END AS tezgah_tur, old.*, new.*`,
+  it('işlem türü PK’nın eski/yeni değerinin NULL’luğundan; old/new kendi takma adlarıyla (tablonun `old` takma adıyla çakışmasın)', () => {
+    expect(withReturning(splitStatements('UPDATE t AS old SET a = 1')[0]!, { anahtar: ['Id', 'b'], kolonlar: ['Id', 'b', 'a'] })).toEqual({
+      text:
+        `UPDATE t AS old SET a = 1 RETURNING WITH (OLD AS tezgah_once, NEW AS tezgah_sonra) ` +
+        `CASE WHEN tezgah_once."Id" IS NULL THEN 'I' WHEN tezgah_sonra."Id" IS NULL THEN 'D' ELSE 'U' END AS tezgah_tur, tezgah_once.*, tezgah_sonra.*`,
       degistirir: true,
       kendiReturning: false,
+      turKolonu: 'tezgah_tur',
     });
   });
 
+  it('tür kolonunun adı tablonun kolonlarıyla çakışmaz', () => {
+    const rewritten = withReturning(splitStatements('DELETE FROM t')[0]!, { anahtar: ['id'], kolonlar: ['id', 'tezgah_tur', 'tezgah_tur_1'] });
+    expect(rewritten.turKolonu).toBe('tezgah_tur_2');
+    expect(rewritten.text).toContain('END AS tezgah_tur_2,');
+  });
+
   it('kullanıcının RETURNING’i varsa PK verilse de dokunulmaz', () => {
-    expect(withReturning(splitStatements('DELETE FROM t RETURNING id')[0]!, ['id'])).toEqual({
+    expect(withReturning(splitStatements('DELETE FROM t RETURNING id')[0]!, { anahtar: ['id'], kolonlar: ['id'] })).toEqual({
       text: 'DELETE FROM t RETURNING id',
       degistirir: true,
       kendiReturning: true,
@@ -102,7 +112,7 @@ describe('withReturning: PG18+ ve PK’lı tabloda önce/sonra', () => {
   });
 
   it('PK boşsa RETURNING *', () => {
-    expect(withReturning(splitStatements('DELETE FROM t')[0]!, [])).toMatchObject({ text: 'DELETE FROM t RETURNING *' });
+    expect(withReturning(splitStatements('DELETE FROM t')[0]!, { anahtar: [], kolonlar: ['a'] })).toMatchObject({ text: 'DELETE FROM t RETURNING *' });
   });
 });
 
@@ -144,8 +154,8 @@ describe('parseServerVersion', () => {
 
 describe('oldNewSelect / decodeOldNew: önce/sonra sarmalının sorgusu ve sonucu', () => {
   it('toplam, eklenen ve silinen sayılar pencere fonksiyonuyla, LIMIT’ten önce sayılır', () => {
-    expect(oldNewSelect('w')).toBe(
-      `) SELECT count(*) OVER (), count(*) FILTER (WHERE tezgah_tur = 'I') OVER (), count(*) FILTER (WHERE tezgah_tur = 'D') OVER (), * FROM w LIMIT 100`,
+    expect(oldNewSelect('w', 'tezgah_tur_2')).toBe(
+      `) SELECT count(*) OVER (), count(*) FILTER (WHERE tezgah_tur_2 = 'I') OVER (), count(*) FILTER (WHERE tezgah_tur_2 = 'D') OVER (), * FROM w LIMIT 100`,
     );
   });
 

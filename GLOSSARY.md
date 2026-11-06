@@ -50,6 +50,14 @@ _Avoid_: Transaction modu anahtarı, execution mode
 Bir script'i Transaction modunda çalıştırıp sonunda her zaman geri alan, ne değişeceğini gösteren çalıştırma biçimi. Hiçbir şeyi kalıcı yazmaz; bu yüzden `prod` hedefinde yazma modu kapalıyken de kullanılabilir. Geri alınamayan yan etkileri (ilerleyen sequence'ler, dış sistemlere giden etkiler) vardır.
 _Avoid_: Dry run, simülasyon, test çalıştırma
 
+**Deneme farkı**:
+Deneme modunda değişen satırların ve tablo şemalarının, tabloya göre gruplanmış önce/sonra görünümü. Satırlar PK ile eşlenir; aynı satıra birden çok ifade dokunursa ilk "önce" ile son "sonra" karşılaştırılır. PG18+ sunucu ve PK'lı tablo gerektirir; yoksa Yedek önizlemeye düşülür.
+_Avoid_: Diff, değişiklik raporu
+
+**Yedek önizleme**:
+Deneme farkı alınamayan bir DML ifadesinin, ifade başına `RETURNING *` satırlarıyla gösterilmesi (UPDATE'te yeni hâl, INSERT'te eklenen, DELETE'te silinen satır). Neden düşüldüğü (eski sunucu, PK yok, ifadenin kendi `RETURNING`'i) yanında yazar.
+_Avoid_: Fallback, basit önizleme
+
 **Yazma kilidi**:
 `prod` hedefinin salt okunur (🔒) ya da yazma modunda (🔓) olma durumu. Editör ve hedef başınadır, sayfa açık kaldıkça geçerlidir ve tek tıkla değişir. Salt okunurken yazmayı Postgres reddeder; Autocommit script'i hiç gönderilmez. Bir kaza önleyicidir, güvenlik sınırı değildir.
 _Avoid_: Salt okunur mod, read-only toggle, yazma izni

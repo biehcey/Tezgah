@@ -590,6 +590,22 @@ describe('Script ekranı: Deneme modu', () => {
       expect(within(section()).queryByRole('table')).not.toBeInTheDocument();
     });
 
+    it('tablo bölümleri ve yedek kartları script sırasıyla dizilir', async () => {
+      const { run } = await startTry();
+      run.emit(
+        { type: 'done', i: 0, rowCount: 1, ms: 3, komut: 'UPDATE', degisiklik: { kolonlar: ['id'], satirlar: [['1']] }, farkYok: 'anahtar' },
+        { type: 'done', i: 2, rowCount: 1, ms: 1, komut: 'INSERT', fark: fark([{ once: null, sonra: ['9', 'Can', null] }]) },
+        { type: 'done', i: 3, rowCount: 1, ms: 1, komut: 'DELETE', degisiklik: { kolonlar: ['id'], satirlar: [['2']] }, farkYok: 'anahtar' },
+        { type: 'bitti', sonuc: 'deneme' },
+      );
+      const blocks = within(changes()).getAllByRole('heading').map((h) => h.textContent);
+      expect(blocks).toEqual([
+        'UPDATE · satır 1 · 1 satır güncellendi',
+        'public.musteri+1 eklendi',
+        'DELETE · satır 4 · 1 satır silindi',
+      ]);
+    });
+
     it('yedeğe düşen ifade nedenini söyleyen notla önizlenir', async () => {
       const { run } = await startTry();
       run.emit(

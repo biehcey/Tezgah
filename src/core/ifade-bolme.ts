@@ -20,8 +20,9 @@ export interface Statement {
 }
 
 const MAX_KEYWORDS = 8;
-const WORD_START = /[A-Za-z_\u0080-￿]/;
-const WORD_CHAR = /[A-Za-z0-9_$\u0080-￿]/;
+/** Çıplak kelimenin ilk ve sonraki karakterleri (Postgres tanıtıcı kuralları). */
+export const WORD_START = /[A-Za-z_\u0080-￿]/;
+export const WORD_CHAR = /[A-Za-z0-9_$\u0080-￿]/;
 const DOLLAR_TAG = /^\$([A-Za-z_\u0080-￿][A-Za-z0-9_\u0080-￿]*)?\$/;
 
 export function splitStatements(script: string): Statement[] {
@@ -145,8 +146,8 @@ function skipQuoted(script: string, open: number, quote: string, backslashEscape
   return script.length;
 }
 
-/** Yorumun kapanışından sonraki offset; kapanmazsa `-1`. */
-function skipBlockComment(script: string, open: number): number {
+/** İç içe olabilen `/* *\/` yorumunun kapanışından sonraki offset; kapanmazsa `-1`. */
+export function skipBlockComment(script: string, open: number): number {
   let depth = 0;
   let i = open;
   while (i < script.length) {

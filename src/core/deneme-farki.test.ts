@@ -76,9 +76,10 @@ describe('mergeChanges: önce/sonra satırlarının tablo bazında birleşmesi',
       changes([{ once: null, sonra: ['3', 'Can', null] }]),
       { fark: { tablo: siparis, kolonlar: ['no'], anahtar: ['no'], satirlar: [{ once: null, sonra: ['8'] }], gorulmeyen: NONE } },
     ]);
-    expect(diffs.map((d) => [d.tablo.ad, d.eklendi])).toEqual([
-      ['public.siparis', 2],
-      ['public.musteri', 1],
+    // `ilk`: tabloya ilk dokunan ifadenin girdideki sırası (arayüz bölümleri script sırasına dizer).
+    expect(diffs.map((d) => [d.tablo.ad, d.eklendi, d.ilk])).toEqual([
+      ['public.siparis', 2, 0],
+      ['public.musteri', 1, 2],
     ]);
   });
 

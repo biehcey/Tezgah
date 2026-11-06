@@ -7,7 +7,7 @@
  */
 import { PREVIEW_ROWS } from './script-calistirma';
 import type { ColumnSchema, Counts, RowChanges, TableRef, TableSchema } from './deneme-farki';
-import type { Statement } from './ifade-bolme';
+import { WORD_CHAR, WORD_START, skipBlockComment, type Statement } from './ifade-bolme';
 
 /** Değişiklik önizlemesi verilen komutlar ve başlıktaki fiilleri. */
 export const DML_VERBS: Readonly<Record<string, string>> = { INSERT: 'eklendi', UPDATE: 'güncellendi', DELETE: 'silindi' };
@@ -19,40 +19,59 @@ export interface DenemeStatement {
   degistirir: boolean;
   /** Kullanıcı kendi `RETURNING`'ini yazmış; metne dokunulmadı. */
   kendiReturning: boolean;
+  /** Önce/sonra yazımında işlem türünü taşıyan kolonun adı (`oldNewSelect`'e verilir). */
+  turKolonu?: string;
 }
 
-/** Önce/sonra satırlarında işlem türünü taşıyan kolon: `I` eklendi, `U` güncellendi, `D` silindi. */
-const KIND_COLUMN = 'tezgah_tur';
+/** Tür kolonu değerleri: `I` eklendi, `U` güncellendi, `D` silindi. */
 const INSERTED = 'I';
 const DELETED = 'D';
+/**
+ * `old`/`new` yerine kullanılan takma adlar (PG18 `RETURNING WITH (OLD AS …, NEW AS …)`): tablonun
+ * `old` ya da `new` takma adıyla çakışmasın.
+ */
+const OLD_ALIAS = 'tezgah_once';
+const NEW_ALIAS = 'tezgah_sonra';
+
+/** Tablonun kolonlarıyla çakışmayan tür kolonu adı: CTE'de adıyla anıldığı için tek olmalı. */
+function kindColumn(kolonlar: readonly string[]): string {
+  let name = 'tezgah_tur';
+  for (let n = 1; kolonlar.includes(name); n++) name = `tezgah_tur_${n}`;
+  return name;
+}
 
 /**
- * INSERT/UPDATE/DELETE'in sonuna `RETURNING` ekler. `anahtar` (PG18+ sunucuda tablonun PK
- * kolonları) verilirse `RETURNING old.*, new.*` ile önce/sonra hâli, yoksa `RETURNING *` ile son
+ * INSERT/UPDATE/DELETE'in sonuna `RETURNING` ekler. `tablo` (PG18+ sunucuda tablonun PK'sı ve
+ * kolonları) PK'lıysa `RETURNING old.*, new.*` ile önce/sonra hâli, yoksa `RETURNING *` ile son
  * hâl döner. Kullanıcı zaten `RETURNING` yazdıysa ifadeye dokunulmaz; önizleme onun döndürdüğüdür.
  * `WITH … DELETE` gibi CTE'li DML yeniden yazılmaz: ana ifadeyi bulmak SQL ayrıştırması ister.
  */
-export function withReturning(statement: Statement, anahtar: readonly string[] = []): DenemeStatement {
+export function withReturning(
+  statement: Statement,
+  tablo: { anahtar: readonly string[]; kolonlar: readonly string[] } = { anahtar: [], kolonlar: [] },
+): DenemeStatement {
   if (!Object.hasOwn(DML_VERBS, statement.keywords[0] ?? '')) return { text: statement.text, degistirir: false, kendiReturning: false };
   // `words` dizge, yorum ve tırnaklı adları içermez; çıplak `returning` ayrılmış kelimedir.
   if (statement.words.includes('RETURNING')) return { text: statement.text, degistirir: true, kendiReturning: true };
-  const [key] = anahtar;
+  const [key] = tablo.anahtar;
   if (key === undefined) return { text: `${statement.text} RETURNING *`, degistirir: true, kendiReturning: false };
   // PK NOT NULL'dır: eski değeri NULL olan satır eklenmiş, yeni değeri NULL olan silinmiştir.
   const k = quoteIdent(key);
-  const kind = `CASE WHEN old.${k} IS NULL THEN '${INSERTED}' WHEN new.${k} IS NULL THEN '${DELETED}' ELSE 'U' END AS ${KIND_COLUMN}`;
-  return { text: `${statement.text} RETURNING ${kind}, old.*, new.*`, degistirir: true, kendiReturning: false };
+  const turKolonu = kindColumn(tablo.kolonlar);
+  const kind = `CASE WHEN ${OLD_ALIAS}.${k} IS NULL THEN '${INSERTED}' WHEN ${NEW_ALIAS}.${k} IS NULL THEN '${DELETED}' ELSE 'U' END AS ${turKolonu}`;
+  const returning = `RETURNING WITH (OLD AS ${OLD_ALIAS}, NEW AS ${NEW_ALIAS}) ${kind}, ${OLD_ALIAS}.*, ${NEW_ALIAS}.*`;
+  return { text: `${statement.text} ${returning}`, degistirir: true, kendiReturning: false, turKolonu };
 }
 
 /**
- * `cte` adlı veri değiştiren CTE'yi (`… RETURNING tezgah_tur, old.*, new.*`) kapatan sorgu: ilk üç
+ * `cte` adlı veri değiştiren CTE'yi (`… RETURNING <turKolonu>, old.*, new.*`) kapatan sorgu: ilk üç
  * kolon toplam, eklenen ve silinen satır sayısıdır (pencere `LIMIT`'ten önce sayar), ardından CTE'nin
  * kolonları. İstemciye en fazla 100 satır gider.
  */
-export function oldNewSelect(cte: string): string {
+export function oldNewSelect(cte: string, turKolonu: string): string {
   return (
-    `) SELECT count(*) OVER (), count(*) FILTER (WHERE ${KIND_COLUMN} = '${INSERTED}') OVER (), ` +
-    `count(*) FILTER (WHERE ${KIND_COLUMN} = '${DELETED}') OVER (), * FROM ${cte} LIMIT ${PREVIEW_ROWS}`
+    `) SELECT count(*) OVER (), count(*) FILTER (WHERE ${turKolonu} = '${INSERTED}') OVER (), ` +
+    `count(*) FILTER (WHERE ${turKolonu} = '${DELETED}') OVER (), * FROM ${cte} LIMIT ${PREVIEW_ROWS}`
   );
 }
 
@@ -114,9 +133,9 @@ function headTokens(text: string, limit = 24): Token[] {
       const nl = text.indexOf('\n', i);
       i = nl === -1 ? text.length : nl + 1;
     } else if (c === '/' && text[i + 1] === '*') {
-      const close = text.indexOf('*/', i + 2);
+      const close = skipBlockComment(text, i);
       if (close === -1) break;
-      i = close + 2;
+      i = close;
     } else if (c === '"') {
       let to = i + 1;
       let value = '';
@@ -130,9 +149,9 @@ function headTokens(text: string, limit = 24): Token[] {
       }
       tokens.push({ tur: 'ad', deger: value });
       i = to + 1;
-    } else if (/[A-Za-z_\u0080-\uffff]/.test(c)) {
+    } else if (WORD_START.test(c)) {
       let to = i + 1;
-      while (to < text.length && /[A-Za-z0-9_$\u0080-\uffff]/.test(text[to]!)) to++;
+      while (to < text.length && WORD_CHAR.test(text[to]!)) to++;
       const word = text.slice(i, to);
       tokens.push({ tur: 'kelime', deger: word.toLowerCase(), anahtar: word.toUpperCase() });
       i = to;

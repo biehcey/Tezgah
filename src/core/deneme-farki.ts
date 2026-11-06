@@ -68,6 +68,8 @@ export interface DiffRow {
 
 export interface TableDiff extends Counts {
   tablo: TableRef;
+  /** Tabloya ilk dokunan ifadenin girdideki sırası. */
+  ilk: number;
   kolonlar: string[];
   /** İlk 100 satır; değerler `kolonlar` sırasıyla. */
   satirlar: DiffRow[];
@@ -96,6 +98,7 @@ interface Entry {
 
 interface Table {
   tablo: TableRef;
+  ilk: number;
   kolonlar: string[];
   entries: Entry[];
   byKey: Map<string, Entry>;
@@ -108,10 +111,10 @@ interface Table {
 
 export function mergeChanges(statements: readonly StatementChanges[]): TableDiff[] {
   const tables = new Map<string, Table>();
-  const table = (tablo: TableRef): Table => {
+  const table = (tablo: TableRef, ilk: number): Table => {
     let t = tables.get(tablo.oid);
     if (!t) {
-      t = { tablo, kolonlar: [], entries: [], byKey: new Map(), gorulmeyen: { eklendi: 0, guncellendi: 0, silindi: 0 }, ifadeler: 0 };
+      t = { tablo, ilk, kolonlar: [], entries: [], byKey: new Map(), gorulmeyen: { eklendi: 0, guncellendi: 0, silindi: 0 }, ifadeler: 0 };
       tables.set(tablo.oid, t);
     }
     // Son görülen ad: tablo deneme içinde yeniden adlandırılmış olabilir.
@@ -119,12 +122,12 @@ export function mergeChanges(statements: readonly StatementChanges[]): TableDiff
     return t;
   };
 
-  for (const { fark, sema } of statements) {
-    if (fark) addRows(table(fark.tablo), fark);
+  for (const [i, { fark, sema }] of statements.entries()) {
+    if (fark) addRows(table(fark.tablo, i), fark);
     for (const change of sema ?? []) {
       const ad = change.sonra?.ad ?? change.once?.ad;
       if (ad === undefined) continue;
-      const t = table({ oid: change.oid, ad });
+      const t = table({ oid: change.oid, ad }, i);
       if (t.ilkSema === undefined) t.ilkSema = change.once;
       t.sonSema = change.sonra;
     }
@@ -178,6 +181,7 @@ function toDiff(t: Table): TableDiff {
   const shown = rows.slice(0, PREVIEW_ROWS);
   return {
     tablo: t.tablo,
+    ilk: t.ilk,
     ...counts,
     kolonlar: t.kolonlar,
     satirlar: shown,

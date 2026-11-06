@@ -41,11 +41,12 @@ Uygulama notları (2026-11-05):
   - Değişiklikler sekmesinde her tablonun bir bölümü (`region`) var. Başlıkta `+N eklendi · ~N güncellendi · −N silindi` yazar.
   - Şema farkı listesi bulunur. Eklenen satırlar yeşil, silinenler kırmızı ve üstü çizili. Güncellenen satırda yalnızca değişen hücre vurgulanır ve eski değer `<del>` ile gösterilir. Fazlası "… N satır daha" ile söylenir.
   - Yedeğe düşen ifadeler ticket 14'teki kartla, nedenini söyleyen bir notla gösterilir.
-- **Bilinen boşluklar**:
-  - Tabloda `tezgah_tur` adlı bir kolon varsa sarmal 42702 ile reddedilir ve `sarmal` yedeğine düşülür. DML'de `old`/`new` takma adı kullanılırsa da aynısı olur.
-  - `headTokens`, `ifade-bolme`'den ayrı küçük bir okuyucudur ve iç içe `/* */` yorumları desteklemez. Böyle bir yorum tablo adından önce gelirse fark yedeğe düşer.
-  - Yedek kartları tablo bölümlerinin altında durur, script sırasında değil.
-  - GLOSSARY'ye "Deneme farkı" ve "Yedek önizleme" terimleri eklenmeli (/domain-modeling).
+- **Sonradan kapatılan boşluklar** (2026-11-06):
+  - Sarmal artık `RETURNING WITH (OLD AS tezgah_once, NEW AS tezgah_sonra)` kullanıyor; tablonun `old`/`new` takma adıyla çakışmıyor. Tür kolonunun adı tablonun kolonlarıyla çakışmayacak biçimde seçiliyor (`tezgah_tur`, `tezgah_tur_1`, …).
+  - `headTokens`, `ifade-bolme`'nin kelime kurallarını ve iç içe yorum atlayıcısını (`skipBlockComment`) kullanıyor.
+  - Tablo bölümleri ve yedek kartları script sırasıyla diziliyor (`TableDiff.ilk`).
+  - GLOSSARY'ye "Deneme farkı" ve "Yedek önizleme" eklendi.
+- **Bilinen boşluk**: kullanıcının DML'inde tablo takma adı `tezgah_once`/`tezgah_sonra` ise sarmal reddedilir ve `sarmal` yedeğine düşülür.
 - **Testler**:
   - core: `deneme-farki.test.ts`, `deneme.test.ts`.
   - server: sahte PG ile `deneme.test.ts`.

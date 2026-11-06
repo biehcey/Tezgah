@@ -152,7 +152,7 @@ describe('Deneme modu: sahte Postgres', () => {
     expect(await records()).toEqual([]);
   });
   describe('önce/sonra farkı (PG18+) ve yedek', () => {
-    const OLD_NEW = /^WITH tezgah_onizleme AS \(.* RETURNING CASE WHEN old\./;
+    const OLD_NEW = /^WITH tezgah_onizleme AS \(.* RETURNING WITH \(OLD AS tezgah_once/;
     const info = (anahtar: string[], kolonlar: [number, string, string][] = [[1, 'id', 'integer'], [2, 'ad', 'text']]) =>
       JSON.stringify({
         oid: '100',
@@ -191,7 +191,8 @@ describe('Deneme modu: sahte Postgres', () => {
       dene(id, 'postgres', 'UPDATE musteri SET ad = 1');
       await ws.waitFor('bitti');
       expect(fake.queries).toContain(
-        `WITH tezgah_onizleme AS (UPDATE musteri SET ad = 1 RETURNING CASE WHEN old."id" IS NULL THEN 'I' WHEN new."id" IS NULL THEN 'D' ELSE 'U' END AS tezgah_tur, old.*, new.*) ` +
+        `WITH tezgah_onizleme AS (UPDATE musteri SET ad = 1 RETURNING WITH (OLD AS tezgah_once, NEW AS tezgah_sonra) ` +
+          `CASE WHEN tezgah_once."id" IS NULL THEN 'I' WHEN tezgah_sonra."id" IS NULL THEN 'D' ELSE 'U' END AS tezgah_tur, tezgah_once.*, tezgah_sonra.*) ` +
           `SELECT count(*) OVER (), count(*) FILTER (WHERE tezgah_tur = 'I') OVER (), count(*) FILTER (WHERE tezgah_tur = 'D') OVER (), * FROM tezgah_onizleme LIMIT 100`,
       );
       expect(fake.queries.find((q) => q.includes('tezgah_tablo'))).toContain(`to_regclass('"musteri"')`);

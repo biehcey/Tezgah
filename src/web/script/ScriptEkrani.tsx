@@ -417,6 +417,11 @@ function Degisiklikler({ run }: { run: RunView }) {
   const failed = run.ifadeler.find((s) => s.hata);
   const tables = useMemo(() => mergeChanges(run.ifadeler), [run.ifadeler]);
   const fallbacks = run.ifadeler.filter((s) => s.degisiklik);
+  // Tablo bölümleri ilk dokunan ifadenin, yedek kartları kendi ifadesinin sırasında durur.
+  const blocks = [
+    ...tables.map((t) => ({ i: t.ilk, node: <TabloFarki key={`t${t.tablo.oid}`} diff={t} /> })),
+    ...fallbacks.map((s) => ({ i: s.i, node: <YedekKarti key={`s${s.i}`} statement={s} /> })),
+  ].sort((a, b) => a.i - b.i);
   return (
     <>
       {failed?.hata && (
@@ -425,27 +430,29 @@ function Degisiklikler({ run }: { run: RunView }) {
           {failed.hata.sqlstate && <> · {failed.hata.sqlstate}</>} · {failed.hata.mesaj}
         </p>
       )}
-      {tables.map((t) => (
-        <TabloFarki key={t.tablo.oid} diff={t} />
-      ))}
-      {fallbacks.map((s) => (
-        <article key={s.i} className="degisiklik">
-          <h3 className="degisiklik-basligi kucuk">
-            {s.komut} · satır {s.satir} · {s.rowCount ?? s.degisiklik!.satirlar.length} satır {DML_VERBS[s.komut] ?? 'etkilendi'}
-          </h3>
-          {s.farkYok && (
-            <p role="note" className="yedek-notu soluk kucuk">
-              {FALLBACK_NOTES[s.farkYok]}
-            </p>
-          )}
-          {(s.rowCount ?? 0) > PREVIEW_ROWS && <p className="soluk kucuk">ilk {PREVIEW_ROWS} satır gösteriliyor</p>}
-          {s.degisiklik!.satirlar.length > 0 && <Onizleme preview={s.degisiklik!} />}
-        </article>
-      ))}
+      {blocks.map((b) => b.node)}
       {tables.length === 0 && fallbacks.length === 0 && !failed && (
         <p className="soluk kucuk">{run.evre === 'bitti' ? 'Değişiklik yok.' : 'DML ifadelerinin değiştirdiği satırlar burada görünür.'}</p>
       )}
     </>
+  );
+}
+
+/** Önce/sonra farkı alınamayan DML: ifade başına `RETURNING` önizlemesi ve nedeni (ticket 14). */
+function YedekKarti({ statement: s }: { statement: StatementView }) {
+  return (
+    <article className="degisiklik">
+      <h3 className="degisiklik-basligi kucuk">
+        {s.komut} · satır {s.satir} · {s.rowCount ?? s.degisiklik!.satirlar.length} satır {DML_VERBS[s.komut] ?? 'etkilendi'}
+      </h3>
+      {s.farkYok && (
+        <p role="note" className="yedek-notu soluk kucuk">
+          {FALLBACK_NOTES[s.farkYok]}
+        </p>
+      )}
+      {(s.rowCount ?? 0) > PREVIEW_ROWS && <p className="soluk kucuk">ilk {PREVIEW_ROWS} satır gösteriliyor</p>}
+      {s.degisiklik!.satirlar.length > 0 && <Onizleme preview={s.degisiklik!} />}
+    </article>
   );
 }
 
