@@ -17,7 +17,7 @@ let home: string;
 let env: Record<string, string | undefined>;
 
 async function start(platform = 'linux') {
-  t = await startTestServer({ homeDir: home, pgpassEnvironment: { platform, env } });
+  t = await startTestServer({ homeDir: home, importEnvironment: { platform, env } });
 }
 
 beforeEach(async () => {

@@ -57,7 +57,8 @@ export function identityKey({ host, port, user, ssh }: Identity): string {
 export function groupCandidates(sources: readonly SourceCandidate[], connections: readonly Connection[]): ImportCandidate[] {
   const groups = new Map<string, { candidate: ImportCandidate; unmapped: boolean }>();
   for (const s of sources) {
-    const key = identityKey(s);
+    // Tüneli eşlenemeyen kaynağın gerçek kimliği bilinmez: doğrudan adaylarla ve mevcut bağlantılarla birleşmez.
+    const key = s.tunnelUnmapped ? JSON.stringify(['tunel-eslenemedi', identityKey(s)]) : identityKey(s);
     const group = groups.get(key);
     if (!group) {
       const { source, tunnelUnmapped, ...fields } = s;

@@ -97,12 +97,14 @@ describe('gruplama', () => {
     expect(groupCandidates([source()], [existing({ ssh: tunnel })])[0]!.existing).toBeNull();
   });
 
-  it('tüneli eşlenemeyen kaynak varsayılan olarak seçilmez; uyarılar birleşir', () => {
-    const [candidate] = groupCandidates(
-      [source({ warnings: ['a'] }), source({ warnings: ['a', 'b'], tunnelUnmapped: true })],
-      [],
-    );
-    expect(candidate).toMatchObject({ selected: false, warnings: ['a', 'b'] });
+  it('tüneli eşlenemeyen kaynak ayrı aday ve seçilmez; aynı host’a doğrudan aday ya da mevcut bağlantıyla birleşmez', () => {
+    const unmapped = source({ source: { id: 'jetbrains:DG', label: 'DG · iç' }, warnings: ['tünel eşlenemedi: x'], tunnelUnmapped: true });
+    const candidates = groupCandidates([source({ warnings: ['a'] }), unmapped, { ...unmapped }], [existing()]);
+    expect(candidates.map((c) => [c.selected, c.existing?.name ?? null, c.warnings])).toEqual([
+      [false, 'Mevcut DB', ['a']],
+      [false, null, ['tünel eşlenemedi: x']],
+    ]);
+    expect(candidates[1]!.sources).toHaveLength(2);
   });
 });
 

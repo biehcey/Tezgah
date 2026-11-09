@@ -4,9 +4,14 @@
  */
 import { sameName, type Folder, type Settings } from '../ayarlar';
 import { DEFAULT_ENV_COLORS, ENV_TAGS, type Connection, type EnvTag } from '../baglanti';
+import type { SkippedDataSource } from './datasources';
 import { uniqueName, type ImportCandidate } from './gruplama';
 
 export const PGPASS_SOURCE_ID = 'pgpass';
+/** Global JetBrains kaynağının kimliği: `jetbrains:<Ürün><Sürüm>` (dizin adı). */
+export const jetbrainsSourceId = (dir: string) => `jetbrains:${dir}`;
+/** Proje kaynağının kimliği: girilen yol. */
+export const projectSourceId = (path: string) => `proje:${path}`;
 /** Sunucunun okuduğu tek `.pgpass` dosya adları. */
 export const PGPASS_FILE_NAMES = ['.pgpass', 'pgpass.conf'] as const;
 
@@ -37,11 +42,14 @@ export interface PreviewCandidate extends ImportCandidate {
 export interface ImportPreviewRequest {
   pgpassPath: string | null;
   disabled: string[];
+  projectPaths: string[];
 }
 
 export interface ImportPreviewResponse {
   sources: ImportSourceInfo[];
   candidates: PreviewCandidate[];
+  /** Aday olmayan IntelliJ data source’ları (Postgres dışı): önizlemede gri "Atlandı". */
+  skipped: SkippedDataSource[];
 }
 
 /** Önizlemede seçilen aday ve düzenlenen alanları. `folder` klasör adıdır; yoksa oluşturulur. */
@@ -72,11 +80,13 @@ const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'obj
 
 export function parseImportPreviewInput(raw: unknown): Parsed<ImportPreviewRequest> {
   if (!isRecord(raw)) return { ok: false, error: 'Geçersiz içe aktarma girdisi' };
-  const { pgpassPath = null, disabled = [] } = raw;
+  const { pgpassPath = null, disabled = [], projectPaths = [] } = raw;
+  if (!Array.isArray(projectPaths) || projectPaths.some((p) => typeof p !== 'string')) return { ok: false, error: 'Geçersiz proje yolu' };
+  const projects = [...new Set((projectPaths as string[]).map((p) => p.trim()).filter((p) => p !== ''))];
   if (pgpassPath !== null && typeof pgpassPath !== 'string') return { ok: false, error: 'Geçersiz .pgpass yolu' };
   if (!Array.isArray(disabled) || disabled.some((d) => typeof d !== 'string')) return { ok: false, error: 'Geçersiz kaynak listesi' };
   const path = pgpassPath?.trim() || null;
-  return { ok: true, value: { pgpassPath: path, disabled: disabled as string[] } };
+  return { ok: true, value: { pgpassPath: path, disabled: disabled as string[], projectPaths: projects } };
 }
 
 export function parseImportApplyInput(raw: unknown): Parsed<ImportApplyRequest> {

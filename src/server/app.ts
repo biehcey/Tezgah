@@ -15,7 +15,7 @@ import { createTunnelOpener, type SshConnector } from './tunel';
 import type { AgentEnvironment } from '../core/ssh-tuneli';
 import { createSessionPasswords } from './oturum-sifreleri';
 import { createFolderRoutes } from './klasorler';
-import { createImportRoutes, type PgpassEnvironment } from './ice-aktarma';
+import { createImportRoutes, type ImportEnvironment } from './ice-aktarma';
 import { BodyError, json } from './http';
 import type { Keychain } from './keychain';
 import { systemClock, type Clock } from './saat';
@@ -48,7 +48,7 @@ export interface ServerOptions {
   /** Agent yolunun varsayılanı için platform ve ortam değişkenleri. */
   agentEnvironment?: AgentEnvironment;
   /** `.pgpass` araması için platform ve ortam (`PGPASSFILE`, `APPDATA`); testlerde enjekte. */
-  pgpassEnvironment?: PgpassEnvironment;
+  importEnvironment?: ImportEnvironment;
   log: (line: string) => void;
 }
 
@@ -112,7 +112,7 @@ export async function startServer(options: ServerOptions): Promise<TezgahServer>
     store,
     keychain: options.keychain,
     homeDir: options.homeDir ?? homedir(),
-    environment: options.pgpassEnvironment ?? { platform: process.platform, env: process.env },
+    environment: options.importEnvironment ?? { platform: process.platform, env: process.env },
     log: options.log,
   });
 

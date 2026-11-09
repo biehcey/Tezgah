@@ -25,7 +25,9 @@ const candidate = (id: string, name: string): ImportCandidate => ({
 
 describe('içe aktarma girdisi', () => {
   it('varsayılanlar: kendiliğinden arama, açık kaynaklar; boş yol null olur', () => {
-    expect(parseImportPreviewInput({})).toEqual({ ok: true, value: { pgpassPath: null, disabled: [] } });
+    expect(parseImportPreviewInput({})).toEqual({ ok: true, value: { pgpassPath: null, disabled: [], projectPaths: [] } });
+    expect(parseImportPreviewInput({ projectPaths: [' /work/a ', '', '/work/a'] })).toMatchObject({ value: { projectPaths: ['/work/a'] } });
+    expect(parseImportPreviewInput({ projectPaths: '/work/a' }).ok).toBe(false);
     expect(parseImportPreviewInput({ pgpassPath: '  ' })).toMatchObject({ value: { pgpassPath: null } });
     expect(parseImportPreviewInput({ disabled: [1] }).ok).toBe(false);
   });

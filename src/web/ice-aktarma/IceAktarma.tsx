@@ -1,6 +1,17 @@
 import { useEffect, useId, useState, type FormEvent } from 'react';
 import type { Folder } from '../../core/ayarlar';
-import { DEFAULT_ENV_COLORS, ENV_TAGS, connectionAddress, isProd, sshSummary, type Connection, type EnvTag } from '../../core/baglanti';
+import {
+  DEFAULT_ENV_COLORS,
+  ENV_TAGS,
+  SSL_PATH_FIELDS,
+  connectionAddress,
+  isProd,
+  sshSummary,
+  type Connection,
+  type EnvTag,
+  type SshSettings,
+  type SslSettings,
+} from '../../core/baglanti';
 import {
   initialChoice,
   previewSections,
@@ -29,6 +40,18 @@ function errorText(err: unknown): string {
   return err instanceof ApiError && err.body?.hata ? err.body.hata : 'Tezgah sunucusuna ulaşılamıyor.';
 }
 
+const SSL_FILE_LABELS = { sslrootcert: 'CA', sslcert: 'sertifika', sslkey: 'anahtar' } as const;
+
+/** Ayrıntı panelindeki SSL özeti: `verify-full · CA: /etc/ssl/root.pem`. */
+function sslSummary(ssl: SslSettings): string {
+  return [ssl.sslmode, ...SSL_PATH_FIELDS.flatMap((f) => (ssl[f] ? [`${SSL_FILE_LABELS[f]}: ${ssl[f]}`] : []))].join(' · ');
+}
+
+/** SSH özeti; anahtarla girişte anahtar dosyası da. */
+function tunnelSummary(ssh: SshSettings | null): string {
+  return ssh?.auth === 'key' && ssh.keyPath ? `${sshSummary(ssh)} · ${ssh.keyPath}` : sshSummary(ssh);
+}
+
 /** Adayın tüm uyarıları; "zaten var" en başta. */
 function warningsOf(c: PreviewCandidate): string[] {
   return [...(c.existing ? [`zaten var: ${c.existing.name} (işaretlersen yinelenir)`] : []), ...c.warnings];
@@ -41,14 +64,16 @@ function warningsOf(c: PreviewCandidate): string[] {
 export function IceAktarma({ connections, folders, onImported, onCancel }: Props) {
   const api = useApi();
   const id = useId();
-  const [request, setRequest] = useState<ImportPreviewRequest>({ pgpassPath: null, disabled: [] });
+  const [request, setRequest] = useState<ImportPreviewRequest>({ pgpassPath: null, disabled: [], projectPaths: [] });
   const [preview, setPreview] = useState<ImportPreviewResponse | null>(null);
   const [scanError, setScanError] = useState<string | null>(null);
   const [choices, setChoices] = useState<Record<string, CandidateChoice>>({});
   const [currentId, setCurrentId] = useState<string | null>(null);
   const [newFolderOpen, setNewFolderOpen] = useState(false);
-  const [pathOpen, setPathOpen] = useState(false);
+  /** Açık yol satırı: `.pgpass` dosyası ya da proje klasörü. */
+  const [pathOpen, setPathOpen] = useState<'pgpass' | 'proje' | null>(null);
   const [pathText, setPathText] = useState('');
+  const [projectText, setProjectText] = useState('');
   const [testAfter, setTestAfter] = useState(false);
   const [busy, setBusy] = useState(false);
   const [applyError, setApplyError] = useState<string | null>(null);
@@ -106,6 +131,15 @@ export function IceAktarma({ connections, folders, onImported, onCancel }: Props
   function scanPath(e: FormEvent) {
     e.preventDefault();
     setRequest((r) => ({ ...r, pgpassPath: pathText.trim() || null }));
+  }
+
+  /** Proje yolu eklenir ve taranır; bulunamazsa sunucu çipi hatalı döndürür. */
+  function scanProject(e: FormEvent) {
+    e.preventDefault();
+    const path = projectText.trim();
+    if (path === '') return;
+    setRequest((r) => (r.projectPaths.includes(path) ? r : { ...r, projectPaths: [...r.projectPaths, path] }));
+    setProjectText('');
   }
 
   async function submit() {
@@ -202,11 +236,26 @@ export function IceAktarma({ connections, folders, onImported, onCancel }: Props
                 </button>
               ),
             )}
-            <button type="button" className="cip" aria-expanded={pathOpen} onClick={() => setPathOpen((o) => !o)}>
+            <button type="button" className="cip" aria-expanded={pathOpen === 'proje'} onClick={() => setPathOpen((o) => (o === 'proje' ? null : 'proje'))}>
+              ＋ Proje klasörü…
+            </button>
+            <button type="button" className="cip" aria-expanded={pathOpen === 'pgpass'} onClick={() => setPathOpen((o) => (o === 'pgpass' ? null : 'pgpass'))}>
               .pgpass yolu…
             </button>
           </div>
-          {pathOpen && (
+          {pathOpen === 'proje' && (
+            <form className="yol-satiri" onSubmit={scanProject}>
+              <input
+                aria-label="Proje klasörü"
+                placeholder="Proje kökü ya da .idea klasörü (ör. ~/projeler/billing)"
+                value={projectText}
+                autoFocus
+                onChange={(e) => setProjectText(e.target.value)}
+              />
+              <button type="submit">Tara</button>
+            </form>
+          )}
+          {pathOpen === 'pgpass' && (
             <form className="yol-satiri" onSubmit={scanPath}>
               <input
                 aria-label=".pgpass yolu"
@@ -238,6 +287,19 @@ export function IceAktarma({ connections, folders, onImported, onCancel }: Props
                   {s.rows.map(row)}
                 </div>
               ))}
+            {preview && preview.skipped.length > 0 && (
+              <div role="group" aria-label="Atlandı (Postgres değil)" className="agac-bolumu atlandi">
+                <div className="agac-basligi">
+                  <span>Atlandı (Postgres değil)</span>
+                </div>
+                {preview.skipped.map((s, i) => (
+                  <div key={`${s.source.id}-${i}`} className="agac-satiri mevcut" title={s.source.label}>
+                    <span className="agac-adi">{s.name}</span>
+                    <span className="baglanti-adresi">{s.reason}</span>
+                  </div>
+                ))}
+              </div>
+            )}
           </section>
 
           <section aria-label="Ayrıntı" className="aday-ayrintisi">
@@ -320,9 +382,9 @@ export function IceAktarma({ connections, folders, onImported, onCancel }: Props
                     : 'yok, ilk bağlanmada sorulur'}
                 </dd>
                 <dt>SSL</dt>
-                <dd>{current.sslmode}</dd>
+                <dd>{sslSummary(current)}</dd>
                 <dt>SSH</dt>
-                <dd>{sshSummary(current.ssh)}</dd>
+                <dd>{tunnelSummary(current.ssh)}</dd>
                 <dt>Veritabanları</dt>
                 <dd>
                   <ul className="duz-liste">

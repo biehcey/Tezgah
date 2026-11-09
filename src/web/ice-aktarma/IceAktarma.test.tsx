@@ -58,7 +58,21 @@ interface ImportFake extends FakeConnections {
   /** Kaynak hatası (kırmızı çip). */
   sourceError: string | null;
   testResults: Map<string, ConnectionTestResponse>;
+  /** Global JetBrains kaynağı ve ondan gelen aday/atlanan. */
+  jetbrains: boolean;
 }
+
+const IJ_CANDIDATE = candidate({
+  id: 'c-ij',
+  name: 'analytics',
+  host: 'inner-db',
+  user: 'etl',
+  ssh: { host: 'bastion', port: 22, user: 'deploy', auth: 'key', keyPath: '~/.ssh/id_ed25519', agentPath: null, saveSecret: true },
+  sslmode: 'verify-full',
+  sslrootcert: '/etc/ssl/root.pem',
+  sources: [{ id: 'jetbrains:DataGrip2026.2', label: 'DataGrip2026.2 · analytics' }],
+  password: null,
+});
 
 const OK_TEST: ConnectionTestResponse = {
   adimlar: [{ id: 'listeleme', sonuc: 'basarili', kod: null, mesaj: '', alan: null, oneriler: [] }],
@@ -72,12 +86,26 @@ function setup(initial = [connection({ id: 'b1', name: 'Yerel', host: 'localhost
   fake.tests = [];
   fake.sourceError = null;
   fake.testResults = new Map();
+  fake.jetbrains = false;
   let next = 1;
   const response = (req: ImportPreviewRequest): ImportPreviewResponse => {
     const enabled = !req.disabled.includes('pgpass');
     const error = fake.sourceError;
+    const ij = fake.jetbrains && !req.disabled.includes('jetbrains:DataGrip2026.2');
     return {
       sources: [
+        ...(fake.jetbrains
+          ? [{ id: 'jetbrains:DataGrip2026.2', label: 'DataGrip2026.2', path: '~/.config/JetBrains/DataGrip2026.2/options', status: 'ok' as const, error: null, candidateCount: 2, enabled: ij }]
+          : []),
+        ...req.projectPaths.map((path) => ({
+          id: `proje:${path}`,
+          label: path.split('/').at(-1)!,
+          path,
+          status: path.includes('yok') ? ('error' as const) : ('ok' as const),
+          error: path.includes('yok') ? `${path}/.idea/dataSources.xml bulunamadı` : null,
+          candidateCount: 0,
+          enabled: true,
+        })),
         {
           id: 'pgpass',
           label: '.pgpass',
@@ -88,7 +116,8 @@ function setup(initial = [connection({ id: 'b1', name: 'Yerel', host: 'localhost
           enabled,
         },
       ],
-      candidates: enabled && !error ? structuredClone(CANDIDATES) : [],
+      candidates: [...(ij ? [structuredClone(IJ_CANDIDATE)] : []), ...(enabled && !error ? structuredClone(CANDIDATES) : [])],
+      skipped: ij ? [{ source: { id: 'jetbrains:DataGrip2026.2', label: 'DataGrip2026.2 · SE MySQL' }, name: 'SE MySQL', reason: 'Postgres değil (mysql.8)' }] : [],
     };
   };
   Object.assign(fake.api, {
@@ -141,7 +170,7 @@ describe('içe aktarma diyaloğu', () => {
   it('açılınca .pgpass taranır; önizleme listenin sonraki hâli: mevcut gri, gelenler seçili, zaten var eşinin altında', async () => {
     const { user, fake } = setup();
     await openImport(user);
-    expect(fake.previews).toEqual([{ pgpassPath: null, disabled: [] }]);
+    expect(fake.previews).toEqual([{ pgpassPath: null, disabled: [], projectPaths: [] }]);
     expect(within(dialog()).getByRole('button', { name: /\.pgpass 4/ })).toHaveAttribute('aria-pressed', 'true');
 
     const unfiled = within(tree()).getByRole('group', { name: 'Klasörsüz' });
@@ -196,6 +225,7 @@ describe('içe aktarma diyaloğu', () => {
       {
         pgpassPath: null,
         disabled: [],
+        projectPaths: [],
         selections: [
           { id: 'c-prod', name: 'billing-prod', folder: 'Billing/Prod', envTag: 'prod' },
           { id: 'c-etl', name: '10.0.4.12', folder: null, envTag: null },
@@ -216,14 +246,14 @@ describe('içe aktarma diyaloğu', () => {
     const { user, fake } = setup();
     await openImport(user);
     await user.click(within(dialog()).getByRole('button', { name: /\.pgpass 4/ }));
-    await waitFor(() => expect(fake.previews.at(-1)).toEqual({ pgpassPath: null, disabled: ['pgpass'] }));
+    await waitFor(() => expect(fake.previews.at(-1)).toEqual({ pgpassPath: null, disabled: ['pgpass'], projectPaths: [] }));
     expect(within(tree()).queryByText('prod-db.internal')).not.toBeInTheDocument();
     expect(within(dialog()).getByText('0 yeni bağlantı')).toBeInTheDocument();
 
     fake.sourceError = 'Yalnızca .pgpass ya da pgpass.conf adlı dosyalar okunur';
     await user.click(within(dialog()).getByRole('button', { name: '.pgpass yolu…' }));
     await user.type(within(dialog()).getByLabelText('.pgpass yolu'), '/tmp/gizli.txt{Enter}');
-    await waitFor(() => expect(fake.previews.at(-1)).toEqual({ pgpassPath: '/tmp/gizli.txt', disabled: ['pgpass'] }));
+    await waitFor(() => expect(fake.previews.at(-1)).toEqual({ pgpassPath: '/tmp/gizli.txt', disabled: ['pgpass'], projectPaths: [] }));
     const chip = await within(dialog()).findByText(/⚠/);
     expect(chip.closest('.cip')).toHaveClass('hatali');
     expect(chip.closest('.cip')).toHaveAttribute('title', expect.stringMatching(/pgpass\.conf/));
@@ -239,6 +269,40 @@ describe('içe aktarma diyaloğu', () => {
     await user.keyboard('{Escape}');
     expect(screen.queryByRole('dialog', { name: 'İçe aktar' })).not.toBeInTheDocument();
     expect(fake.applies).toEqual([]);
+  });
+});
+
+describe('IntelliJ kaynakları', () => {
+  it('JetBrains çipi ve "＋ Proje klasörü…" yol satırı: Enter ile taranır, bulunamazsa çip hatalı', async () => {
+    const { user, fake } = setup();
+    fake.jetbrains = true;
+    await openImport(user);
+    expect(within(dialog()).getByRole('button', { name: /DataGrip2026.2 2/ })).toHaveAttribute('aria-pressed', 'true');
+    await user.click(within(dialog()).getByRole('button', { name: '＋ Proje klasörü…' }));
+    await user.type(within(dialog()).getByLabelText('Proje klasörü'), '/work/billing{Enter}');
+    await waitFor(() => expect(fake.previews.at(-1)).toEqual({ pgpassPath: null, disabled: [], projectPaths: ['/work/billing'] }));
+    expect(await within(dialog()).findByRole('button', { name: /billing 0/ })).toBeInTheDocument();
+    await user.type(within(dialog()).getByLabelText('Proje klasörü'), '/work/yok');
+    await user.click(within(dialog()).getByRole('button', { name: 'Tara' }));
+    const chip = await within(dialog()).findByText(/⚠ yok/);
+    expect(chip.closest('.cip')).toHaveClass('hatali');
+    expect(chip.closest('.cip')).toHaveAttribute('title', expect.stringMatching(/dataSources.xml bulunamadı/));
+  });
+
+  it('Postgres dışı kaynaklar en altta gri "Atlandı" bölümünde; ayrıntıda SSL ve SSH özetleri', async () => {
+    const { user, fake } = setup();
+    fake.jetbrains = true;
+    await openImport(user);
+    const skipped = within(tree()).getByRole('group', { name: 'Atlandı (Postgres değil)' });
+    expect(skipped).toHaveTextContent('SE MySQL');
+    expect(skipped).toHaveTextContent('mysql.8');
+    const groups = within(tree()).getAllByRole('group');
+    expect(groups.at(-1)).toBe(skipped);
+
+    await user.click(within(rowOf('analytics')).getByText('analytics'));
+    expect(within(details()).getByText('verify-full · CA: /etc/ssl/root.pem')).toBeInTheDocument();
+    expect(within(details()).getByText('deploy@bastion · anahtar · ~/.ssh/id_ed25519')).toBeInTheDocument();
+    expect(within(details()).getByText('DataGrip2026.2 · analytics')).toBeInTheDocument();
   });
 });
 
