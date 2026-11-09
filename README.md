@@ -5,9 +5,9 @@ PostgreSQL için kişisel, yerel çalışan bir veritabanı yönetim aracı. Nod
 ## Kullanım
 
 ```sh
-npx tezgah            # rastgele port, tarayıcıyı açar
-npx tezgah --port 7000
-npx tezgah --no-open  # yalnızca adresi terminale yazar
+npx tezgah-db            # rastgele port, tarayıcıyı açar
+npx tezgah-db --port 7000
+npx tezgah-db --no-open  # yalnızca adresi terminale yazar
 ```
 
 Sunucu yalnızca `127.0.0.1`'de dinler. Her açılışta rastgele bir erişim anahtarı üretilir; tarayıcı terminalde yazan `http://127.0.0.1:<port>/?t=<anahtar>` adresiyle açılır. Tezgah yeniden başlatıldığında eski sekme geçersiz olur; terminaldeki yeni adresi açın.

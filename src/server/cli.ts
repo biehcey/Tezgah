@@ -7,7 +7,7 @@ import { defaultConfigDir } from './ayar-deposu';
 import { createOsKeychain } from './keychain';
 import { openBrowser } from './tarayici';
 
-const HELP = `Kullanım: tezgah [seçenekler]
+const HELP = `Kullanım: tezgah-db [seçenekler]
 
   --port <n>      Sabit port (varsayılan: rastgele)
   --no-open       Tarayıcıyı açma, yalnızca URL'i yaz

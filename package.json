@@ -1,11 +1,11 @@
 {
-  "name": "tezgah",
-  "version": "0.0.0",
+  "name": "tezgah-db",
+  "version": "0.1.0",
   "description": "PostgreSQL için kişisel, yerel çalışan bir veritabanı yönetim aracı",
   "type": "module",
   "license": "MIT",
   "bin": {
-    "tezgah": "dist/server/cli.js"
+    "tezgah-db": "dist/server/cli.js"
   },
   "files": [
     "dist"
