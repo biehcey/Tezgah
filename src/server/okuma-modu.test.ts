@@ -145,6 +145,19 @@ describe('Okuma modu: sahte Postgres', () => {
     expect((await records()).map((r) => r.sonuc)).toEqual(['hata']);
   });
 
+  it('hatadan sonraki geri alma sürerken soket koparsa iptal gönderilmez (çalışan ifade yok)', async () => {
+    fake.failOn = (sql) => (sql.includes('nextval') ? { code: '25006', message: 'cannot execute nextval() in a read-only transaction' } : undefined);
+    fake.hangOn = (sql) => sql === 'ROLLBACK';
+    run(await createConnection(), "SELECT nextval('s')");
+    await eventually(() => rollbacks() === 1);
+    ws.terminate();
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(fake.queries.filter((q) => q.includes('pg_cancel_backend'))).toEqual([]);
+    // Askıdaki ROLLBACK'i bırakır: oturum düşer, çalıştırma biter.
+    fake.dropSessions();
+    expect((await records()).map((r) => r.sonuc)).toEqual(['hata']);
+  });
+
   it('Okuma’da commit ve rollback istekleri reddedilir', async () => {
     run(await createConnection(), 'SELECT 1');
     await ws.waitFor('okumaAcik');

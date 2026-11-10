@@ -174,6 +174,8 @@ export function createScriptRunner({ store, pools, clock, history, log }: Script
       open = false;
       if (!run) return;
       if (run.phase === 'karar' || run.phase === 'okuma') return run.decide?.('kopma');
+      // Sonuç belli, COMMIT ya da ROLLBACK yolda: iptal edilecek ifade yok.
+      if (run.phase === 'bitiyor') return;
       run.stopping = 'kopma';
       void run.cancel?.();
     });

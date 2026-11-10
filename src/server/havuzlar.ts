@@ -90,6 +90,8 @@ export function createPoolManager({ keychain, sessionPasswords, clock, openTunne
   /** Pool'un sunucuya sunduğu şifre; ret (`28P01`) hangi şifreye geldi bilinsin. */
   const poolPasswords = new WeakMap<pg.Pool, string | undefined>();
   const keyOf = (connectionId: string, database: string) => `${connectionId}\u0000${database}`;
+  /** `closeAll` çağrıldı: yeni pool açılmaz, yoksa kapanıştan sonra açılan pool hiç kapanmazdı. */
+  let closed = false;
 
   /** Pool'u listeden çıkarır ve kapatır; kullanımdaki client'lar geri verilince kapanış tamamlanır. */
   function remove(key: string, entry: Entry): Promise<void> {
@@ -186,6 +188,7 @@ export function createPoolManager({ keychain, sessionPasswords, clock, openTunne
     fn: (client: pg.PoolClient, discard: () => void) => Promise<T>,
     { session = false }: { session?: boolean } = {},
   ): Promise<T> {
+    if (closed) throw new Error('Tezgah kapanıyor; yeni bağlantı açılmaz');
     const key = keyOf(connection.id, database);
     let entry = entries.get(key);
     if (session && entry && entry.sessions >= MAX_SESSIONS) throw new PoolFullError(entry.sessions);
@@ -332,6 +335,7 @@ export function createPoolManager({ keychain, sessionPasswords, clock, openTunne
     disconnect: dropPools,
 
     async closeAll(): Promise<void> {
+      closed = true;
       await Promise.all([...entries].map(([key, e]) => remove(key, e)));
       for (const id of [...tunnels.keys()]) closeTunnel(id);
     },
