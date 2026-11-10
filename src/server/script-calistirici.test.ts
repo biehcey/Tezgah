@@ -177,12 +177,15 @@ describePg('script çalıştırma: Transaction modu, gerçek Postgres', () => {
   it('imleç yolunda gelen hatanın konumu kullanıcının metnine göredir', async () => {
     run(`SELECT 1;\nSELECT 'x'::int`);
     expect(await ws.waitFor('error')).toMatchObject({ i: 1, sqlstate: '22P02', satir: 2, sutun: 8 });
+    // Okuma script'i: hatadan sonra transaction hemen geri alınır.
+    expect(await ws.waitFor('bitti')).toMatchObject({ sonuc: 'okuma' });
   });
 
   it('position yoksa ifadenin tamamı işaretlenir', async () => {
     run(`SELECT 1;\n  SELECT 1/0`);
     const error = await ws.waitFor('error');
     expect(error).toMatchObject({ i: 1, sqlstate: '22012', satir: 2, sutun: 3 });
+    expect(await ws.waitFor('bitti')).toMatchObject({ sonuc: 'okuma' });
   });
 
   it('hatadan sonra commit reddedilir; rollback kabul edilir', async () => {
