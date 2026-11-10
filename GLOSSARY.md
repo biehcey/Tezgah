@@ -36,6 +36,24 @@ _Avoid_: Geçici şifre, önbellekteki şifre
 İçe aktarma sırasında dış kaynaklardan (IntelliJ data source'ları, `.pgpass` satırları) çıkarılan, henüz kaydedilmemiş olası Bağlantı. Aynı sunucuya giden birden çok kaynak tek adayda birleşir; kullanıcı önizlemede seçtiği adayları Bağlantı olarak kaydeder.
 _Avoid_: Data source, kayıt, satır
 
+## Konsol
+
+**Sekme**:
+Konsolda bir hedefe bağlı çalışma alanı: ya bir script editörü (*konsol sekmesi*) ya da bir Tablo sekmesi. Metni/tablosu ve hedefi diske yazılır, Tezgah açılınca geri gelir ama bağlanmaz. Yazma kilidi sekme başınadır.
+_Avoid_: Pencere, konsol (tek başına), editör
+
+**Tablo sekmesi**:
+Editörsüz, tek bir tabloya filtreli/sayfalı göz atan ve PK'lı tabloda düzenlemeye izin veren Sekme. Her sayfa kısa ayrı bir sorgudur; açık transaction tutmaz.
+_Avoid_: Tablo editörü, veri görünümü
+
+**Bekleyen değişiklik**:
+Tablo sekmesinde yapılmış ama henüz uygulanmamış hücre düzenlemesi, satır ekleme ya da silme. Diske yazılmaz; uygulanınca SQL'e çevrilip Transaction modunda bir script olarak çalışır.
+_Avoid_: Taslak, dirty satır, pending edit
+
+**Katalog önbelleği**:
+Bir hedefin görünür şemalarındaki tablo, view ve kolonların sunucu belleğindeki kopyası; tamamlama ve tablo listesi bundan beslenir. Yalnızca kullanıcının o oturumdaki bir eylemiyle doldurulur; DDL'li script bitince ya da elle yenilenir.
+_Avoid_: Metadata, şema önbelleği, introspection
+
 ## Script çalıştırma
 
 **Transaction dışı komut**:
@@ -43,7 +61,7 @@ Postgres'in bir transaction bloğu içinde çalıştırmayı reddettiği komut (
 _Avoid_: Özel komut, non-tx
 
 **Çalıştırma modu**:
-Bir script'in içeriğinden çıkarılan, nasıl çalışacağını belirleyen mod: *Transaction* (tüm ifadeler tek transaction'da, sonda commit veya rollback) ya da *Autocommit* (script yalnızca transaction dışı komutlardan oluşur; her ifade anında kalıcı). İki türü karıştıran script çalıştırılamaz. Deneme modu bir çalıştırma modu değildir; Transaction modunun sonu her zaman rollback olan biçimidir.
+Bir script'in içeriğinden çıkarılan, nasıl çalışacağını belirleyen mod: *Transaction* (tüm ifadeler tek transaction'da, sonda commit veya rollback) *Autocommit* (script yalnızca transaction dışı komutlardan oluşur; her ifade anında kalıcı) ya da *Okuma* (tüm ifadeler okuma ifadesi; `BEGIN READ ONLY` ile çalışır, commit/rollback sorulmaz, transaction yalnızca sonuçtan daha fazla satır çekilebilsin diye açık kalır). Transaction dışı komutla diğer türleri karıştıran script çalıştırılamaz. Deneme modu bir çalıştırma modu değildir; Transaction modunun sonu her zaman rollback olan biçimidir.
 _Avoid_: Transaction modu anahtarı, execution mode
 
 **Deneme modu**:
@@ -59,7 +77,7 @@ Deneme farkı alınamayan bir DML ifadesinin, ifade başına `RETURNING *` satı
 _Avoid_: Fallback, basit önizleme
 
 **Yazma kilidi**:
-`prod` hedefinin salt okunur (🔒) ya da yazma modunda (🔓) olma durumu. Editör ve hedef başınadır, sayfa açık kaldıkça geçerlidir ve tek tıkla değişir. Salt okunurken yazmayı Postgres reddeder; Autocommit script'i hiç gönderilmez. Bir kaza önleyicidir, güvenlik sınırı değildir.
+`prod` hedefinin salt okunur (🔒) ya da yazma modunda (🔓) olma durumu. Sekme ve hedef başınadır; sekmenin hedefi değişince ya da sekme diskten geri gelince kapalıdır ve tek tıkla değişir. Salt okunurken yazmayı Postgres reddeder; Autocommit script'i hiç gönderilmez. Bir kaza önleyicidir, güvenlik sınırı değildir.
 _Avoid_: Salt okunur mod, read-only toggle, yazma izni
 
 **Karar süresi**:
