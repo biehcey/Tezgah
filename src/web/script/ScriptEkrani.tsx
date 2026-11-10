@@ -22,6 +22,7 @@ import type { Target } from '../../core/veritabani-secimi';
 import { runBlockReasons, writeLockState } from '../../core/yazma-kilidi';
 import { STATUS_LABELS, STATUS_SYMBOLS, WRITE_LOCK_LABELS, type AnalysisMark } from './durum';
 import { ScriptEditoru, type EditorMarks, type ScriptEditoruHandle } from './ScriptEditoru';
+import { SonucGridi } from '../grid/SonucGridi';
 
 interface Props {
   /** Hedefin bağlantısı ve veritabanı; hedef seçilmediyse `null`. */
@@ -163,6 +164,10 @@ export function ScriptEkrani({
   const [tab, setTab] = useState<Tab>('log');
   const tabs: Tab[] = run?.deneme ? ['degisiklikler', 'log'] : ['log'];
   const shownTab = run?.deneme ? tab : 'log';
+  /** Çalıştırma sayacı: yeni çalıştırmanın grid'leri eskilerin durumunu (seçim, genişlik) devralmaz. */
+  const [runNo, setRunNo] = useState(0);
+  /** Seçili sonuç sekmesinin ifade indeksi; yoksa ilk sonuç. */
+  const [resultTab, setResultTab] = useState<number | null>(null);
 
   /**
    * `zorlaTransaction`: Okuma deseni yanıldı (25006); hata alan script (`metin`, editör sonradan
@@ -179,6 +184,8 @@ export function ScriptEkrani({
     setRun(startRunView(metin, { deneme }));
     setRunOnProd(prod);
     setTab(deneme ? 'degisiklikler' : 'log');
+    setRunNo((n) => n + 1);
+    setResultTab(null);
     setDeadline(null);
     setPoolFullTabs([]);
     const runRequest = { target: targetRef, script: metin, yazmaModu: writeMode, deneme, ...(zorlaTransaction && { zorlaTransaction }) };
@@ -310,6 +317,7 @@ export function ScriptEkrani({
               </>
             )}
           </div>
+          <Sonuclar run={run} runNo={runNo} selected={resultTab} onSelect={setResultTab} />
         </div>
         <aside aria-label="Çalıştırma" className="calistirma-sutunu">
           {run && reading ? (
@@ -720,19 +728,63 @@ function StatementDetail({ statement: s, onForceTransaction }: { statement: Stat
         </>
       );
     case 'basarili':
-      if (s.onizleme) {
-        const total = s.rowCount ?? s.onizleme.satirlar.length;
-        return (
-          <>
-            <p className="kucuk">
-              {total} satır{total > PREVIEW_ROWS && <span className="soluk"> · ilk {PREVIEW_ROWS} satır gösteriliyor</span>}
-            </p>
-            {s.onizleme.kolonlar.length > 0 && <Onizleme preview={s.onizleme} />}
-          </>
-        );
-      }
+      // Satırlar editörün altındaki sonuç sekmesinde; kartta yalnızca sayı.
+      if (s.onizleme) return <p className="kucuk">{s.rowCount ?? s.onizleme.satirlar.length} satır</p>;
       return s.rowCount === null || s.rowCount === undefined ? null : <p className="kucuk">{s.rowCount} satır etkilendi</p>;
   }
+}
+
+/**
+ * Editörün altındaki sonuç sekmeleri: satır döndüren her ifadeye bir sekme. Yeni çalıştırmanın
+ * görünümünde önizleme yoktur; eski sekmeler kendiliğinden silinir. Gizli sekmelerin grid'leri
+ * (seçim, kolon genişliği) yerinde kalır.
+ */
+function Sonuclar({ run, runNo, selected, onSelect }: { run: RunView | null; runNo: number; selected: number | null; onSelect: (i: number) => void }) {
+  const results = run?.ifadeler.filter((s) => s.onizleme && s.onizleme.kolonlar.length > 0) ?? [];
+  const shown = results.find((s) => s.i === selected) ?? results[0];
+  return (
+    <section aria-label="Sonuçlar" className={`sonuclar${shown ? '' : ' bos'}`}>
+      {shown ? (
+        <>
+          <div role="tablist" className="sekmeler sonuc-sekmeleri">
+            {results.map((s) => (
+              <button
+                key={s.i}
+                type="button"
+                role="tab"
+                aria-selected={s === shown}
+                className={`sekme${s === shown ? ' secili' : ''}`}
+                onClick={() => onSelect(s.i)}
+              >
+                {resultLabel(s)}
+              </button>
+            ))}
+          </div>
+          {results.map((s) => (
+            <div key={`${runNo}:${s.i}`} role="tabpanel" aria-label={resultLabel(s)} className="sonuc-paneli" hidden={s !== shown}>
+              <p className="kucuk soluk sonuc-ozeti">{resultSummary(s)}</p>
+              <SonucGridi etiket={`${resultLabel(s)} sonucu`} kolonlar={s.onizleme!.kolonlar} satirlar={s.onizleme!.satirlar} toplamSatir={s.rowCount ?? (s.onizleme!.dahaVar ? null : s.onizleme!.satirlar.length)} />
+            </div>
+          ))}
+        </>
+      ) : (
+        <p className="soluk kucuk">SELECT sonuçları burada açılır.</p>
+      )}
+    </section>
+  );
+}
+
+function resultLabel(s: StatementView): string {
+  return `${s.komut} · satır ${s.satir}`;
+}
+
+/** "N satır" ya da yüklenenden fazlası varsa "N satır · ilk M satır gösteriliyor". */
+function resultSummary(s: StatementView): string {
+  const loaded = s.onizleme!.satirlar.length;
+  const total = s.rowCount ?? null;
+  if (total !== null && total > loaded) return `${total} satır · ilk ${loaded} satır gösteriliyor`;
+  if (s.onizleme!.dahaVar) return `ilk ${loaded} satır gösteriliyor`;
+  return `${loaded} satır`;
 }
 
 function Onizleme({ preview }: { preview: NonNullable<StatementView['onizleme']> }) {

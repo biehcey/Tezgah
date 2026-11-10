@@ -7,6 +7,9 @@ import type { ServerEvent } from '../core/script-calistirma';
 import { createFakeClock, type FakeClock } from './test/sahte-saat';
 import { describePg, pgUrl, startTestServer, type TestServer, type TestSocket } from './test/sunucu';
 
+/** Postgres'in yerleşik tip OID'leri. */
+const INT4 = 23;
+const TEXT = 25;
 const DK = 60_000;
 
 let t: TestServer;
@@ -149,7 +152,7 @@ describePg('script çalıştırma: Transaction modu, gerçek Postgres', () => {
       ['INSERT', 2],
       ['SELECT', 3],
     ]);
-    expect(done[2]!.onizleme).toEqual({ kolonlar: ['id'], satirlar: [['1'], ['2'], ['3']] });
+    expect(done[2]!.onizleme).toEqual({ kolonlar: ['id'], tipler: [INT4], satirlar: [['1'], ['2'], ['3']], dahaVar: false });
     // Karar verilene kadar başka oturum görmez.
     expect(await ids()).toEqual([]);
 
@@ -199,13 +202,22 @@ describePg('script çalıştırma: Transaction modu, gerçek Postgres', () => {
     expect(await ids()).toEqual([]);
   });
 
-  it('SELECT önizlemesi en fazla 100 satır; satır sayısı tamamıdır', async () => {
-    run('SELECT g, NULL AS bos FROM generate_series(1, 250) g');
+  it("SELECT önizlemesi ilk 500 satır, kolon tip OID'leri ve dahaVar bayrağı; satır sayısı tamamıdır", async () => {
+    run('SELECT g, NULL::text AS bos FROM generate_series(1, 750) g');
     const done = await ws.waitFor('done');
-    expect(done.rowCount).toBe(250);
+    expect(done.rowCount).toBe(750);
     expect(done.onizleme?.kolonlar).toEqual(['g', 'bos']);
-    expect(done.onizleme?.satirlar).toHaveLength(100);
+    expect(done.onizleme?.tipler).toEqual([INT4, TEXT]);
+    expect(done.onizleme?.satirlar).toHaveLength(500);
     expect(done.onizleme?.satirlar[0]).toEqual(['1', null]);
+    expect(done.onizleme?.dahaVar).toBe(true);
+  });
+
+  it('tam 500 satırlık sonuçta dahaVar yok', async () => {
+    run('SELECT g FROM generate_series(1, 500) g');
+    const done = await ws.waitFor('done');
+    expect(done.onizleme?.satirlar).toHaveLength(500);
+    expect(done.onizleme?.dahaVar).toBe(false);
   });
 
   it('imleçle çalışamayan SELECT (INTO) düz çalışır ve transaction bozulmaz', async () => {

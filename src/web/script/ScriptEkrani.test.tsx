@@ -41,6 +41,8 @@ const runButton = () => screen.getByRole('button', { name: '▶ Çalıştır' })
 const column = () => screen.getByRole('complementary', { name: 'Çalıştırma' });
 const decision = () => screen.getByRole('region', { name: 'Karar' });
 const cards = () => within(column()).queryAllByRole('listitem');
+const results = () => screen.getByRole('region', { name: 'Sonuçlar' });
+const resultTabs = () => within(results()).queryAllByRole('tab');
 
 async function startRun(script = SCRIPT) {
   const ctx = setup();
@@ -111,23 +113,24 @@ describe('Script ekranı: canlı olaylar', () => {
     expect(cards()[2]).toHaveTextContent('çalıştırılmadı');
   });
 
-  it('SELECT kartı satır sayısını ve önizlemeyi gösterir', async () => {
-    const { run } = await startRun('SELECT g FROM generate_series(1, 250) g');
+  it('SELECT kartı satır sayısını gösterir; satırlar kartta değil sonuç grid’inde', async () => {
+    const { run } = await startRun('SELECT g FROM generate_series(1, 750) g');
     run.emit({
       type: 'done',
       i: 0,
-      rowCount: 250,
+      rowCount: 750,
       ms: 9,
       komut: 'SELECT',
-      onizleme: { kolonlar: ['g', 'bos'], satirlar: [['1', null], ['2', null]] },
+      onizleme: { kolonlar: ['g', 'bos'], tipler: [23, 25], satirlar: [['1', null], ['2', null]], dahaVar: true },
     });
     const card = cards()[0]!;
-    expect(card).toHaveTextContent('250 satır');
-    expect(card).toHaveTextContent('ilk 100');
-    const table = within(card).getByRole('table');
-    expect(within(table).getAllByRole('columnheader').map((h) => h.textContent)).toEqual(['g', 'bos']);
-    expect(within(table).getAllByRole('row')).toHaveLength(3);
-    expect(within(table).getAllByText('NULL')).toHaveLength(2);
+    expect(card).toHaveTextContent('750 satır');
+    expect(within(card).queryByRole('grid')).not.toBeInTheDocument();
+    const grid = within(results()).getByRole('grid');
+    expect(within(grid).getAllByRole('columnheader').map((h) => h.textContent)).toEqual(['g', 'bos']);
+    expect(within(grid).getAllByRole('gridcell').map((c) => c.textContent)).toEqual(['1', 'NULL', '2', 'NULL']);
+    expect(grid).toHaveAttribute('aria-rowcount', '751');
+    expect(results()).toHaveTextContent('750 satır · ilk 2 satır gösteriliyor');
   });
 
   it('karta tıklayınca editör o satıra gider', async () => {
@@ -620,7 +623,7 @@ describe('Script ekranı: Deneme modu', () => {
     expect(cards()).toHaveLength(4);
   });
 
-  it('Değişiklikler ifade başına DML önizlemesini ve satır sayısını gösterir; SELECT Log’da', async () => {
+  it('Değişiklikler ifade başına DML önizlemesini ve satır sayısını gösterir; SELECT sonucu sonuç sekmesinde', async () => {
     const { user, run } = await startTry();
     run.emit(
       { type: 'done', i: 0, rowCount: 250, ms: 3, komut: 'UPDATE', degisiklik: { kolonlar: ['id', 'a'], satirlar: [['1', '1'], ['2', null]] } },
@@ -640,8 +643,9 @@ describe('Script ekranı: Deneme modu', () => {
     expect(within(sections[2]!).queryByRole('table')).not.toBeInTheDocument();
     expect(changes()).not.toHaveTextContent('secilen');
 
+    expect(within(results()).getByRole('grid')).toHaveTextContent('secilen');
     await user.click(within(column()).getByRole('tab', { name: 'Log' }));
-    expect(cards()[1]).toHaveTextContent('secilen');
+    expect(cards()[1]).toHaveTextContent('1 satır');
     // DML'in satırları Log'da tekrarlanmaz; satır sayısı yeter.
     expect(cards()[0]).toHaveTextContent('250 satır etkilendi');
     expect(within(cards()[0]!).queryByRole('table')).not.toBeInTheDocument();
@@ -782,5 +786,54 @@ describe('Script ekranı: Deneme modu', () => {
     expect(runButton()).toBeDisabled();
     expect(gutterMarks()).toEqual({ 2: '⚠' });
     expect(tryButton()).toHaveAccessibleDescription(expect.stringContaining('Satır 2: Transaction dışı komut Deneme modunda'));
+  });
+});
+
+describe('Script ekranı: sonuç sekmeleri', () => {
+  const page = (deger: string) => ({ kolonlar: ['a'], tipler: [25], satirlar: [[deger]], dahaVar: false });
+
+  it('çalıştırmadan önce sonuç sekmesi yok', () => {
+    setup();
+    expect(resultTabs()).toEqual([]);
+    expect(results()).toHaveTextContent('SELECT sonuçları burada açılır');
+  });
+
+  it('her SELECT kendi sonuç sekmesinde; satır döndürmeyen ifadenin sekmesi yok; sekme seçilince grid’i görünür', async () => {
+    const { user, run } = await startRun('SELECT 1;\nINSERT INTO t VALUES (1);\nSELECT 2');
+    run.emit(
+      { type: 'done', i: 0, rowCount: 1, ms: 1, komut: 'SELECT', onizleme: page('bir') },
+      { type: 'done', i: 1, rowCount: 1, ms: 1, komut: 'INSERT' },
+      { type: 'done', i: 2, rowCount: 1, ms: 1, komut: 'SELECT', onizleme: page('iki') },
+    );
+    expect(resultTabs().map((t) => t.textContent)).toEqual(['SELECT · satır 1', 'SELECT · satır 3']);
+    expect(resultTabs()[0]).toHaveAttribute('aria-selected', 'true');
+    expect(within(results()).getByRole('grid')).toHaveTextContent('bir');
+    await user.click(resultTabs()[1]!);
+    expect(within(results()).getByRole('grid')).toHaveTextContent('iki');
+    expect(resultTabs()[1]).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('yeniden çalıştırınca eski sonuç sekmeleri silinir', async () => {
+    const { user, fake } = await startRun('SELECT 1;\nSELECT 2');
+    fake.last().emit(
+      { type: 'done', i: 0, rowCount: 1, ms: 1, komut: 'SELECT', onizleme: page('eski 1') },
+      { type: 'done', i: 1, rowCount: 1, ms: 1, komut: 'SELECT', onizleme: page('eski 2') },
+      { type: 'okumaAcik', kalanMs: DK },
+    );
+    expect(resultTabs()).toHaveLength(2);
+    await user.click(runButton());
+    expect(resultTabs()).toEqual([]);
+    expect(screen.queryByText('eski 1')).not.toBeInTheDocument();
+    fake.last().emit({ type: 'done', i: 0, rowCount: 1, ms: 1, komut: 'SELECT', onizleme: page('yeni') });
+    expect(resultTabs()).toHaveLength(1);
+    expect(within(results()).getByRole('grid')).toHaveTextContent('yeni');
+  });
+
+  it('sonuç grid’inde Ctrl+C seçili hücreyi panoya kopyalar', async () => {
+    const { user, run } = await startRun('SELECT 1');
+    run.emit({ type: 'done', i: 0, rowCount: 1, ms: 1, komut: 'SELECT', onizleme: page('panoya') });
+    await user.click(within(results()).getByRole('gridcell'));
+    await user.keyboard('{Control>}c{/Control}');
+    expect(await navigator.clipboard.readText()).toBe('panoya');
   });
 });

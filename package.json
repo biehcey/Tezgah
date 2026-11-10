@@ -36,6 +36,7 @@
     "@codemirror/state": "^6.5.2",
     "@codemirror/view": "^6.38.6",
     "@eslint/js": "^10.0.1",
+    "@tanstack/react-virtual": "^3.14.26",
     "@testing-library/dom": "^10.4.2",
     "@testing-library/jest-dom": "^7.0.1",
     "@testing-library/react": "^16.3.3",

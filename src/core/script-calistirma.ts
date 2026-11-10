@@ -9,7 +9,7 @@ import type { RowChanges, SchemaChange } from './deneme-farki';
 import { splitStatements, positionOf, type Statement } from './ifade-bolme';
 import type { Target } from './veritabani-secimi';
 
-/** SELECT önizlemesinde ve Deneme modunun değişiklik önizlemesinde sunucudan çekilen en fazla satır. */
+/** Deneme modunun değişiklik önizlemesinde sunucudan çekilen en fazla satır (SELECT'te `PAGE_ROWS`). */
 export const PREVIEW_ROWS = 100;
 
 // ---------- İstemci → sunucu ----------
@@ -48,10 +48,16 @@ export function parseClientMessage(raw: unknown): ClientMessage | null {
 
 // ---------- Sunucu → istemci ----------
 
-/** Kolon adları ve metin olarak değerler (NULL `null`). */
+/**
+ * Kolon adları ve metin olarak değerler (NULL `null`). Sonuç grid'ine giden SELECT sonucunda ayrıca
+ * kolon tip OID'leri ve ilk sayfadan sonra satır olup olmadığı (`dahaVar`); Deneme modunun
+ * değişiklik önizlemelerinde bunlar yoktur.
+ */
 export interface Preview {
   kolonlar: string[];
+  tipler?: number[];
   satirlar: (string | null)[][];
+  dahaVar?: boolean;
 }
 
 /** Deneme modunda bir ifadenin değişiklik çıktısı (bkz. `done`). */
@@ -100,8 +106,9 @@ export type ServerEvent =
   /**
    * `onizleme`: ifadenin döndürdüğü satırlar (SELECT). Yalnızca Deneme modunda: `fark` PG18+ ve PK'lı
    * tabloda DML'in önce/sonra satırları; yoksa `degisiklik` DML'in `RETURNING` satırları ve
-   * `farkYok` nedeni. `sema`: DDL'in dokunduğu tabloların ifadeden önceki ve sonraki şeması. Satırlar
-   * en fazla 100; `rowCount` her durumda etkilenen satırların tamamıdır.
+   * `farkYok` nedeni. `sema`: DDL'in dokunduğu tabloların ifadeden önceki ve sonraki şeması. SELECT
+   * sonucunda en fazla 500, değişiklik önizlemesinde en fazla 100 satır; `rowCount` her durumda
+   * satırların tamamıdır.
    */
   | ({ type: 'done'; i: number; rowCount: number | null; ms: number; komut: string; onizleme?: Preview } & DenemeOutput)
   | { type: 'error'; i: number; sqlstate: string | null; mesaj: string; satir: number; sutun: number; bas: number; bit: number; ms: number }

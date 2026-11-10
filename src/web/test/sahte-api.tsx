@@ -15,6 +15,8 @@ import {
 } from '../../core/baglanti';
 import type { HostKeyProblem } from '../../core/ssh-tuneli';
 import { emptyTabs, type SavedTabs } from '../../core/konsol-sekmeleri';
+import { GridOlcumu } from '../grid/olcum';
+import { JSDOM_OLCUMU } from './grid';
 import { ApiError, ApiProvider, type ApiClient, type ConnectionRequest } from '../api/client';
 
 /** Testlerde gerçek sunucu yerine kullanılan API istemcisi; verilmeyen işlemler hata fırlatır. */
@@ -89,7 +91,11 @@ export function createFakeScriptRuns() {
 }
 
 export function renderWithApi(ui: ReactElement, api: ApiClient = createFakeApi()) {
-  return render(<ApiProvider client={api}>{ui}</ApiProvider>);
+  return render(
+    <ApiProvider client={api}>
+      <GridOlcumu.Provider value={JSDOM_OLCUMU}>{ui}</GridOlcumu.Provider>
+    </ApiProvider>,
+  );
 }
 
 export function connection(overrides: Partial<Connection> = {}): Connection {

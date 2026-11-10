@@ -33,6 +33,7 @@ import {
   type TableName,
 } from '../core/deneme';
 import type { SchemaChange, TableSchema } from '../core/deneme-farki';
+import { PAGE_ROWS } from '../core/grid/sabitler';
 import { splitStatements, type Statement } from '../core/ifade-bolme';
 import { TUNNEL_CLOSED } from '../core/ssh-tuneli';
 import {
@@ -64,8 +65,8 @@ export interface ScriptRunnerDeps {
 const RAW_TYPES = { getTypeParser: () => (value: string) => value };
 
 /**
- * Önizleme sarmalının adı: savepoint, imleç ve CTE aynı adı taşır. Sarmallar satırların 100'den
- * fazlasını sunucudan çekmez.
+ * Önizleme sarmalının adı: savepoint, imleç ve CTE aynı adı taşır. Sarmallar satırların 500'den
+ * (Deneme'nin değişiklik önizlemesinde 100'den) fazlasını sunucudan çekmez.
  */
 const WRAPPER = 'tezgah_onizleme';
 const CURSOR_PREFIX = `DECLARE ${WRAPPER} NO SCROLL CURSOR FOR `;
@@ -626,15 +627,21 @@ async function runStatement(client: pg.PoolClient, statement: Statement, deneme:
 
 /**
  * İfadeyi kullanıcının yazdığı gibi çalıştırır. `degistirir`: DML'in kendi `RETURNING`'i değişiklik
- * önizlemesidir; satırların tamamı çekilir, ilk 100'ü gösterilir.
+ * önizlemesidir; satırların tamamı çekilir, ilk 100'ü gösterilir. Satır döndüren diğer ifadelerin
+ * (ör. `SHOW`, `RETURNING`) ilk 500 satırı sonuç grid'ine gider.
  */
 async function runPlain(client: pg.PoolClient, statement: Statement, degistirir: boolean): Promise<StatementResult> {
   try {
     const raw = await client.query({ text: statement.text, rowMode: 'array', types: RAW_TYPES });
     const result = Array.isArray(raw) ? (raw.at(-1) as pg.QueryArrayResult) : raw;
-    const rows = result.fields.length > 0 ? preview(result) : undefined;
     const komut = result.command ?? statement.keywords[0] ?? '';
-    return { ok: true, rowCount: result.rowCount, komut, ...(degistirir ? { degisiklik: rows } : { onizleme: rows }) };
+    if (result.fields.length === 0) return { ok: true, rowCount: result.rowCount, komut };
+    return {
+      ok: true,
+      rowCount: result.rowCount,
+      komut,
+      ...(degistirir ? { degisiklik: preview(result) } : { onizleme: resultPage(result, false) }),
+    };
   } catch (error) {
     return { ok: false, error, prefix: 0 };
   }
@@ -782,16 +789,17 @@ function runWithChanges(client: pg.PoolClient, statement: Statement, text: strin
 }
 
 /**
- * SELECT benzeri ifadeyi imleçle çalıştırır: ilk 100 satır çekilir, kalanı `MOVE` ile sayılır ama
+ * SELECT benzeri ifadeyi imleçle çalıştırır: ilk 500 satır çekilir, kalanı `MOVE` ile sayılır ama
  * istemciye aktarılmaz. İmleç bu ifadeyi kabul etmezse `null` döner.
  */
 function runWithCursor(client: pg.PoolClient, statement: Statement): Promise<StatementResult | null> {
   return withWrapper(client, CURSOR_PREFIX, async () => {
     await client.query(CURSOR_PREFIX + statement.text);
-    const fetched = await client.query({ text: `FETCH ${PREVIEW_ROWS} FROM ${WRAPPER}`, rowMode: 'array', types: RAW_TYPES });
+    const fetched = await client.query({ text: `FETCH ${PAGE_ROWS} FROM ${WRAPPER}`, rowMode: 'array', types: RAW_TYPES });
     const rest = await client.query(`MOVE FORWARD ALL IN ${WRAPPER}`);
     await client.query(`CLOSE ${WRAPPER}`);
-    return { ok: true, rowCount: (fetched.rowCount ?? 0) + (rest.rowCount ?? 0), komut: 'SELECT', onizleme: preview(fetched) };
+    const kalan = rest.rowCount ?? 0;
+    return { ok: true, rowCount: (fetched.rowCount ?? 0) + kalan, komut: 'SELECT', onizleme: resultPage(fetched, kalan > 0) };
   });
 }
 
@@ -807,9 +815,19 @@ function rejectedByWrapper(error: unknown): boolean {
   return code.startsWith('42') || code.startsWith('0A');
 }
 
+const textRows = (rows: unknown[][]) => rows.map((row) => row.map((v) => (v === null ? null : String(v))));
+
+/** Deneme modunun değişiklik önizlemesi: ilk 100 satır. */
 function preview(result: pg.QueryArrayResult): Preview {
+  return { kolonlar: result.fields.map((f) => f.name), satirlar: textRows(result.rows.slice(0, PREVIEW_ROWS)) };
+}
+
+/** Sonuç grid'inin ilk sayfası: ilk 500 satır, kolon tip OID'leri ve sonrası olup olmadığı. */
+function resultPage(result: pg.QueryArrayResult, dahaVar: boolean): Preview {
   return {
     kolonlar: result.fields.map((f) => f.name),
-    satirlar: result.rows.slice(0, PREVIEW_ROWS).map((row) => row.map((v) => (v === null ? null : String(v)))),
+    tipler: result.fields.map((f) => f.dataTypeID),
+    satirlar: textRows(result.rows.slice(0, PAGE_ROWS)),
+    dahaVar: dahaVar || result.rows.length > PAGE_ROWS,
   };
 }

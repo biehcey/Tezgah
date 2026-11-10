@@ -1355,6 +1355,152 @@ button.kucuk {
   font-style: italic;
 }
 
+/* Editörün altındaki sonuç sekmeleri; sonuç varken editörle alanı paylaşır. */
+.sonuclar {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  border-top: 1px solid var(--cizgi);
+}
+
+.sonuclar.bos {
+  flex: 0 0 auto;
+  padding: 6px 12px;
+}
+
+.sonuc-sekmeleri {
+  overflow-x: auto;
+}
+
+.sonuc-sekmeleri .sekme {
+  white-space: nowrap;
+}
+
+.sonuc-paneli {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.sonuc-paneli[hidden] {
+  display: none;
+}
+
+.sonuc-ozeti {
+  margin: 4px 12px;
+}
+
+/* Sonuç grid'i: satır 24px, başlık 26px sabit (SonucGridi.tsx ile aynı). */
+.sonuc-gridi {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  scroll-padding-top: 26px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  user-select: none;
+}
+
+.sonuc-gridi:focus-visible {
+  outline: 2px solid var(--vurgu);
+  outline-offset: -2px;
+}
+
+.grid-icerik {
+  position: relative;
+  min-width: 100%;
+}
+
+.grid-basligi {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  height: 26px;
+  background: var(--kenar-zemin);
+}
+
+.grid-satiri {
+  display: flex;
+}
+
+.grid-veri-satiri {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 24px;
+}
+
+.grid-kolon-basligi {
+  position: relative;
+  flex: none;
+  height: 26px;
+  padding: 4px 8px;
+  border-right: 1px solid var(--cizgi);
+  border-bottom: 1px solid var(--cizgi);
+  font-weight: 600;
+}
+
+.grid-kolon-adi {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.grid-kolon-tutamaci {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  z-index: 1;
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.grid-hucresi {
+  flex: none;
+  height: 24px;
+  padding: 3px 8px;
+  overflow: hidden;
+  border-right: 1px solid var(--cizgi);
+  border-bottom: 1px solid var(--cizgi);
+  text-overflow: ellipsis;
+  white-space: pre;
+  cursor: cell;
+}
+
+.grid-hucresi.null {
+  color: var(--soluk);
+  font-style: italic;
+}
+
+.grid-hucresi.secili {
+  background: color-mix(in srgb, var(--vurgu) 16%, transparent);
+}
+
+/* Aktif hücre odakta olmasa da (ör. başka sekmeye geçince) belli kalır. */
+.grid-hucresi.aktif {
+  outline: 2px solid var(--vurgu);
+  outline-offset: -2px;
+}
+
+/* F2 / çift tık: hücrenin üstünde açılan salt okunur tam değer. */
+.hucre-degeri {
+  position: absolute;
+  z-index: 3;
+  height: 144px;
+  padding: 4px 8px;
+  border: 1px solid var(--vurgu);
+  background: var(--zemin);
+  color: var(--metin);
+  font: inherit;
+  resize: both;
+  user-select: text;
+}
+
 /* Oturumluk şifre penceresi: başlıkta bağlantının renk noktası ve adı. */
 .sifre-basligi {
   display: flex;
