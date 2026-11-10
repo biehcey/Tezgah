@@ -245,14 +245,14 @@ describePg('script çalıştırma: Transaction modu, gerçek Postgres', () => {
   });
 
   it('bitince aynı soketten yeni çalıştırma başlatılabilir; çalışırken ikincisi reddedilir', async () => {
-    run('SELECT pg_sleep(0.2)');
-    run('SELECT 2');
+    run(`INSERT INTO ${TABLE} VALUES (1);\nSELECT pg_sleep(0.2)`);
+    run(`INSERT INTO ${TABLE} VALUES (2)`);
     expect(await ws.waitFor('uyari')).toMatchObject({ tur: 'mesgul' });
     await ws.waitFor('kararBekleniyor');
     ws.send({ type: 'rollback' });
     await ws.waitFor('bitti');
     ws.events.length = 0;
-    run('SELECT 2');
+    run(`INSERT INTO ${TABLE} VALUES (2)`);
     expect(await ws.waitFor('kararBekleniyor')).toMatchObject({ commitEdilebilir: true });
   });
 
@@ -338,18 +338,61 @@ DISCARD ALL`);
     });
   });
 
+  describe('Okuma modu', () => {
+    const SEQUENCE = 'tezgah_test_okuma_seq';
+    beforeAll(async () => {
+      await admin.query(`CREATE SEQUENCE IF NOT EXISTS ${SEQUENCE}`);
+    });
+    afterAll(async () => {
+      await admin.query(`DROP SEQUENCE IF EXISTS ${SEQUENCE}`);
+    });
+
+    it('ortamdan bağımsız READ ONLY transaction açık kalır; Karar süresi dolunca kapanır', async () => {
+      run('SHOW transaction_read_only');
+      expect(await ws.waitFor('okumaAcik')).toEqual({ type: 'okumaAcik', kalanMs: 30 * DK });
+      expect((await ws.waitFor('done')).onizleme?.satirlar).toEqual([['on']]);
+      expect(await tezgahStates()).toContain('idle in transaction');
+      clock.advance(30 * DK);
+      expect(await ws.waitFor('bitti')).toMatchObject({ sonuc: 'okuma' });
+      await eventually(async () => (await tezgahStates()).every((s) => s === 'idle'));
+      expect(await recordedResults()).toEqual(['okuma']);
+    });
+
+    it('desen yanılırsa 25006; zorlaTransaction ile aynı script karar kartıyla çalışır', async () => {
+      const script = `SELECT nextval('${SEQUENCE}')`;
+      run(script);
+      expect(await ws.waitFor('analiz')).toMatchObject({ mod: 'okuma' });
+      expect(await ws.waitFor('error')).toMatchObject({ i: 0, sqlstate: '25006' });
+      expect(await ws.waitFor('bitti')).toMatchObject({ sonuc: 'okuma' });
+
+      ws.events.length = 0;
+      ws.send({ type: 'run', target: { connectionId, database: real.database }, script, zorlaTransaction: true });
+      expect(await ws.waitFor('analiz')).toMatchObject({ mod: 'transaction' });
+      expect(await ws.waitFor('kararBekleniyor')).toMatchObject({ commitEdilebilir: true });
+      ws.send({ type: 'rollback' });
+      expect(await ws.waitFor('bitti')).toMatchObject({ sonuc: 'rollback' });
+    });
+
+    it('soket kapanınca Okuma transaction’ı geri alınır', async () => {
+      run('SELECT 1');
+      await ws.waitFor('okumaAcik');
+      ws.terminate();
+      await eventually(async () => !(await tezgahStates()).includes('idle in transaction'));
+    });
+  });
+
   describe('Karar süresi', () => {
     it('karar 30 dk beklenir; sunucudaki yedek zaman aşımı BEGIN ile süre + 1 dk', async () => {
-      run('SHOW idle_in_transaction_session_timeout');
+      run(`INSERT INTO ${TABLE} VALUES (1);\nSHOW idle_in_transaction_session_timeout`);
       expect(await ws.waitFor('kararBekleniyor')).toMatchObject({ kalanMs: 30 * DK });
-      expect((await ws.waitFor('done')).onizleme?.satirlar).toEqual([['31min']]);
+      expect((await ws.waitFor('done', (e) => e.i === 1)).onizleme?.satirlar).toEqual([['31min']]);
     });
 
     it('prod hedefte süre 5 dk, yedek zaman aşımı 6 dk', async () => {
       const prod = await t.api('POST', '/api/baglantilar', { name: 'Prod', envTag: 'prod', ...real });
-      run('SHOW idle_in_transaction_session_timeout', prod.body.connection.id);
+      run('SET LOCAL statement_timeout = 0;\nSHOW idle_in_transaction_session_timeout', prod.body.connection.id);
       expect(await ws.waitFor('kararBekleniyor')).toMatchObject({ kalanMs: 5 * DK });
-      expect((await ws.waitFor('done')).onizleme?.satirlar).toEqual([['6min']]);
+      expect((await ws.waitFor('done', (e) => e.i === 1)).onizleme?.satirlar).toEqual([['6min']]);
     });
 
     it('süre dolunca transaction geri alınır ve client pool’a döner; geç gelen commit reddedilir', async () => {
@@ -430,7 +473,7 @@ SET LOCAL idle_in_transaction_session_timeout = 300`);
       expect(await ids()).toEqual([]);
       // Ölen client pool'a dönmedi: aynı hedefte yeni çalıştırma sorunsuz.
       ws.events.length = 0;
-      run('SELECT 1');
+      run(`INSERT INTO ${TABLE} VALUES (1)`);
       expect(await ws.waitFor('kararBekleniyor')).toMatchObject({ commitEdilebilir: true });
     });
   });

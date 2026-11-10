@@ -60,21 +60,21 @@ describe('prod yazma kilidi: sahte Postgres', () => {
   }
 
   it('salt okunur prod’da transaction BEGIN READ ONLY ile açılır', async () => {
-    run(await createConnection(), 'SELECT 1');
+    run(await createConnection(), 'UPDATE t SET a = 1');
     await decideRollback();
     expect(fake.queries[0]).toBe('BEGIN READ ONLY');
     expect(await recordedLocks()).toEqual(['salt-okunur']);
   });
 
   it('yazma modunda transaction BEGIN READ WRITE ile açılır; kayıtta yazma-acik', async () => {
-    run(await createConnection(), 'SELECT 1', true);
+    run(await createConnection(), 'UPDATE t SET a = 1', true);
     await decideRollback();
     expect(fake.queries[0]).toBe('BEGIN READ WRITE');
     expect(await recordedLocks()).toEqual(['yazma-acik']);
   });
 
   it('prod olmayan hedefte yazma modu etkisiz: düz BEGIN, kilit yok', async () => {
-    run(await createConnection({ envTag: 'staging' }), 'SELECT 1', true);
+    run(await createConnection({ envTag: 'staging' }), 'UPDATE t SET a = 1', true);
     await decideRollback();
     expect(fake.queries[0]).toBe('BEGIN');
     expect(await recordedLocks()).toEqual([null]);
@@ -98,7 +98,7 @@ describe('prod yazma kilidi: sahte Postgres', () => {
 
     // Ayarı değişen client atıldı: sıradaki çalıştırma yeni bir oturum açar.
     ws.events.length = 0;
-    run(id, 'SELECT 1');
+    run(id, 'UPDATE t SET a = 1');
     await decideRollback();
     expect(fake.attempts.length).toBe(sessions + 1);
   });
@@ -161,8 +161,9 @@ describePg('prod yazma kilidi: gerçek Postgres', () => {
     // Aynı hedefin pool'undan alınan sıradaki client'lar yine salt okunur açılır.
     for (let i = 0; i < 3; i++) {
       ws.events.length = 0;
-      run('SHOW default_transaction_read_only');
-      expect((await ws.waitFor('done')).onizleme?.satirlar).toEqual([['on']]);
+      // Yalnızca SHOW Okuma modunda çalışırdı; SET script'i Transaction moduna alır.
+      run('SET LOCAL statement_timeout = 0;\nSHOW default_transaction_read_only');
+      expect((await ws.waitFor('done', (e) => e.i === 1)).onizleme?.satirlar).toEqual([['on']]);
       await ws.waitFor('kararBekleniyor');
       ws.send({ type: 'rollback' });
       await ws.waitFor('bitti');

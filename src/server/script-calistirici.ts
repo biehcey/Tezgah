@@ -13,7 +13,7 @@ import {
   startDecision,
   type DecisionTimer,
 } from '../core/karar-suresi';
-import { analyzeScript, type RunMode } from '../core/calistirma-modu';
+import { analyzeScript, forceTransaction, type RunMode } from '../core/calistirma-modu';
 import {
   DML_VERBS,
   LOCK_NOT_AVAILABLE,
@@ -80,9 +80,14 @@ const CATALOG_SAVEPOINT = 'tezgah_katalog';
 /** İmleçle çalıştırılmaya çalışılan ifade türleri; olmazsa (ör. `SELECT … INTO`) düz çalışır. */
 const CURSOR_COMMANDS = new Set(['SELECT', 'VALUES', 'TABLE', 'WITH']);
 
-/** Kararın nasıl verildiği: istemciden, soket kopmasından, Karar süresinden ya da ölen bağlantıdan. */
-type Decision = 'commit' | 'rollback' | 'kopma' | 'sureDoldu' | 'baglantiKoptu';
+/**
+ * Kararın nasıl verildiği: istemciden, soket kopmasından, Karar süresinden, ölen bağlantıdan ya da
+ * (Okuma'da) aynı sokette başlayan yeni çalıştırmadan.
+ */
+type Decision = 'commit' | 'rollback' | 'kopma' | 'sureDoldu' | 'baglantiKoptu' | 'yeniCalistirma';
 
+const READ_EXPIRED = "Süre doldu; Okuma transaction'ı kapandı";
+const READ_SESSION_TIMED_OUT = "Oturum sunucuda zaman aşımına uğradı; Okuma transaction'ı kapandı";
 const EXPIRED = 'Süre doldu; transaction geri alındı';
 const LATE_COMMIT = `${EXPIRED}; commit yapılamaz.`;
 const SESSION_TIMED_OUT = 'Oturum sunucuda zaman aşımına uğradı; transaction geri alındı';
@@ -98,14 +103,19 @@ const TRANSACTION_ABORTED = '25P02';
 
 /** Soket başına tek çalıştırma; karar verilene kadar client tutulur (ADR-0002). */
 interface Run {
-  /** `bitiyor`: karar verildi, transaction kapanıyor; yeni karar istekleri kabul edilmez. */
-  phase: 'calisiyor' | 'karar' | 'bitiyor';
+  /**
+   * `okuma`: Okuma script'i bitti, transaction yalnızca daha fazla satır için açık; karar istenmez.
+   * `bitiyor`: karar verildi, transaction kapanıyor; yeni karar istekleri kabul edilmez.
+   */
+  phase: 'calisiyor' | 'karar' | 'okuma' | 'bitiyor';
   /** İptal ya da kopma istendi; sıradaki ifadeler çalıştırılmaz. */
   stopping: 'iptal' | 'kopma' | null;
   /** Çalışan ifadeyi `pg_cancel_backend` ile durdurur; client henüz alınmadıysa yok. */
   cancel?: () => Promise<void>;
-  /** Karar bekleniyorken çağrılır. */
+  /** Karar bekleniyorken (ya da Okuma transaction'ı açıkken) çağrılır. */
   decide?: (decision: Decision) => void;
+  /** Çalıştırmanın tamamı: transaction kapanıp `bitti` gidince çözülür. */
+  done?: Promise<void>;
   /** "Uzat": `SELECT 1` gönderir ve Karar süresini baştan başlatır. */
   extend?: () => Promise<void>;
   /** Karar beklenirken işleyen Karar süresi. */
@@ -132,6 +142,9 @@ type StatementResult =
  *   transaction geri alınır.
  * - Deneme modu: Transaction modu gibi çalışır, DML'in değiştirdiği satırlar ifade başına önizlenir;
  *   son ifadeden ya da hatadan hemen sonra, karar beklenmeden geri alınır.
+ * - Okuma modu (ADR-0004): ortamdan bağımsız `BEGIN READ ONLY`; son ifadeden sonra karar sorulmaz,
+ *   transaction yalnızca daha fazla satır için açık kalır. Karar süresi, aynı soketteki yeni
+ *   çalıştırma ya da soket kopması onu geri alır; hata alırsa hemen geri alınır.
  * - Autocommit modu: ifadeler transaction'sız, sırayla ve her biri anında kalıcı çalışır; ilk
  *   hatada durulur; karar beklenmez. Soket koparsa çalışan ifade iptal edilir, kalanlar çalışmaz.
  */
@@ -160,7 +173,7 @@ export function createScriptRunner({ store, pools, clock, history, log }: Script
     ws.on('close', () => {
       open = false;
       if (!run) return;
-      if (run.phase === 'karar') return run.decide?.('kopma');
+      if (run.phase === 'karar' || run.phase === 'okuma') return run.decide?.('kopma');
       run.stopping = 'kopma';
       void run.cancel?.();
     });
@@ -168,11 +181,15 @@ export function createScriptRunner({ store, pools, clock, history, log }: Script
     function handle(message: ClientMessage) {
       switch (message.type) {
         case 'run': {
-          if (run) return warn('mesgul', 'Bu sekmede zaten bir çalıştırma var');
+          // Açık Okuma transaction'ı yeni çalıştırmaya yer açar: önce geri alınır, sonra başlanır.
+          const previous = run;
+          if (previous && previous.phase !== 'okuma') return warn('mesgul', 'Bu sekmede zaten bir çalıştırma var');
+          previous?.decide?.('yeniCalistirma');
           expired = false;
           const current: Run = { phase: 'calisiyor', stopping: null, commitAllowed: false, ifadeler: [] };
           run = current;
-          start(current, message)
+          current.done = (previous?.done ?? Promise.resolve())
+            .then(() => start(current, message))
             .catch((err: unknown) => {
               log(`Script çalıştırma hatası: ${String(err)}`);
               send({ type: 'bitti', sonuc: 'hata', mesaj: 'Beklenmeyen bir hata oluştu' });
@@ -214,11 +231,12 @@ export function createScriptRunner({ store, pools, clock, history, log }: Script
      * Script'i istemciye güvenmeden analiz eder ve engelleri sınar; engellenen script (reddedilen
      * ifade, Karışık script, salt okunur prod'da Autocommit) hiçbir yere bağlanmadan biter ve
      * kaydedilmez. Kilit bağlantının kayıtlı ortam etiketinden hesaplanır; istemciden yalnızca
-     * yazma modunun açık olup olmadığı gelir.
+     * yazma modunun açık olup olmadığı gelir. `zorlaTransaction` yalnızca Okuma'yı Transaction'a
+     * çevirir; başka bir modu değiştirmez.
      */
-    async function start(current: Run, { target, script, yazmaModu, deneme }: Extract<ClientMessage, { type: 'run' }>) {
+    async function start(current: Run, { target, script, yazmaModu, deneme, zorlaTransaction }: Extract<ClientMessage, { type: 'run' }>) {
       const statements = splitStatements(script);
-      const analysis = analyzeScript(statements);
+      const analysis = forceTransaction(analyzeScript(statements), zorlaTransaction);
       send({ type: 'analiz', ...analysis });
       const connection = (await store.read()).connections.find((c) => c.id === target.connectionId);
       const lock = writeLockState(connection?.envTag, yazmaModu);
@@ -265,7 +283,7 @@ export function createScriptRunner({ store, pools, clock, history, log }: Script
       };
       try {
         await pools.withClient(connection, database, (client, discard) => {
-          const session = { client, discard, connection, database, lock, deneme };
+          const session = { client, discard, connection, database, lock, deneme, okuma: mode === 'okuma' };
           return mode === 'autocommit' ? inAutocommit(current, session, script, finish) : inTransaction(current, session, script, finish);
         }, { session: true });
       } catch (err) {
@@ -296,8 +314,8 @@ export function createScriptRunner({ store, pools, clock, history, log }: Script
       let expiry: unknown;
       const markBroken = () => {
         broken = true;
-        // Karar beklenirken ölen client'ın kararı beklenmez.
-        if (current.phase === 'karar') current.decide?.('baglantiKoptu');
+        // Karar beklenirken (ya da Okuma açıkken) ölen client'ın kararı beklenmez.
+        if (current.phase === 'karar' || current.phase === 'okuma') current.decide?.('baglantiKoptu');
       };
       // Checkout sırasında pool'un dinleyicisi yok; bağlantı düşerse süreç çökmesin.
       const onError = (err: Error) => {
@@ -338,7 +356,8 @@ export function createScriptRunner({ store, pools, clock, history, log }: Script
         // Sürüm transaction'dan önce okunur: beklenmedik bir hata transaction'ı bozmasın.
         const deneme = session.deneme ? { surum: await serverVersion(client), lockTimeout: denemeLockTimeout(connection.envTag) } : null;
         // Salt okunur prod'da `BEGIN READ ONLY`; yazma modunda ve denemede pool varsayılanı `READ WRITE` ile aşılır.
-        await client.query(beginStatement(session.lock, { deneme: session.deneme }));
+        // Okuma ortamdan bağımsız `READ ONLY`'dir: desen yanılırsa Postgres 25006 ile reddeder.
+        await client.query(session.okuma ? 'BEGIN READ ONLY' : beginStatement(session.lock, { deneme: session.deneme }));
         const sureMs = decisionDurationMs(connection.envTag);
         // Yedek: Node zamanlayıcısı işlemezken (uyku) uzak sunucuda transaction açık kalmasın.
         await client.query(`SET LOCAL idle_in_transaction_session_timeout = ${serverIdleTimeoutMs(sureMs)}`);
@@ -357,6 +376,32 @@ export function createScriptRunner({ store, pools, clock, history, log }: Script
           current.phase = 'bitiyor';
           clean = await rollback(client);
           return await finish({ sonuc: 'deneme' }, 'deneme-rollback');
+        }
+        if (session.okuma) {
+          // Hatalı transaction'dan satır çekilemez; açık tutmanın anlamı yok.
+          if (failed) {
+            current.phase = 'bitiyor';
+            clean = await rollback(client);
+            return await finish({ sonuc: 'okuma' }, 'hata');
+          }
+          current.phase = 'okuma';
+          const decision = await new Promise<Decision>((resolve) => {
+            current.decide = resolve;
+            expiry = clock.setTimeout(() => resolve('sureDoldu'), sureMs);
+            send({ type: 'okumaAcik', kalanMs: sureMs });
+          });
+          current.phase = 'bitiyor';
+          clock.clearTimeout(expiry);
+          await rolledBack(decision);
+          // Node zamanlayıcısı işlemezken (uyku) sunucudaki yedek zaman aşımı oturumu kapatmış olabilir.
+          const mesaj = broken
+            ? timedOut
+              ? READ_SESSION_TIMED_OUT
+              : `${tunnelLost ? 'Tünel' : 'Bağlantı'} koptu; Okuma transaction'ı kapandı.`
+            : decision === 'sureDoldu'
+              ? READ_EXPIRED
+              : undefined;
+          return await finish({ sonuc: 'okuma', ...(mesaj && { mesaj }) }, 'okuma');
         }
 
         current.phase = 'karar';
@@ -537,6 +582,8 @@ interface Session {
   database: string;
   lock: WriteLockState;
   deneme: boolean;
+  /** Okuma modu: `BEGIN READ ONLY`, karar sorulmaz. */
+  okuma: boolean;
 }
 
 /** Geri alındıysa `true`; alınamayan client pool'a dönmemeli. */

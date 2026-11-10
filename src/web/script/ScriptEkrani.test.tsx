@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { useState, type ComponentProps } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiProvider, CONNECTION_LOST } from '../api/client';
+import type { ServerEvent } from '../../core/script-calistirma';
 import { editorCursorLine, editorScript, gutterMarks, setEditorScript } from '../test/eylemler';
 import { connection, createFakeApi, createFakeScriptRuns, renderWithApi } from '../test/sahte-api';
 import { ScriptEkrani } from './ScriptEkrani';
@@ -344,6 +345,80 @@ describe('Script ekranı: Çalıştırma modu', () => {
     const { run } = await startRun('SELECT 1');
     run.emit({ type: 'bitti', sonuc: 'reddedildi', mesaj: 'Satır 1: olmaz' });
     expect(within(decision()).getByText('Satır 1: olmaz')).toBeInTheDocument();
+  });
+});
+
+describe('Script ekranı: Okuma modu', () => {
+  const badge = () => screen.getByTitle('Çalıştırma modu');
+  const tryButton = () => screen.getByRole('button', { name: '⟲ Dene' });
+  const readStatus = () => screen.queryByRole('status', { name: 'Okuma durumu' });
+  const okuma: ServerEvent = { type: 'analiz', mod: 'okuma', transactionDisi: [], reddedilenler: [] };
+
+  it('salt okuyan script’te rozet Okuma; Dene devre dışı ve nedeni yazılı', async () => {
+    setup();
+    setEditorScript('SELECT 1;\nSHOW search_path');
+    await waitFor(() => expect(badge()).toHaveTextContent('Okuma'));
+    expect(badge()).toHaveClass('okuma');
+    expect(tryButton()).toBeDisabled();
+    expect(tryButton()).toHaveAttribute('title', expect.stringContaining('Deneme gerekmez'));
+    expect(runButton()).toBeEnabled();
+    setEditorScript('SELECT 1;\nDELETE FROM t');
+    await waitFor(() => expect(badge()).toHaveTextContent('Transaction'));
+    expect(tryButton()).toBeEnabled();
+  });
+
+  it('Okuma bitince karar kartı yok; yerinde transaction açık ve kalan süre yazan durum satırı', async () => {
+    const { run } = await startRun('SELECT 1');
+    run.emit(okuma, { type: 'started', i: 0 }, { type: 'done', i: 0, rowCount: 1, ms: 1, komut: 'SELECT' }, { type: 'okumaAcik', kalanMs: 30 * DK });
+    expect(screen.queryByRole('region', { name: 'Karar' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Commit' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Rollback' })).not.toBeInTheDocument();
+    expect(readStatus()).toHaveTextContent('transaction açık');
+    expect(within(readStatus()!).getByRole('timer')).toHaveTextContent('30:00');
+    // Script düzenlenebilir ve yeniden çalıştırılabilir.
+    expect(runButton()).toBeEnabled();
+  });
+
+  it('yeniden çalıştırma önceki çalıştırmayı kapatır (Okuma transaction’ı geri alınır)', async () => {
+    const { user, run } = await startRun('SELECT 1');
+    run.emit(okuma, { type: 'okumaAcik', kalanMs: 30 * DK });
+    await user.click(runButton());
+    expect(run.closed).toBe(true);
+  });
+
+  it('transaction kapanınca durum satırı bunu söyler', async () => {
+    const { run } = await startRun('SELECT 1');
+    run.emit(okuma, { type: 'okumaAcik', kalanMs: 30 * DK }, { type: 'bitti', sonuc: 'okuma', mesaj: "Süre doldu; Okuma transaction'ı kapandı" });
+    expect(screen.queryByRole('region', { name: 'Karar' })).not.toBeInTheDocument();
+    expect(readStatus()).toHaveTextContent("Süre doldu; Okuma transaction'ı kapandı");
+  });
+
+  it('25006 hatasında "Transaction modunda çalıştır" aynı script’i zorlaTransaction ile yeniden çalıştırır', async () => {
+    const { user, fake, run } = await startRun("SELECT nextval('s')");
+    expect(run.zorlaTransaction).toBeUndefined();
+    run.emit(
+      okuma,
+      { type: 'error', i: 0, ms: 1, sqlstate: '25006', mesaj: 'cannot execute nextval() in a read-only transaction', satir: 1, sutun: 1, bas: 0, bit: 19 },
+      { type: 'bitti', sonuc: 'okuma' },
+    );
+    // Editör sonradan değişse de hata alan script yeniden çalışır.
+    setEditorScript("SELECT nextval('s') -- düzenlendi");
+    await user.click(within(cards()[0]!).getByRole('button', { name: 'Transaction modunda çalıştır' }));
+    expect(fake.runs).toHaveLength(2);
+    expect(fake.last()).toMatchObject({ script: "SELECT nextval('s')", zorlaTransaction: true, deneme: false });
+    expect(run.closed).toBe(true);
+    // Sunucu Transaction modu bildirince karar kartı gelir.
+    fake.last().emit({ ...okuma, mod: 'transaction' }, { type: 'kararBekleniyor', commitEdilebilir: true, kalanMs: 30 * DK });
+    expect(within(decision()).getByRole('button', { name: 'Commit' })).toBeInTheDocument();
+  });
+
+  it('Transaction modunda 25006 (salt okunur prod) düğme getirmez', async () => {
+    const { run } = await startRun('INSERT INTO t VALUES (1)');
+    run.emit(
+      { ...okuma, mod: 'transaction' },
+      { type: 'error', i: 0, ms: 1, sqlstate: '25006', mesaj: 'read-only', satir: 1, sutun: 1, bas: 0, bit: 6 },
+    );
+    expect(screen.queryByRole('button', { name: 'Transaction modunda çalıştır' })).not.toBeInTheDocument();
   });
 });
 

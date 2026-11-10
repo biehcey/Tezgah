@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { analyzeScript, blockReasons, isNonTransactional, rejectionOf } from './calistirma-modu';
+import { analyzeScript, blockReasons, forceTransaction, isNonTransactional, rejectionOf } from './calistirma-modu';
 import { splitStatements } from './ifade-bolme';
 
 const only = (sql: string) => {
@@ -129,6 +129,7 @@ describe('analyzeScript: Çalıştırma modu', () => {
   const analyze = (sql: string) => analyzeScript(splitStatements(sql));
 
   it.each([
+    // Boş script Okuma değildir.
     ['boş script', '', 'transaction'],
     ['yalnızca transaction içi ifadeler', 'INSERT INTO t VALUES (1); SELECT 1', 'transaction'],
     ['tek başına ANALYZE', 'ANALYZE t', 'transaction'],
@@ -149,6 +150,60 @@ describe('analyzeScript: Çalıştırma modu', () => {
         { i: 3, neden: 'meta' },
       ],
     });
+  });
+});
+
+describe('analyzeScript: Okuma modu', () => {
+  const mod = (sql: string) => analyzeScript(splitStatements(sql)).mod;
+
+  it.each([
+    'SELECT 1',
+    'select * from t where a = 1',
+    'TABLE t',
+    'VALUES (1), (2)',
+    'SHOW search_path',
+    'EXPLAIN SELECT * FROM t',
+    'EXPLAIN (VERBOSE, COSTS OFF) SELECT 1',
+    // ANALYZE'sız EXPLAIN DML'i çalıştırmaz.
+    'EXPLAIN DELETE FROM t',
+    'WITH x AS (SELECT 1) SELECT * FROM x',
+    "SELECT 'INSERT INTO t'",
+    'SELECT substring(a FROM 1 FOR 2) FROM t',
+    'SELECT 1; TABLE t; SHOW work_mem',
+  ])('Okuma: %s', (sql) => {
+    expect(mod(sql)).toBe('okuma');
+  });
+
+  it.each([
+    ["ANALYZE'lı EXPLAIN", 'EXPLAIN ANALYZE DELETE FROM t'],
+    ['ANALYSE yazımı', 'EXPLAIN ANALYSE SELECT 1'],
+    ['seçenekli ANALYZE', 'EXPLAIN (ANALYZE, BUFFERS) SELECT 1'],
+    ["DML'li WITH", 'WITH x AS (DELETE FROM t RETURNING *) SELECT * FROM x'],
+    ['WITH içinde INSERT', 'WITH x AS (INSERT INTO t VALUES (1) RETURNING *) SELECT 1'],
+    ['WITH içinde UPDATE', 'WITH x AS (SELECT 1) UPDATE t SET a = 1'],
+    ['WITH içinde MERGE', 'WITH s AS (SELECT 1 AS a) MERGE INTO t USING s ON true WHEN MATCHED THEN DELETE'],
+    ['SELECT … INTO', 'SELECT * INTO yeni FROM t'],
+    ['FOR UPDATE', 'SELECT * FROM t FOR UPDATE'],
+    ['FOR SHARE', 'SELECT * FROM t FOR SHARE'],
+    ['FOR NO KEY UPDATE', 'SELECT * FROM t FOR NO KEY UPDATE'],
+    ['FOR KEY SHARE', 'SELECT * FROM t FOR KEY SHARE'],
+    ['WITH … FOR UPDATE', 'WITH x AS (SELECT 1) SELECT * FROM t FOR UPDATE'],
+    ['okuma + yazma', 'SELECT 1; INSERT INTO t VALUES (1)'],
+    ['okuma + SET', 'SET search_path = app; SELECT 1'],
+    ['okuma + reddedilen', 'SELECT 1; BEGIN'],
+  ])('Okuma değil: %s', (_, sql) => {
+    expect(mod(sql)).toBe('transaction');
+  });
+
+  it('zorlaTransaction yalnızca Okuma’yı Transaction’a çevirir', () => {
+    const analyze = (sql: string) => analyzeScript(splitStatements(sql));
+    expect(forceTransaction(analyze('SELECT 1'), true).mod).toBe('transaction');
+    expect(forceTransaction(analyze('SELECT 1'), false).mod).toBe('okuma');
+    expect(forceTransaction(analyze('VACUUM t'), true).mod).toBe('autocommit');
+  });
+
+  it('okuma + transaction dışı Karışık’tır', () => {
+    expect(mod('SELECT 1; VACUUM t')).toBe('karisik');
   });
 });
 

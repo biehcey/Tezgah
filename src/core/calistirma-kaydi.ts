@@ -10,8 +10,20 @@ import type { WriteLockState } from './yazma-kilidi';
 /** Satır biçiminin sürümü; okurken daha yeni sürümlü satırlar atlanır. */
 export const RECORD_VERSION = 1;
 
-/** Kayıttaki sonuç; arayüzün `bitti` olayındaki sonuçtan ayrıdır (nedeni de söyler). */
-export type RecordResult = 'commit' | 'rollback' | 'deneme-rollback' | 'karar-suresi-doldu' | 'kopma-rollback' | 'hata' | 'iptal';
+/**
+ * Kayıttaki sonuç; arayüzün `bitti` olayındaki sonuçtan ayrıdır (nedeni de söyler). `okuma`: Okuma
+ * script'i hatasız bitti, transaction'ı rollback ile kapandı. Yeni değerler `v`'yi değiştirmez;
+ * eski okuyucular bilinmeyen değeri yalnızca gösterir.
+ */
+export type RecordResult =
+  | 'commit'
+  | 'rollback'
+  | 'deneme-rollback'
+  | 'karar-suresi-doldu'
+  | 'kopma-rollback'
+  | 'hata'
+  | 'iptal'
+  | 'okuma';
 
 /** Çalıştırma anındaki hedef; bağlantı sonradan değişse ya da silinse de kayıt okunabilir kalır. */
 export interface TargetSnapshot {
@@ -30,7 +42,7 @@ export interface StartedLine {
   zaman: string;
   script: string;
   hedef: TargetSnapshot;
-  mod: 'transaction' | 'autocommit';
+  mod: 'transaction' | 'autocommit' | 'okuma';
   deneme: boolean;
   yazmaKilidi: WriteLockState;
 }

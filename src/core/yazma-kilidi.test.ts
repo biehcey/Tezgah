@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { splitStatements } from './ifade-bolme';
 import {
   DENEME_NON_TRANSACTIONAL_MESSAGE,
+  DENEME_READ_MESSAGE,
   READ_ONLY_AUTOCOMMIT_MESSAGE,
   beginStatement,
   runBlockReasons,
@@ -65,6 +66,10 @@ describe('runBlockReasons: çalıştırma engelleri', () => {
         { satir: null, mesaj: expect.stringContaining('Karışık script') },
         { satir: 2, mesaj: DENEME_NON_TRANSACTIONAL_MESSAGE },
       ]);
+    });
+
+    it('Okuma script’i denenmez: bir şey değiştirmez', () => {
+      expect(dene('SELECT 1')).toEqual([{ satir: null, mesaj: DENEME_READ_MESSAGE }]);
     });
 
     it('Transaction script’i salt okunur prod’da da denenebilir', () => {

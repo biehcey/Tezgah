@@ -9,6 +9,9 @@ describe('parseClientMessage', () => {
     ['deneme metin', { type: 'run', target: { connectionId: 'b1', database: 'app' }, script: 'SELECT 1', deneme: 'evet' }, { type: 'run', target: { connectionId: 'b1', database: 'app' }, script: 'SELECT 1', yazmaModu: false, deneme: false }],
     // Yalnızca açıkça `true` yazma modudur; belirsiz değer salt okunur kalır.
     ['yazmaModu metin', { type: 'run', target: { connectionId: 'b1', database: 'app' }, script: 'SELECT 1', yazmaModu: 'true' }, { type: 'run', target: { connectionId: 'b1', database: 'app' }, script: 'SELECT 1', yazmaModu: false, deneme: false }],
+    // Yalnızca açıkça `true` Transaction modunu zorlar; yoksa alan da yoktur.
+    ['zorlaTransaction', { type: 'run', target: { connectionId: 'b1', database: 'app' }, script: 'SELECT 1', zorlaTransaction: true }, { type: 'run', target: { connectionId: 'b1', database: 'app' }, script: 'SELECT 1', yazmaModu: false, deneme: false, zorlaTransaction: true }],
+    ['zorlaTransaction metin', { type: 'run', target: { connectionId: 'b1', database: 'app' }, script: 'SELECT 1', zorlaTransaction: 'true' }, { type: 'run', target: { connectionId: 'b1', database: 'app' }, script: 'SELECT 1', yazmaModu: false, deneme: false }],
     ['commit', { type: 'commit' }, { type: 'commit' }],
     ['rollback', { type: 'rollback' }, { type: 'rollback' }],
     ['iptal', { type: 'iptal' }, { type: 'iptal' }],
@@ -135,10 +138,35 @@ describe('çalıştırma görünümü: Çalıştırma modu', () => {
   });
 });
 
+describe('çalıştırma görünümü: Okuma modu', () => {
+  const okuma: ServerEvent = { type: 'analiz', mod: 'okuma', transactionDisi: [], reddedilenler: [] };
+  const error = (sqlstate: string): ServerEvent => ({ type: 'error', i: 0, ms: 1, sqlstate, mesaj: 'x', satir: 1, sutun: 1, bas: 0, bit: 1 });
+
+  it('okumaAcik Okuma evresine geçirir ve kalan Karar süresini taşır; karar evresi değildir', () => {
+    const view = play(okuma, { type: 'okumaAcik', kalanMs: 1000 });
+    expect(view).toMatchObject({ evre: 'okuma', kararSuresi: { kalanMs: 1000 } });
+  });
+
+  it('Okuma transaction’ı kapanınca sonuç okuma', () => {
+    expect(play(okuma, { type: 'okumaAcik', kalanMs: 1 }, { type: 'bitti', sonuc: 'okuma' })).toMatchObject({ evre: 'bitti', sonuc: 'okuma' });
+  });
+
+  it('Okuma’da 25006 hatası Transaction modunda çalıştırmayı önerir', () => {
+    expect(play(okuma, error('25006')).ifadeler[0]!.hata?.transactionOnerisi).toBe(true);
+  });
+
+  it('Transaction modunda 25006 (salt okunur prod) ve Okuma’da başka hata öneri getirmez', () => {
+    expect(play({ ...okuma, mod: 'transaction' }, error('25006')).ifadeler[0]!.hata?.transactionOnerisi).toBeUndefined();
+    expect(play(okuma, error('42P01')).ifadeler[0]!.hata?.transactionOnerisi).toBeUndefined();
+  });
+});
+
 describe('hedef kilidi', () => {
   it('çalıştırma yokken ya da bitmişken hedef değiştirilebilir', () => {
     expect(targetLock(null)).toBeNull();
     expect(targetLock(play({ type: 'bitti', sonuc: 'commit' }))).toBeNull();
+    // Okuma transaction'ı yazmaz; hedef değişirse yeni çalıştırma onu kapatır.
+    expect(targetLock(play({ type: 'okumaAcik', kalanMs: 1 }))).toBeNull();
   });
 
   it('karar beklenirken ve script çalışırken hedef değiştirilemez; neden döner', () => {

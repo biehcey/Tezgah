@@ -3,7 +3,7 @@
  * kurduğu çalıştırma görünümü. Olaylar ifade indeksiyle gelir; indeksler `splitStatements`'in
  * aynı betik için verdiği sıradır.
  */
-import { ACTIVE_SQL_TRANSACTION, NON_TRANSACTIONAL_FALLBACK, type ScriptAnalysis } from './calistirma-modu';
+import { ACTIVE_SQL_TRANSACTION, NON_TRANSACTIONAL_FALLBACK, READ_ONLY_SQL_TRANSACTION, type ScriptAnalysis } from './calistirma-modu';
 import type { FallbackReason } from './deneme';
 import type { RowChanges, SchemaChange } from './deneme-farki';
 import { splitStatements, positionOf, type Statement } from './ifade-bolme';
@@ -17,9 +17,10 @@ export const PREVIEW_ROWS = 100;
 export type ClientMessage =
   /**
    * `yazmaModu`: prod hedefte yazma kilidi açık; prod olmayan hedefte etkisizdir. `deneme`: Deneme
-   * modu; transaction sonunda karar beklenmeden her zaman geri alınır.
+   * modu; transaction sonunda karar beklenmeden her zaman geri alınır. `zorlaTransaction`: içerik
+   * Okuma çıksa da Transaction modunda çalıştır (25006 sonrası); yalnızca bu yönde etkilidir.
    */
-  | { type: 'run'; target: Target; script: string; yazmaModu: boolean; deneme: boolean }
+  | { type: 'run'; target: Target; script: string; yazmaModu: boolean; deneme: boolean; zorlaTransaction?: boolean }
   | { type: 'commit' }
   | { type: 'rollback' }
   /** Karar süresini baştan başlatır. */
@@ -41,6 +42,7 @@ export function parseClientMessage(raw: unknown): ClientMessage | null {
     yazmaModu: m.yazmaModu === true,
     // Belirsiz değer Deneme sayılmaz; normal çalıştırma da karar bekler, kendiliğinden commit etmez.
     deneme: m.deneme === true,
+    ...(m.zorlaTransaction === true && { zorlaTransaction: true }),
   };
 }
 
@@ -65,8 +67,10 @@ export interface DenemeOutput {
  * başlayamadı, bağlantı koptu ya da commit başarısız oldu. `autocommit`: Autocommit script'i bitti
  * ya da hatada durdu (ayrıntı `ozet`'te). `reddedildi`: script analizden geçmedi, hiçbir şey
  * çalışmadı. `deneme`: Deneme modu bitti ya da hatada durdu; transaction her durumda geri alındı.
+ * `okuma`: Okuma script'inin transaction'ı kapandı (yeniden çalıştırma, kopma, Karar süresi ya da
+ * hata); yazılan bir şey yoktu.
  */
-export type RunResult = 'commit' | 'rollback' | 'sureDoldu' | 'iptal' | 'hata' | 'autocommit' | 'reddedildi' | 'deneme';
+export type RunResult = 'commit' | 'rollback' | 'sureDoldu' | 'iptal' | 'hata' | 'autocommit' | 'reddedildi' | 'deneme' | 'okuma';
 
 /** Autocommit çalıştırmasının sonu: uygulananlar kalıcıdır. */
 export interface AutocommitSummary {
@@ -103,6 +107,11 @@ export type ServerEvent =
   | { type: 'error'; i: number; sqlstate: string | null; mesaj: string; satir: number; sutun: number; bas: number; bit: number; ms: number }
   /** Script bitti, transaction açık; hatadan sonra commit edilemez. `kalanMs`: Karar süresi. */
   | { type: 'kararBekleniyor'; commitEdilebilir: boolean; kalanMs: number }
+  /**
+   * Okuma script'i bitti; transaction yalnızca daha fazla satır çekilebilsin diye açık, karar
+   * sorulmaz. `kalanMs` dolunca sunucu geri alır.
+   */
+  | { type: 'okumaAcik'; kalanMs: number }
   /** "Uzat" sunucuda işlendi; Karar süresi baştan başladı. */
   | { type: 'uzatildi'; kalanMs: number }
   /**
@@ -139,10 +148,13 @@ export interface StatementView extends DenemeOutput {
     bit: number;
     /** Hatanın nasıl giderileceği; ör. desende olmayan transaction dışı komut (`25001`). */
     ipucu?: string;
+    /** Okuma deseni yanıldı (`25006`): Transaction modunda yeniden çalıştırma önerilir. */
+    transactionOnerisi?: true;
   };
 }
 
-export type RunPhase = 'calisiyor' | 'karar' | 'bitti';
+/** `okuma`: Okuma script'i bitti, transaction daha fazla satır için açık; karar beklenmez. */
+export type RunPhase = 'calisiyor' | 'karar' | 'okuma' | 'bitti';
 
 export interface RunView {
   script: string;
@@ -214,11 +226,19 @@ export function applyEvent(view: RunView, event: ServerEvent): RunView {
     case 'error': {
       const { type: _t, i, ms, ...hata } = event;
       const ipucu = hata.sqlstate === ACTIVE_SQL_TRANSACTION ? NON_TRANSACTIONAL_FALLBACK : undefined;
-      const next = update(i, { durum: 'hatali', ms, hata: ipucu ? { ...hata, ipucu } : hata });
+      // Transaction modunda 25006 Yazma kilidinindir (salt okunur prod); öneri yalnızca Okuma'da.
+      const oneri = view.mod === 'okuma' && hata.sqlstate === READ_ONLY_SQL_TRANSACTION;
+      const next = update(i, {
+        durum: 'hatali',
+        ms,
+        hata: { ...hata, ...(ipucu && { ipucu }), ...(oneri && { transactionOnerisi: true as const }) },
+      });
       return { ...next, ifadeler: next.ifadeler.map((s) => (s.durum === 'sirada' ? { ...s, durum: 'calistirilmadi' } : s)) };
     }
     case 'kararBekleniyor':
       return { ...view, evre: 'karar', commitEdilebilir: event.commitEdilebilir, kararSuresi: nextTimer(view, event.kalanMs) };
+    case 'okumaAcik':
+      return { ...view, evre: 'okuma', kararSuresi: nextTimer(view, event.kalanMs) };
     case 'uzatildi':
       return { ...view, bekleyenIstek: null, kararSuresi: nextTimer(view, event.kalanMs) };
     case 'bitti':

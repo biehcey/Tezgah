@@ -41,12 +41,15 @@ export const READ_ONLY_AUTOCOMMIT_MESSAGE =
 
 export const DENEME_NON_TRANSACTIONAL_MESSAGE = 'Transaction dışı komut Deneme modunda çalıştırılamaz; geri alınamaz.';
 
+export const DENEME_READ_MESSAGE = "Okuma script'i bir şey değiştirmez; Deneme gerekmez.";
+
 /**
  * Script'in bu yazma kilidiyle neden çalıştırılamadığı: önce analiz engelleri (reddedilen
  * ifadeler, Karışık script), sonra kilit. Salt okunur prod'da Autocommit script'i (her ifadesi
  * anında kalıcıdır) sunucuya hiç gitmeden reddedilir. Deneme modunda (wayfinder 15) transaction
- * dışı her ifade engeldir: geri alınamaz, atlamak da sonraki ifadelerin sonucunu yanıltır. Boşsa
- * script çalıştırılabilir; sunucu da arayüz de aynı metni gösterir.
+ * dışı her ifade engeldir: geri alınamaz, atlamak da sonraki ifadelerin sonucunu yanıltır. Okuma
+ * script'i denenmez (ADR-0004). Boşsa script çalıştırılabilir; sunucu da arayüz de aynı metni
+ * gösterir.
  */
 export function runBlockReasons(
   script: string,
@@ -56,6 +59,7 @@ export function runBlockReasons(
 ): { satir: number | null; mesaj: string }[] {
   const reasons = blockReasons(script, statements, analysis);
   if (deneme) {
+    if (analysis.mod === 'okuma') reasons.push({ satir: null, mesaj: DENEME_READ_MESSAGE });
     for (const i of analysis.transactionDisi) {
       reasons.push({ satir: positionOf(script, statements[i]!.start).satir, mesaj: DENEME_NON_TRANSACTIONAL_MESSAGE });
     }

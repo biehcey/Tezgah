@@ -81,11 +81,11 @@ _Avoid_: Fallback, basit önizleme
 _Avoid_: Salt okunur mod, read-only toggle, yazma izni
 
 **Karar süresi**:
-Transaction modunda script bittikten sonra commit veya rollback kararı için tanınan süre; dolunca transaction geri alınır.
+Transaction modunda script bittikten sonra commit veya rollback kararı için tanınan süre; dolunca transaction geri alınır. Okuma modunda aynı süre, karar sorulmadan açık kalan Okuma transaction'ının ömrüdür.
 _Avoid_: Zaman aşımı, timeout
 
 **Açık oturum**:
-Bir sekmenin hedefte client tutan çalıştırması: script çalışıyor ya da karar bekliyor. Hedef başına en fazla 5 açık oturum olabilir; sınırı aşan çalıştırma beklemeden reddedilir. Katalog okuma, iptal gibi kısa süreli sorgular açık oturum sayılmaz. Hedefin eş anlamlısı değildir.
+Bir sekmenin hedefte client tutan çalıştırması: script çalışıyor, karar bekliyor ya da Okuma transaction'ı açık. Hedef başına en fazla 5 açık oturum olabilir; sınırı aşan çalıştırma beklemeden reddedilir. Katalog okuma, iptal gibi kısa süreli sorgular açık oturum sayılmaz. Hedefin eş anlamlısı değildir.
 _Avoid_: Bağlantı, client, session
 
 **Çalıştırma kaydı**:

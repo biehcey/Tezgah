@@ -109,7 +109,7 @@ describe('Çalıştırma kaydı', () => {
   });
 
   it('Karar süresi dolunca karar-suresi-doldu', async () => {
-    run(await createConnection(), 'SELECT 1');
+    run(await createConnection(), 'UPDATE t SET a = 1');
     await ws.waitFor('kararBekleniyor');
     clock.advance(30 * DK);
     await ws.waitFor('bitti');
@@ -117,7 +117,7 @@ describe('Çalıştırma kaydı', () => {
   });
 
   it('karar beklenirken soket koparsa kopma-rollback', async () => {
-    run(await createConnection(), 'SELECT 1');
+    run(await createConnection(), 'UPDATE t SET a = 1');
     await ws.waitFor('kararBekleniyor');
     ws.terminate();
     expect((await records()).map((r) => r.sonuc)).toEqual(['kopma-rollback']);
@@ -147,7 +147,7 @@ describe('Çalıştırma kaydı', () => {
   });
 
   it('prod hedefte yazma kilidi ve ortam etiketi anlık kopyada', async () => {
-    run(await createConnection({ name: 'Canlı', envTag: 'prod' }), 'SELECT 1');
+    run(await createConnection({ name: 'Canlı', envTag: 'prod' }), 'UPDATE t SET a = 1');
     await ws.waitFor('kararBekleniyor');
     ws.send({ type: 'rollback' });
     await ws.waitFor('bitti');
@@ -166,7 +166,7 @@ describe('Çalıştırma kaydı', () => {
     // `history` bir dosya: dizin oluşturulamaz.
     await mkdir(t.configDir, { recursive: true });
     await writeFile(historyDir(), '');
-    run(id, 'SELECT 1');
+    run(id, 'UPDATE t SET a = 1');
     expect(await ws.waitFor('uyari')).toMatchObject({ tur: 'kayitYazilamadi', mesaj: 'Çalıştırma kaydı yazılamadı' });
     await ws.waitFor('kararBekleniyor');
     ws.send({ type: 'commit' });

@@ -133,7 +133,7 @@ describe('Deneme modu: sahte Postgres', () => {
   });
 
   it('bittikten sonra commit isteği reddedilir', async () => {
-    dene(id, 'postgres', 'SELECT 1');
+    dene(id, 'postgres', 'UPDATE t SET a = 1');
     await ws.waitFor('bitti');
     ws.send({ type: 'commit' });
     expect(await ws.waitFor('uyari')).toMatchObject({ tur: 'gecersizIstek' });
@@ -167,7 +167,7 @@ describe('Deneme modu: sahte Postgres', () => {
     const transactionStart = () => fake.queries.filter((q) => q.startsWith('BEGIN') || q.startsWith('SET'));
 
     it('salt okunur prod’da kilitten bağımsız BEGIN READ WRITE ve 3 sn lock_timeout; pool ayarına dokunulmaz', async () => {
-      dene(await prodConnection(), 'postgres', 'SELECT 1');
+      dene(await prodConnection(), 'postgres', 'UPDATE t SET a = 1');
       expect(await ws.waitFor('bitti')).toEqual({ type: 'bitti', sonuc: 'deneme' });
       expect(transactionStart()).toEqual([
         'BEGIN READ WRITE',
@@ -178,7 +178,7 @@ describe('Deneme modu: sahte Postgres', () => {
     });
 
     it('prod dışında lock_timeout uygulanmaz', async () => {
-      dene(await prodConnection('staging'), 'postgres', 'SELECT 1');
+      dene(await prodConnection('staging'), 'postgres', 'UPDATE t SET a = 1');
       await ws.waitFor('bitti');
       expect(transactionStart()).toEqual(['BEGIN READ WRITE', expect.stringMatching(/^SET LOCAL idle_in_transaction_session_timeout = /)]);
     });

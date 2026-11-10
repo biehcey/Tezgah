@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { isProd, type Connection } from '../../core/baglanti';
-import { analyzeScript, type RunMode, type ScriptAnalysis } from '../../core/calistirma-modu';
+import { analyzeScript, forceTransaction, type RunMode, type ScriptAnalysis } from '../../core/calistirma-modu';
 import { DML_VERBS, FALLBACK_NOTES } from '../../core/deneme';
 import { mergeChanges, type DiffRow, type SchemaLine, type TableDiff } from '../../core/deneme-farki';
 import { positionOf, splitStatements, type Statement } from '../../core/ifade-bolme';
@@ -62,7 +62,7 @@ const AUTOCOMMIT_CONNECTION_LOST: ServerEvent = {
 /** Yazarken analiz bu kadar duraklamadan sonra yenilenir. */
 const ANALYSIS_DELAY_MS = 200;
 
-const MODE_LABELS: Record<RunMode, string> = { transaction: 'Transaction', autocommit: 'Autocommit', karisik: 'Karışık' };
+const MODE_LABELS: Record<RunMode, string> = { transaction: 'Transaction', autocommit: 'Autocommit', okuma: 'Okuma', karisik: 'Karışık' };
 
 type Tab = 'degisiklikler' | 'log';
 const TAB_LABELS: Record<Tab, string> = { degisiklikler: 'Değişiklikler', log: 'Log' };
@@ -140,7 +140,8 @@ export function ScriptEkrani({
   useEffect(() => () => onTargetLockChange?.(null), [onTargetLockChange]);
 
   const running = run?.evre === 'calisiyor';
-  const busy = run !== null && run.evre !== 'bitti';
+  /** Okuma transaction'ı açıkken de script düzenlenir ve yeniden çalıştırılır; eskisi geri alınır. */
+  const busy = run?.evre === 'calisiyor' || run?.evre === 'karar';
   const hasStatements = useMemo(() => splitStatements(script).length > 0, [script]);
   /** Analiz edilen metin; yazarken `script`'in gerisinde kalır. */
   const analyzed = useDebounced(script, ANALYSIS_DELAY_MS);
@@ -163,23 +164,29 @@ export function ScriptEkrani({
   const tabs: Tab[] = run?.deneme ? ['degisiklikler', 'log'] : ['log'];
   const shownTab = run?.deneme ? tab : 'log';
 
-  function start(deneme: boolean) {
+  /**
+   * `zorlaTransaction`: Okuma deseni yanıldı (25006); hata alan script (`metin`, editör sonradan
+   * değişmiş olabilir) karar kartıyla Transaction modunda çalışır. Sunucu yine kendi analizini yapar.
+   */
+  function start(deneme: boolean, { zorlaTransaction = false, metin = script }: { zorlaTransaction?: boolean; metin?: string } = {}) {
     if (!targetRef || busy) return;
     // Analiz yazmanın gerisinde kalabilir; çalıştırmadan önce güncel metinle yeniden bakılır.
-    const currentStatements = splitStatements(script);
-    const current = analyzeScript(currentStatements);
-    if (runBlockReasons(script, currentStatements, lock, { analysis: current, deneme }).length > 0) return;
+    const currentStatements = splitStatements(metin);
+    const current = forceTransaction(analyzeScript(currentStatements), zorlaTransaction);
+    if (runBlockReasons(metin, currentStatements, lock, { analysis: current, deneme }).length > 0) return;
+    // Açık Okuma transaction'ı da bu soketle birlikte geri alınır.
     handle.current?.close();
-    setRun(startRunView(script, { deneme }));
+    setRun(startRunView(metin, { deneme }));
     setRunOnProd(prod);
     setTab(deneme ? 'degisiklikler' : 'log');
     setDeadline(null);
     setPoolFullTabs([]);
-    handle.current = api.runScript({ target: targetRef, script, yazmaModu: writeMode, deneme }, (received) => {
+    const runRequest = { target: targetRef, script: metin, yazmaModu: writeMode, deneme, ...(zorlaTransaction && { zorlaTransaction }) };
+    handle.current = api.runScript(runRequest, (received) => {
       // Autocommit'te geri alınacak transaction yok; sunucu çalışan ifadeyi iptal eder.
       const event = received === CONNECTION_LOST && current.mod === 'autocommit' ? AUTOCOMMIT_CONNECTION_LOST : received;
       setRun((current) => (current ? applyEvent(current, event) : current));
-      if (event.type === 'kararBekleniyor' || event.type === 'uzatildi') setDeadline(startDecision(event.kalanMs, Date.now()));
+      if (event.type === 'kararBekleniyor' || event.type === 'uzatildi' || event.type === 'okumaAcik') setDeadline(startDecision(event.kalanMs, Date.now()));
       if (event.type === 'bitti' && event.kod === 'havuzDolu') setPoolFullTabs(sessionTabsRef.current);
     });
   }
@@ -202,6 +209,8 @@ export function ScriptEkrani({
   }, [run, script, analyzed, statements, analysis]);
 
   const goToLine = useCallback((line: number) => editor.current?.goToLine(line), []);
+  /** Okuma'da karar kartı yok; yerinde ince bir durum satırı durur (ADR-0004). */
+  const reading = run?.evre === 'okuma' || run?.sonuc === 'okuma';
 
   return (
     <div className="script-ekrani" hidden={hidden}>
@@ -303,13 +312,17 @@ export function ScriptEkrani({
           </div>
         </div>
         <aside aria-label="Çalıştırma" className="calistirma-sutunu">
-          <KararKarti
-            run={run}
-            deadline={run?.evre === 'karar' ? deadline : null}
-            onRequest={request}
-            poolFullTabs={poolFullTabs}
-            onGoToTab={onGoToTab}
-          />
+          {run && reading ? (
+            <OkumaDurumu run={run} deadline={run.evre === 'okuma' ? deadline : null} />
+          ) : (
+            <KararKarti
+              run={run}
+              deadline={run?.evre === 'karar' ? deadline : null}
+              onRequest={request}
+              poolFullTabs={poolFullTabs}
+              onGoToTab={onGoToTab}
+            />
+          )}
           <div role="tablist" className="sekmeler">
             {tabs.map((t) => (
               <button
@@ -333,7 +346,12 @@ export function ScriptEkrani({
               {run ? (
                 <ol className="ifade-kartlari">
                   {run.ifadeler.map((s) => (
-                    <IfadeKarti key={s.i} statement={s} onGoTo={goToLine} />
+                    <IfadeKarti
+                      key={s.i}
+                      statement={s}
+                      onGoTo={goToLine}
+                      onForceTransaction={busy ? undefined : () => start(false, { zorlaTransaction: true, metin: run.script })}
+                    />
                   ))}
                 </ol>
               ) : (
@@ -465,6 +483,36 @@ function KararKarti({
           ⚠ {run.kayitUyarisi}
         </p>
       )}
+    </section>
+  );
+}
+
+/**
+ * Okuma modunun durum satırı: karar sorulmaz; transaction yalnızca daha fazla satır için açıktır ve
+ * Karar süresi dolunca, yeniden çalıştırınca ya da sekme kapanınca geri alınır.
+ */
+function OkumaDurumu({ run, deadline }: { run: RunView; deadline: DecisionTimer | null }) {
+  const remaining = useCountdown(deadline);
+  return (
+    <section role="status" aria-label="Okuma durumu" className="okuma-durumu kucuk">
+      {run.evre === 'okuma' ? (
+        <span>
+          Okuma · transaction açık
+          {remaining && (
+            <>
+              {' '}
+              · kalan{' '}
+              <span role="timer" aria-label="Kalan süre">
+                {formatRemaining(remaining.kalanMs)}
+              </span>
+            </>
+          )}
+        </span>
+      ) : (
+        <span>{resultText(run)}</span>
+      )}
+      {run.uyari && <span className="uyari">{run.uyari}</span>}
+      {run.kayitUyarisi && <span className="uyari">⚠ {run.kayitUyarisi}</span>}
     </section>
   );
 }
@@ -613,6 +661,9 @@ function resultText(run: RunView): string {
       return run.ozet ? `İptal edildi · ${formatSummary(run.ozet)}` : 'İptal edildi; transaction geri alındı';
     case 'sureDoldu':
       return run.mesaj ?? 'Süre doldu; transaction geri alındı';
+    case 'okuma':
+      if (run.ifadeler.some((s) => s.hata)) return 'Okuma hatada durdu; transaction kapandı';
+      return run.mesaj ?? "Okuma transaction'ı kapandı";
     default: {
       const mesaj = run.mesaj ?? 'Çalıştırma başarısız';
       return run.ozet ? `${mesaj} · ${formatSummary(run.ozet)}` : mesaj;
@@ -620,7 +671,16 @@ function resultText(run: RunView): string {
   }
 }
 
-function IfadeKarti({ statement: s, onGoTo }: { statement: StatementView; onGoTo: (line: number) => void }) {
+function IfadeKarti({
+  statement: s,
+  onGoTo,
+  onForceTransaction,
+}: {
+  statement: StatementView;
+  onGoTo: (line: number) => void;
+  /** 25006 sonrası "Transaction modunda çalıştır"; çalıştırma sürerken yok. */
+  onForceTransaction?: () => void;
+}) {
   return (
     <li className={`ifade-karti ${s.durum}`}>
       <button type="button" className="ifade-karti-basligi" onClick={() => onGoTo(s.satir)}>
@@ -631,12 +691,12 @@ function IfadeKarti({ statement: s, onGoTo }: { statement: StatementView; onGoTo
         <span className="soluk">satır {s.satir}</span>
         {s.ms !== undefined && <span className="soluk sure">{s.ms} ms</span>}
       </button>
-      <StatementDetail statement={s} />
+      <StatementDetail statement={s} onForceTransaction={onForceTransaction} />
     </li>
   );
 }
 
-function StatementDetail({ statement: s }: { statement: StatementView }) {
+function StatementDetail({ statement: s, onForceTransaction }: { statement: StatementView; onForceTransaction?: () => void }) {
   switch (s.durum) {
     case 'sirada':
     case 'calisiyor':
@@ -649,6 +709,14 @@ function StatementDetail({ statement: s }: { statement: StatementView }) {
             {s.hata?.sqlstate && <code>{s.hata.sqlstate}</code>} {s.hata?.mesaj}
           </p>
           {s.hata?.ipucu && <p className="ifade-ipucu kucuk">{s.hata.ipucu}</p>}
+          {s.hata?.transactionOnerisi && (
+            <p className="ifade-ipucu kucuk">
+              Okuma sanılan ifade yazmaya çalıştı.{' '}
+              <button type="button" onClick={onForceTransaction} disabled={!onForceTransaction}>
+                Transaction modunda çalıştır
+              </button>
+            </p>
+          )}
         </>
       );
     case 'basarili':

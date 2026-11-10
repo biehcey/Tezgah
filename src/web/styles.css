@@ -1018,6 +1018,12 @@ button.kucuk {
   color: var(--dikkat);
 }
 
+.mod-rozeti.okuma {
+  border-color: var(--basarili);
+  background: color-mix(in srgb, var(--basarili) 12%, var(--zemin));
+  color: var(--basarili);
+}
+
 .mod-rozeti.karisik {
   border-color: var(--uyari);
   background: color-mix(in srgb, var(--uyari) 14%, var(--zemin));
@@ -1105,6 +1111,16 @@ button.kucuk {
   gap: 8px;
   padding: 12px;
   border-bottom: 1px solid var(--cizgi);
+}
+
+/* Okuma'da karar kartının yerindeki ince durum satırı. */
+.okuma-durumu {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--cizgi);
+  color: var(--soluk);
 }
 
 .karar-karti.bekliyor {

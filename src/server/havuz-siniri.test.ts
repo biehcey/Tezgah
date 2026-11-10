@@ -41,7 +41,7 @@ async function tab(): Promise<TestSocket> {
 /** Karar bekleyen (client tutan) bir çalıştırma açar. */
 async function openSession(connectionId: string): Promise<TestSocket> {
   const ws = await tab();
-  ws.send({ type: 'run', target: { connectionId, database: 'postgres' }, script: 'SELECT 1' });
+  ws.send({ type: 'run', target: { connectionId, database: 'postgres' }, script: 'UPDATE t SET a = 1' });
   await ws.waitFor('kararBekleniyor');
   return ws;
 }
@@ -52,7 +52,7 @@ describe('Pool sınırı: hedef başına 5 oturum', () => {
     for (let i = 0; i < 5; i++) await openSession(id);
 
     const sixth = await tab();
-    sixth.send({ type: 'run', target: { connectionId: id, database: 'postgres' }, script: 'SELECT 1' });
+    sixth.send({ type: 'run', target: { connectionId: id, database: 'postgres' }, script: 'UPDATE t SET a = 1' });
     expect(await sixth.waitFor('bitti')).toMatchObject({ sonuc: 'hata', kod: 'havuzDolu', oturum: 5, mesaj: expect.stringContaining('5 açık oturum') });
     expect(sixth.events.some((e) => e.type === 'started')).toBe(false);
   });
@@ -66,7 +66,7 @@ describe('Pool sınırı: hedef başına 5 oturum', () => {
     await open[2]!.waitFor('bitti');
 
     const next = await tab();
-    next.send({ type: 'run', target: { connectionId: id, database: 'postgres' }, script: 'SELECT 1' });
+    next.send({ type: 'run', target: { connectionId: id, database: 'postgres' }, script: 'UPDATE t SET a = 1' });
     await next.waitFor('kararBekleniyor');
   });
 
