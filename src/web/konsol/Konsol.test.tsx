@@ -175,6 +175,36 @@ describe('Konsol sekmeleri: çalıştırma oturumları', () => {
     expect(within(screen.getByRole('region', { name: 'Karar' })).getByRole('button', { name: 'Commit' })).toBeEnabled();
   });
 
+  it('havuzDolu: mesaj o hedefte açık oturumu olan sekmelerden kurulur; sekme adına tıklanınca o sekmeye geçilir', async () => {
+    const { user, runs } = await setup(
+      saved([devTab('s1', 'SELECT 1'), prodTab('s2', 'SELECT 2'), devTab('s3', 'SELECT 3'), devTab('s4', 'SELECT 4'), devTab('s5', 'SELECT 5')]),
+    );
+    // Sekme 1 ve 3 aynı hedefte karar bekliyor; Sekme 2 başka hedefte; Sekme 4'ün çalıştırması bitti.
+    for (const i of [0, 1, 2, 3]) {
+      await user.click(tabs()[i]!);
+      await user.click(runButton());
+      runs.last().emit({ type: 'kararBekleniyor', commitEdilebilir: true, kalanMs: 30 * DK });
+    }
+    runs.last().emit({ type: 'bitti', sonuc: 'rollback' });
+
+    await user.click(tabs()[4]!);
+    await user.click(runButton());
+    // Sunucu 5 sayar: kalan 3 oturum arayüzün bilmediği (ör. başka pencere) sekmelerde.
+    runs.last().emit({ type: 'bitti', sonuc: 'hata', kod: 'havuzDolu', oturum: 5, mesaj: 'Bu hedefte 5 açık oturum var' });
+
+    const card = screen.getByRole('region', { name: 'Karar' });
+    expect(card).toHaveTextContent('Bu hedefte 5 açık oturum var: Sekme 1, Sekme 3');
+    await user.click(within(card).getByRole('button', { name: 'Sekme 3' }));
+    expect(tabs()[2]).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('havuzDolu: arayüzün bilmediği oturumlar varsa sunucunun mesajı gösterilir', async () => {
+    const { user, runs } = await setup(saved([devTab('s1', 'SELECT 1')]));
+    await user.click(runButton());
+    runs.last().emit({ type: 'bitti', sonuc: 'hata', kod: 'havuzDolu', oturum: 5, mesaj: 'Bu hedefte 5 açık oturum var; birini bitirin.' });
+    expect(screen.getByRole('region', { name: 'Karar' })).toHaveTextContent('Bu hedefte 5 açık oturum var; birini bitirin.');
+  });
+
   it('karar bekleyen sekme kapatılınca çalıştırması kapanır (transaction geri alınır)', async () => {
     const { user, runs } = await setup(saved([devTab('s1', 'INSERT INTO t VALUES (1)'), devTab('s2')]));
     await user.click(runButton());

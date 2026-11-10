@@ -719,6 +719,7 @@ export function App() {
           onScriptChange={changeTabScript}
           onToggleWriteMode={toggleTabWriteMode}
           onTargetLockChange={changeTargetLock}
+          targetLocks={targetLocks}
           onChangeTarget={openPalette}
           hidden={formOpen}
         />

@@ -17,8 +17,13 @@ import type { Clock } from './saat';
 import { readSslFiles } from './ssl-dosyalari';
 import { TunnelError, type OpenTunnel, type Tunnel } from './tunel';
 
-/** Hedef başına pool'un en fazla client sayısı. */
-const MAX_CLIENTS = 3;
+/** Hedef başına aynı anda açık en fazla oturum (client tutan script çalıştırması). */
+export const MAX_SESSIONS = 5;
+/**
+ * Pool'un en fazla client sayısı: oturumlar + kısa süreli sorgulara ayrılan bir yer. Böylece 5 oturum
+ * açıkken de katalog okunur ve çalışan ifade iptal edilebilir (iptal ayrı bir client ister).
+ */
+const MAX_CLIENTS = MAX_SESSIONS + 1;
 /** Hiç client kullanılmadan bu kadar beklenince pool kapanır. */
 export const POOL_IDLE_MS = 10 * 60_000;
 const TIMEOUT_MS = 10_000;
@@ -37,6 +42,13 @@ const APPLICATION_NAME = 'Tezgah';
 /** Sunucuya TCP ile ulaşılamadığını söyleyen kodlar; diğer hatalar el sıkışma ya da kimlik doğrulamadandır. */
 const REACH_ERRORS = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'ETIMEDOUT', 'EHOSTUNREACH', 'ENETUNREACH']);
 
+/** Hedefte `MAX_SESSIONS` oturum açık; yeni oturum kuyrukta beklemeden reddedilir. */
+export class PoolFullError extends Error {
+  constructor(readonly sessions: number) {
+    super(`Bu hedefte ${sessions} açık oturum var; en fazla ${MAX_SESSIONS} oturum açılabilir. Birini bitirip tekrar deneyin.`);
+  }
+}
+
 /** Hedefe bağlanılamadı ya da hedefte sorgu başarısız oldu; kullanıcıya gösterilecek neden. */
 export class TargetError extends Error {
   constructor(readonly failure: StepFailure) {
@@ -50,6 +62,8 @@ interface Entry {
   pool: Promise<pg.Pool>;
   /** Pool'dan alınıp henüz geri verilmemiş client sayısı. */
   inUse: number;
+  /** Bunlardan oturum olarak alınanlar (kısa süreli sorgular sayılmaz). */
+  sessions: number;
   idleTimer: unknown;
 }
 
@@ -162,23 +176,34 @@ export function createPoolManager({ keychain, sessionPasswords, clock, openTunne
 
   /**
    * Hedefin pool'undan bir client alır, `fn` bitince geri verir. `fn` bağlantısı bozulan client'ı
-   * `discard` ile işaretlerse client pool'a dönmez, kapatılır.
+   * `discard` ile işaretlerse client pool'a dönmez, kapatılır. `session`: client uzun süre tutulacak
+   * (script çalıştırma); hedefte `MAX_SESSIONS` oturum açıksa beklemeden `PoolFullError` atılır.
+   * Kısa süreli sorgular (katalog, iptal) oturum sayılmaz.
    */
   async function withClient<T>(
     connection: Connection,
     database: string,
     fn: (client: pg.PoolClient, discard: () => void) => Promise<T>,
+    { session = false }: { session?: boolean } = {},
   ): Promise<T> {
     const key = keyOf(connection.id, database);
     let entry = entries.get(key);
+    if (session && entry && entry.sessions >= MAX_SESSIONS) throw new PoolFullError(entry.sessions);
     if (!entry) {
-      const created: Entry = { connectionId: connection.id, pool: openPool(connection, database), inUse: 0, idleTimer: undefined };
+      const created: Entry = {
+        connectionId: connection.id,
+        pool: openPool(connection, database),
+        inUse: 0,
+        sessions: 0,
+        idleTimer: undefined,
+      };
       entry = created;
       entries.set(key, created);
       // Açılamayan pool saklanmaz: sonraki istek (ör. "Tekrar dene") baştan dener.
       created.pool.catch(() => void remove(key, created));
     }
     entry.inUse++;
+    if (session) entry.sessions++;
     clock.clearTimeout(entry.idleTimer);
     try {
       const pool = await entry.pool;
@@ -196,6 +221,7 @@ export function createPoolManager({ keychain, sessionPasswords, clock, openTunne
       }
     } finally {
       entry.inUse--;
+      if (session) entry.sessions--;
       if (entry.inUse === 0 && entries.get(key) === entry) scheduleIdle(key, entry);
     }
   }

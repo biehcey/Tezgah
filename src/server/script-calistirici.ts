@@ -47,7 +47,7 @@ import {
 import { beginStatement, runBlockReasons, writeLockState, type WriteLockState } from '../core/yazma-kilidi';
 import type { SettingsStore } from './ayar-deposu';
 import type { RunHistory } from './calistirma-kayitlari';
-import { TargetError, catalogQuery, type PoolManager } from './havuzlar';
+import { PoolFullError, TargetError, catalogQuery, type PoolManager } from './havuzlar';
 import type { Clock } from './saat';
 
 export interface ScriptRunnerDeps {
@@ -267,10 +267,11 @@ export function createScriptRunner({ store, pools, clock, history, log }: Script
         await pools.withClient(connection, database, (client, discard) => {
           const session = { client, discard, connection, database, lock, deneme };
           return mode === 'autocommit' ? inAutocommit(current, session, script, finish) : inTransaction(current, session, script, finish);
-        });
+        }, { session: true });
       } catch (err) {
         // `bitti` gitti; ikinci bir sonuç gönderilmez.
         if (finished) return log(`Script çalıştırma hatası: ${String(err)}`);
+        if (err instanceof PoolFullError) return finish({ sonuc: 'hata', kod: 'havuzDolu', oturum: err.sessions, mesaj: err.message }, 'hata');
         if (err instanceof TargetError) return finish({ sonuc: 'hata', mesaj: err.failure.mesaj }, 'hata');
         log(`Script çalıştırma hatası: ${String(err)}`);
         await finish({ sonuc: 'hata', mesaj: 'Beklenmeyen bir hata oluştu' }, 'hata');

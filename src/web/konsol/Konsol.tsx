@@ -1,6 +1,6 @@
 import { useCallback } from 'react';
 import type { Connection } from '../../core/baglanti';
-import type { ConsoleState, OpenTab, TabTarget } from '../../core/konsol-sekmeleri';
+import { sessionTabs, type ConsoleState, type OpenTab, type SessionTab, type TabTarget } from '../../core/konsol-sekmeleri';
 import { ScriptEkrani } from '../script/ScriptEkrani';
 
 interface Props {
@@ -13,6 +13,8 @@ interface Props {
   onToggleWriteMode: (id: string) => void;
   /** Sekmenin hedef kilidinin nedeni değişti (`null`: hedef değiştirilebilir); sekme kapanınca `null`. */
   onTargetLockChange: (id: string, reason: string | null) => void;
+  /** Hedef kilidi olan sekmeler (kimlik → neden): çalışan ya da karar bekleyen, yani açık oturumu olanlar. */
+  targetLocks: Readonly<Record<string, string>>;
   /** "hedefi değiştir ▾": hızlı geçiş paletini açar. */
   onChangeTarget: () => void;
   /** Konsol gizli (ör. bağlantı formu açık); sekmeler ve açık transaction'ları korunur. */
@@ -44,9 +46,11 @@ export function Konsol({
   onScriptChange,
   onToggleWriteMode,
   onTargetLockChange,
+  targetLocks,
   onChangeTarget,
   hidden = false,
 }: Props) {
+  const openSessions = new Set(Object.keys(targetLocks));
   return (
     <div className="konsol" hidden={hidden}>
       <div className="konsol-seridi">
@@ -97,6 +101,8 @@ export function Konsol({
           tab={tab}
           target={resolveTarget(tab.hedef, connections)}
           hidden={tab.id !== state.active}
+          sessionTabs={sessionTabs(state, tab.id, openSessions)}
+          onActivate={onActivate}
           onScriptChange={onScriptChange}
           onToggleWriteMode={onToggleWriteMode}
           onTargetLockChange={onTargetLockChange}
@@ -111,6 +117,8 @@ function KonsolSekmesi({
   tab,
   target,
   hidden,
+  sessionTabs,
+  onActivate,
   onScriptChange,
   onToggleWriteMode,
   onTargetLockChange,
@@ -119,7 +127,8 @@ function KonsolSekmesi({
   tab: OpenTab;
   target: ReturnType<typeof resolveTarget>;
   hidden: boolean;
-} & Pick<Props, 'onScriptChange' | 'onToggleWriteMode' | 'onTargetLockChange' | 'onChangeTarget'>) {
+  sessionTabs: SessionTab[];
+} & Pick<Props, 'onActivate' | 'onScriptChange' | 'onToggleWriteMode' | 'onTargetLockChange' | 'onChangeTarget'>) {
   const { id } = tab;
   const lockChanged = useCallback((reason: string | null) => onTargetLockChange(id, reason), [id, onTargetLockChange]);
   const scriptChanged = useCallback((script: string) => onScriptChange(id, script), [id, onScriptChange]);
@@ -140,6 +149,8 @@ function KonsolSekmesi({
       onScriptChange={scriptChanged}
       writeMode={tab.yazmaModu}
       onToggleWriteMode={() => onToggleWriteMode(id)}
+      sessionTabs={sessionTabs}
+      onGoToTab={onActivate}
       hidden={hidden}
     />
   );

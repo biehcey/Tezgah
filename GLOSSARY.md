@@ -84,6 +84,10 @@ _Avoid_: Salt okunur mod, read-only toggle, yazma izni
 Transaction modunda script bittikten sonra commit veya rollback kararı için tanınan süre; dolunca transaction geri alınır.
 _Avoid_: Zaman aşımı, timeout
 
+**Açık oturum**:
+Bir sekmenin hedefte client tutan çalıştırması: script çalışıyor ya da karar bekliyor. Hedef başına en fazla 5 açık oturum olabilir; sınırı aşan çalıştırma beklemeden reddedilir. Katalog okuma, iptal gibi kısa süreli sorgular açık oturum sayılmaz. Hedefin eş anlamlısı değildir.
+_Avoid_: Bağlantı, client, session
+
 **Çalıştırma kaydı**:
 Bir script çalıştırmasının sonradan değiştirilmeyen kaydı: ne çalıştırıldı, hangi hedefte, nasıl sonuçlandı. Deneme modu ve hatalı çalıştırmalar da kaydedilir; çalıştırmanın döndürdüğü veriyi içermez.
 _Avoid_: Geçmiş, log, audit log, denetim kaydı

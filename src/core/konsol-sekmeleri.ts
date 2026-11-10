@@ -126,6 +126,30 @@ export function sameTabTarget(a: TabTarget | null, b: TabTarget | null): boolean
   return a.connectionId === b.connectionId && a.database === b.database && a.schema === b.schema;
 }
 
+/** Başka bir sekmenin aynı hedefte açık oturumu; şeritteki sırasıyla adlandırılır. */
+export interface SessionTab {
+  id: string;
+  ad: string;
+}
+
+/**
+ * `id` sekmesiyle aynı hedefte (bağlantı + veritabanı; şema fark etmez) Açık oturumu olan diğer
+ * sekmeler. `openSessions`: açık oturumu olan sekmelerin kimlikleri. Aynı hedefin sekmeleri aynı
+ * başlığı taşıdığından `Sekme N` (şeritteki sıra) diye adlandırılır.
+ */
+export function sessionTabs(state: ConsoleState, id: string, openSessions: ReadonlySet<string>): SessionTab[] {
+  const hedef = state.tabs.find((t) => t.id === id)?.hedef;
+  if (!hedef) return [];
+  return state.tabs.flatMap((other, index) =>
+    other.id !== id &&
+    openSessions.has(other.id) &&
+    other.hedef?.connectionId === hedef.connectionId &&
+    other.hedef.database === hedef.database
+      ? [{ id: other.id, ad: `Sekme ${index + 1}` }]
+      : [],
+  );
+}
+
 /**
  * Kayıtlı sekmeleri açar: Yazma kilidi her zaman kapalı; artık olmayan bağlantıya işaret eden
  * sekme hedefsiz açılır, metni korunur.

@@ -105,10 +105,16 @@ export type ServerEvent =
   | { type: 'kararBekleniyor'; commitEdilebilir: boolean; kalanMs: number }
   /** "Uzat" sunucuda işlendi; Karar süresi baştan başladı. */
   | { type: 'uzatildi'; kalanMs: number }
-  /** `ozet` yalnızca Autocommit'te. */
-  | { type: 'bitti'; sonuc: RunResult; mesaj?: string; ozet?: AutocommitSummary }
+  /**
+   * `ozet` yalnızca Autocommit'te. `kod: 'havuzDolu'`: hedefte `oturum` açık oturumla sınır doldu,
+   * hiçbir şey çalışmadı; arayüz mesajı kendi bildiği açık sekmelerle kurar (`mesaj` yedektir).
+   */
+  | { type: 'bitti'; sonuc: RunResult; kod?: RunFailureCode; oturum?: number; mesaj?: string; ozet?: AutocommitSummary }
   /** İstek reddedildi ya da Çalıştırma kaydı yazılamadı; çalıştırma sürüyor. */
   | { type: 'uyari'; tur: 'commitReddedildi' | 'mesgul' | 'gecersizIstek' | 'kayitYazilamadi'; mesaj: string };
+
+/** `bitti`'nin yapısal hata kodu. */
+export type RunFailureCode = 'havuzDolu';
 
 // ---------- Arayüzün görünümü ----------
 
@@ -156,6 +162,10 @@ export interface RunView {
    */
   kararSuresi?: { kalanMs: number; surum: number };
   sonuc?: RunResult;
+  /** Yapısal hata kodu, ör. hedefte açık oturum sınırı doldu (`havuzDolu`). */
+  kod?: RunFailureCode;
+  /** `havuzDolu`'da hedefteki açık oturum sayısı (arayüzün bilmediği oturumlar dahil). */
+  oturum?: number;
   mesaj?: string;
   ozet?: AutocommitSummary;
   /** Son reddedilen istek ya da uyarı. */
@@ -217,6 +227,8 @@ export function applyEvent(view: RunView, event: ServerEvent): RunView {
         evre: 'bitti',
         bekleyenIstek: null,
         sonuc: event.sonuc,
+        kod: event.kod,
+        oturum: event.oturum,
         mesaj: event.mesaj,
         ozet: event.ozet,
         ifadeler: view.ifadeler.map((s) =>

@@ -3,7 +3,7 @@ import { createServer, type AddressInfo, type Socket } from 'node:net';
 /**
  * Şifre doğrulamasını ve basit sorgu protokolünü konuşan küçük bir Postgres taklidi (wire protokolü
  * v3, düz metin şifre): her sorgu `resultFor`'un verdiği sonucu (yoksa tek kolonlu ad listesini)
- * döner ya da `failOn`'un verdiği hatayla düşer. Gerçek Postgres olmadan `28P01` akışını ve script çalıştırmanın kayıtlarını sınamak için.
+ * döner ya da `failOn`'un verdiği hatayla düşer. Parametreli sorgular (extended protocol) yalnızca kaydedilir ve satırsız döner. Gerçek Postgres olmadan `28P01` akışını ve script çalıştırmanın kayıtlarını sınamak için.
  */
 export interface FakePostgres {
   port: number;
@@ -19,6 +19,8 @@ export interface FakePostgres {
   failOn: (sql: string) => { code: string; message: string; position?: number } | undefined;
   /** Sorgunun sonucu; `undefined` dönerse `names` listesi döner. Değerler metindir, NULL `null`. */
   resultFor: (sql: string) => FakeResult | undefined;
+  /** Sorgu hiç yanıtlanmasın mı (uzun süren ifade; iptal edilene kadar çalışıyor görünür). */
+  hangOn: (sql: string) => boolean;
   /** Açık oturumları düşürür (bağlantı koptu). */
   dropSessions(): void;
   close(): Promise<void>;
@@ -43,6 +45,7 @@ export async function startFakePostgres({ password }: { password: string }): Pro
     queries: [],
     failOn: () => undefined,
     resultFor: () => undefined,
+    hangOn: () => false,
     dropSessions: () => {
       for (const socket of sockets) socket.destroy();
     },
@@ -99,6 +102,7 @@ export async function startFakePostgres({ password }: { password: string }): Pro
     } else if (type === 'Q') {
       const sql = body.subarray(0, body.indexOf(0)).toString('utf8');
       fake.queries.push(sql);
+      if (fake.hangOn(sql)) return;
       const failure = fake.failOn(sql);
       if (failure) {
         socket.write(Buffer.concat([errorResponse(failure.code, failure.message, 'ERROR', failure.position), ready()]));
@@ -118,7 +122,16 @@ export async function startFakePostgres({ password }: { password: string }): Pro
       const rows = result.rows.map((row) => message('D', Buffer.concat([int16(row.length), ...row.map(cell)])));
       const description = result.columns.length > 0 ? [message('T', Buffer.concat([int16(result.columns.length), ...result.columns.map(column)]))] : [];
       socket.write(Buffer.concat([...description, ...rows, message('C', cstring(result.command)), ready()]));
-    } else if (type === 'X') socket.end();
+    } else if (type === 'P') {
+      // Extended protocol (parametreli sorgu): yalnızca kaydedilir, satırsız başarılı döner.
+      const sql = body.subarray(body.indexOf(0) + 1);
+      fake.queries.push(sql.subarray(0, sql.indexOf(0)).toString('utf8'));
+      socket.write(message('1', Buffer.alloc(0)));
+    } else if (type === 'B') socket.write(message('2', Buffer.alloc(0)));
+    else if (type === 'D') socket.write(message('n', Buffer.alloc(0)));
+    else if (type === 'E') socket.write(message('C', cstring('SELECT 0')));
+    else if (type === 'S') socket.write(ready());
+    else if (type === 'X') socket.end();
   }
 
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));

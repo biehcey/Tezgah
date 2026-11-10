@@ -9,6 +9,7 @@ import {
   parseTabs,
   restoreTabs,
   savedTabs,
+  sessionTabs,
   setTabScript,
   setTabTarget,
   toggleWriteMode,
@@ -124,5 +125,37 @@ describe('Sekme durumu', () => {
     const state = forgetConnection(toggleWriteMode(restored(), 's2'), 'p1');
     expect(state.tabs.map((t) => t.hedef)).toEqual([null, null, null]);
     expect(tab(state, 's2').yazmaModu).toBe(false);
+  });
+});
+
+describe('sessionTabs', () => {
+  const tab = (id: string, hedef: { connectionId: string; database: string; schema: string | null } | null) => ({
+    id,
+    tur: 'konsol' as const,
+    hedef,
+    metin: '',
+    yazmaModu: false,
+  });
+  const state: ConsoleState = {
+    tabs: [
+      tab('s1', prodHedef),
+      tab('s2', { connectionId: 'd1', database: 'app', schema: null }),
+      tab('s3', { ...prodHedef, schema: 'rapor' }),
+      tab('s4', { ...prodHedef, database: 'baska' }),
+      tab('s5', prodHedef),
+      tab('s6', prodHedef),
+    ],
+    active: 's6',
+  };
+
+  it('aynı bağlantı + veritabanında açık oturumu olan diğer sekmeler, şeritteki sırayla', () => {
+    expect(sessionTabs(state, 's6', new Set(['s1', 's2', 's3', 's4', 's6']))).toEqual([
+      { id: 's1', ad: 'Sekme 1' },
+      { id: 's3', ad: 'Sekme 3' },
+    ]);
+  });
+
+  it('hedefsiz sekmede liste boş', () => {
+    expect(sessionTabs({ tabs: [tab('s1', null), tab('s2', null)], active: 's1' }, 's1', new Set(['s2']))).toEqual([]);
   });
 });

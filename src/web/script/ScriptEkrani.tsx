@@ -17,6 +17,7 @@ import {
 } from '../../core/script-calistirma';
 import { CONNECTION_LOST, useApi, type ScriptRunHandle } from '../api/client';
 import type { ServerEvent } from '../../core/script-calistirma';
+import type { SessionTab } from '../../core/konsol-sekmeleri';
 import type { Target } from '../../core/veritabani-secimi';
 import { runBlockReasons, writeLockState } from '../../core/yazma-kilidi';
 import { STATUS_LABELS, STATUS_SYMBOLS, WRITE_LOCK_LABELS, type AnalysisMark } from './durum';
@@ -36,6 +37,10 @@ interface Props {
   writeMode: boolean;
   /** 🔒/🔓 düğmesi: sekmenin yazma modunu tek tıkla açar ya da kapatır. */
   onToggleWriteMode: () => void;
+  /** Aynı hedefte açık oturumu olan diğer sekmeler; `havuzDolu` mesajı bunlarla kurulur. */
+  sessionTabs?: readonly SessionTab[];
+  /** `havuzDolu` mesajındaki sekme adına tıklandı. */
+  onGoToTab?: (id: string) => void;
   /**
    * Ekran gizli (ör. bağlantı formu açık). Kapanmaz: script, log ve açık transaction korunur;
    * kapanmak transaction'ı geri aldırırdı (ADR-0002).
@@ -98,6 +103,8 @@ export function ScriptEkrani({
   onScriptChange,
   writeMode,
   onToggleWriteMode,
+  sessionTabs = [],
+  onGoToTab,
   hidden = false,
 }: Props) {
   const api = useApi();
@@ -108,6 +115,11 @@ export function ScriptEkrani({
   const handle = useRef<ScriptRunHandle | null>(null);
   /** Sunucunun son bildirdiği kalan süreden kurulan yerel geri sayım; yetkili sayaç sunucudadır. */
   const [deadline, setDeadline] = useState<DecisionTimer | null>(null);
+  /** `havuzDolu` geldiğinde aynı hedefte açık oturumu olan sekmeler; mesaj o anki duruma göre kalır. */
+  const [poolFullTabs, setPoolFullTabs] = useState<readonly SessionTab[]>([]);
+  // Olay geri çağrısı çalıştırma başında kurulur; o anki değil, `bitti` anındaki liste gerekir.
+  const sessionTabsRef = useRef(sessionTabs);
+  sessionTabsRef.current = sessionTabs;
   const editor = useRef<ScriptEditoruHandle>(null);
   const [folderError, setFolderError] = useState<string | null>(null);
   const targetRef: Target | null = target && { connectionId: target.connection.id, database: target.database };
@@ -162,11 +174,13 @@ export function ScriptEkrani({
     setRunOnProd(prod);
     setTab(deneme ? 'degisiklikler' : 'log');
     setDeadline(null);
+    setPoolFullTabs([]);
     handle.current = api.runScript({ target: targetRef, script, yazmaModu: writeMode, deneme }, (received) => {
       // Autocommit'te geri alınacak transaction yok; sunucu çalışan ifadeyi iptal eder.
       const event = received === CONNECTION_LOST && current.mod === 'autocommit' ? AUTOCOMMIT_CONNECTION_LOST : received;
       setRun((current) => (current ? applyEvent(current, event) : current));
       if (event.type === 'kararBekleniyor' || event.type === 'uzatildi') setDeadline(startDecision(event.kalanMs, Date.now()));
+      if (event.type === 'bitti' && event.kod === 'havuzDolu') setPoolFullTabs(sessionTabsRef.current);
     });
   }
 
@@ -289,7 +303,13 @@ export function ScriptEkrani({
           </div>
         </div>
         <aside aria-label="Çalıştırma" className="calistirma-sutunu">
-          <KararKarti run={run} deadline={run?.evre === 'karar' ? deadline : null} onRequest={request} />
+          <KararKarti
+            run={run}
+            deadline={run?.evre === 'karar' ? deadline : null}
+            onRequest={request}
+            poolFullTabs={poolFullTabs}
+            onGoToTab={onGoToTab}
+          />
           <div role="tablist" className="sekmeler">
             {tabs.map((t) => (
               <button
@@ -358,10 +378,14 @@ function KararKarti({
   run,
   deadline,
   onRequest,
+  poolFullTabs,
+  onGoToTab,
 }: {
   run: RunView | null;
   deadline: DecisionTimer | null;
   onRequest: (type: 'commit' | 'rollback' | 'uzat') => void;
+  poolFullTabs: readonly SessionTab[];
+  onGoToTab?: (id: string) => void;
 }) {
   const remaining = useCountdown(deadline);
   let body;
@@ -407,6 +431,23 @@ function KararKarti({
           )}
         </div>
       </>
+    );
+  } else if (run.kod === 'havuzDolu' && poolFullTabs.length > 0) {
+    // Sayı sunucudan (başka penceredeki oturumlar dahil); sekmeleri arayüz kendi bildiklerinden listeler.
+    // Hiç bilmiyorsa sunucunun mesajı gösterilir.
+    body = (
+      <p className={`karar-sonucu ${run.sonuc}`}>
+        Bu hedefte {Math.max(run.oturum ?? 0, poolFullTabs.length)} açık oturum var:{' '}
+        {poolFullTabs.map((tab, i) => (
+          <span key={tab.id}>
+            {i > 0 && ', '}
+            <button type="button" className="baglanti-dugme" onClick={() => onGoToTab?.(tab.id)}>
+              {tab.ad}
+            </button>
+          </span>
+        ))}
+        . Birini bitirip tekrar deneyin.
+      </p>
     );
   } else {
     body = <p className={`karar-sonucu ${run.sonuc}`}>{resultText(run)}</p>;
