@@ -4,9 +4,7 @@ import {
   DENEME_NON_TRANSACTIONAL_MESSAGE,
   READ_ONLY_AUTOCOMMIT_MESSAGE,
   beginStatement,
-  isWritable,
   runBlockReasons,
-  toggleWritable,
   writeLockState,
   type WriteLockState,
 } from './yazma-kilidi';
@@ -32,30 +30,6 @@ describe('yazma kilidi', () => {
 
   it.each(['salt-okunur', 'yazma-acik', null] as const)('denemede %s kilidinden bağımsız BEGIN READ WRITE', (lock) => {
     expect(beginStatement(lock, { deneme: true })).toBe('BEGIN READ WRITE');
-  });
-});
-
-describe('yazma modu açık hedefler', () => {
-  const app = { connectionId: 'p1', database: 'app' };
-  const raporlar = { connectionId: 'p1', database: 'raporlar' };
-
-  it('başta hiçbir hedef yazma modunda değil', () => {
-    expect(isWritable([], app)).toBe(false);
-  });
-
-  it('aç/kapa yalnızca o hedefi değiştirir', () => {
-    const opened = toggleWritable(toggleWritable([], app), raporlar);
-    expect(isWritable(opened, app)).toBe(true);
-    expect(isWritable(opened, raporlar)).toBe(true);
-    const closed = toggleWritable(opened, { ...app });
-    expect(isWritable(closed, app)).toBe(false);
-    expect(isWritable(closed, raporlar)).toBe(true);
-  });
-
-  it('aynı bağlantının başka veritabanı ya da başka bağlantının aynı veritabanı ayrı hedeftir', () => {
-    const opened = toggleWritable([], app);
-    expect(isWritable(opened, raporlar)).toBe(false);
-    expect(isWritable(opened, { connectionId: 'p2', database: 'app' })).toBe(false);
   });
 });
 

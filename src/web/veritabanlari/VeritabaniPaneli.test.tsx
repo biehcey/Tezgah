@@ -56,7 +56,8 @@ describe('Veritabanı paneli: bağlanmamış bağlantı', () => {
 
   it('bağlanmadan bir veritabanına tıklamak onu hedef yapar', async () => {
     const { user, fake } = setup();
-    expect(within(header()).getByText('Hedef seçilmedi')).toBeInTheDocument();
+    // Sekmeler açılışta dosyadan okunur; hedef başlığı ilk sekmeyle gelir.
+    expect(within(await screen.findByRole('region', { name: 'Hedef' })).getByText('Hedef seçilmedi')).toBeInTheDocument();
     await selectConnection(user, 'Yerel');
     await user.click(within(panel()).getByRole('button', { name: 'postgres' }));
     expect(within(header()).getByRole('heading')).toHaveTextContent('Yerel / postgres');

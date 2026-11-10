@@ -18,7 +18,7 @@ import {
 import { CONNECTION_LOST, useApi, type ScriptRunHandle } from '../api/client';
 import type { ServerEvent } from '../../core/script-calistirma';
 import type { Target } from '../../core/veritabani-secimi';
-import { isWritable, runBlockReasons, writeLockState, type WritableTargets } from '../../core/yazma-kilidi';
+import { runBlockReasons, writeLockState } from '../../core/yazma-kilidi';
 import { STATUS_LABELS, STATUS_SYMBOLS, WRITE_LOCK_LABELS, type AnalysisMark } from './durum';
 import { ScriptEditoru, type EditorMarks, type ScriptEditoruHandle } from './ScriptEditoru';
 
@@ -29,10 +29,13 @@ interface Props {
   onChangeTarget: () => void;
   /** Hedef kilidinin nedeni değişti (`null`: hedef değiştirilebilir); ekran kapanınca `null`. */
   onTargetLockChange?: (reason: string | null) => void;
-  /** Yazma modu açılmış hedefler; ekran kapansa da korunsun diye sahibi uygulamadır. */
-  writable: WritableTargets;
-  /** 🔒/🔓 düğmesi: hedefin yazma modunu tek tıkla açar ya da kapatır. */
-  onToggleWriteMode: (target: Target) => void;
+  /** Editördeki script; sekme kalıcılığı için sahibi konsoldur. */
+  script: string;
+  onScriptChange: (script: string) => void;
+  /** Bu sekmenin Yazma kilidi açık mı (sekme ve hedef başına; sahibi konsoldur). */
+  writeMode: boolean;
+  /** 🔒/🔓 düğmesi: sekmenin yazma modunu tek tıkla açar ya da kapatır. */
+  onToggleWriteMode: () => void;
   /**
    * Ekran gizli (ör. bağlantı formu açık). Kapanmaz: script, log ve açık transaction korunur;
    * kapanmak transaction'ı geri aldırırdı (ADR-0002).
@@ -87,10 +90,18 @@ function analysisMarks(script: string, statements: Statement[], analysis: Script
  * sağda karar kartı ve ifade kartları. prod hedefte başlık kırmızımsıdır; uygulamanın kırmızı
  * çerçevesi kökte verilir.
  */
-export function ScriptEkrani({ target, onChangeTarget, onTargetLockChange, writable, onToggleWriteMode, hidden = false }: Props) {
+export function ScriptEkrani({
+  target,
+  onChangeTarget,
+  onTargetLockChange,
+  script,
+  onScriptChange,
+  writeMode,
+  onToggleWriteMode,
+  hidden = false,
+}: Props) {
   const api = useApi();
   const prod = target !== null && isProd(target.connection.envTag);
-  const [script, setScript] = useState('');
   const [run, setRun] = useState<RunView | null>(null);
   /** Son çalıştırma prod hedefte başladı; hedef sonradan değişse de şerit o çalıştırmaya göre kalır. */
   const [runOnProd, setRunOnProd] = useState(false);
@@ -100,7 +111,6 @@ export function ScriptEkrani({ target, onChangeTarget, onTargetLockChange, writa
   const editor = useRef<ScriptEditoruHandle>(null);
   const [folderError, setFolderError] = useState<string | null>(null);
   const targetRef: Target | null = target && { connectionId: target.connection.id, database: target.database };
-  const writeMode = targetRef !== null && isWritable(writable, targetRef);
   const lock = target ? writeLockState(target.connection.envTag, writeMode) : null;
 
   function openHistoryFolder() {
@@ -237,21 +247,21 @@ export function ScriptEkrani({ target, onChangeTarget, onTargetLockChange, writa
       <div className="script-govde">
         <div className="script-sol">
           <section aria-label="Script editörü" className="editor-alani">
-            <ScriptEditoru ref={editor} value={script} onChange={setScript} readOnly={busy} marks={marks} />
+            <ScriptEditoru ref={editor} value={script} onChange={onScriptChange} readOnly={busy} marks={marks} />
           </section>
           {!busy && blocked && <BlockReasons reasons={reasons} />}
           <div className="script-cubugu">
             <span title="Çalıştırma modu" className={`mod-rozeti ${analysis.mod}`}>
               {MODE_LABELS[analysis.mod]}
             </span>
-            {lock && targetRef && (
+            {lock && (
               // Tek tık; onay, şerit ya da tema değişimi yok. Açık transaction'ın kilidi değişmez.
               <button
                 type="button"
                 className={`kilit-dugmesi ${lock}`}
                 aria-pressed={lock === 'yazma-acik'}
                 title={WRITE_LOCK_LABELS[lock].eylem}
-                onClick={() => onToggleWriteMode(targetRef)}
+                onClick={onToggleWriteMode}
                 disabled={busy}
               >
                 {WRITE_LOCK_LABELS[lock].rozet}

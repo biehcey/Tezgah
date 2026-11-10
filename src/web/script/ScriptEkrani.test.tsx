@@ -2,16 +2,24 @@ import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState, type ComponentProps } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { toggleWritable, type WritableTargets } from '../../core/yazma-kilidi';
 import { ApiProvider, CONNECTION_LOST } from '../api/client';
 import { editorCursorLine, editorScript, gutterMarks, setEditorScript } from '../test/eylemler';
 import { connection, createFakeApi, createFakeScriptRuns, renderWithApi } from '../test/sahte-api';
 import { ScriptEkrani } from './ScriptEkrani';
 
-/** Yazma kilidini uygulamanın (App) yerine tutan sarmalayıcı. */
-function Ekran(props: Omit<ComponentProps<typeof ScriptEkrani>, 'writable' | 'onToggleWriteMode'>) {
-  const [writable, setWritable] = useState<WritableTargets>([]);
-  return <ScriptEkrani {...props} writable={writable} onToggleWriteMode={(t) => setWritable((w) => toggleWritable(w, t))} />;
+/** Metni ve Yazma kilidini konsolun (sekmenin) yerine tutan sarmalayıcı. */
+function Ekran(props: Omit<ComponentProps<typeof ScriptEkrani>, 'script' | 'onScriptChange' | 'writeMode' | 'onToggleWriteMode'>) {
+  const [script, setScript] = useState('');
+  const [writeMode, setWriteMode] = useState(false);
+  return (
+    <ScriptEkrani
+      {...props}
+      script={script}
+      onScriptChange={setScript}
+      writeMode={writeMode}
+      onToggleWriteMode={() => setWriteMode((w) => !w)}
+    />
+  );
 }
 
 const DK = 60_000;
@@ -423,15 +431,6 @@ describe('Script ekranı: prod yazma kilidi', () => {
     expect(lockButton()).toHaveTextContent('🔒 Salt okunur');
     await user.click(runButton());
     expect(fake.last().yazmaModu).toBe(false);
-  });
-
-  it('kilit hedef başına tutulur: başka hedef salt okunur açılır, geri dönünce yazma açık kalır', async () => {
-    const { user, showTarget } = setupProd();
-    await user.click(lockButton());
-    showTarget(prodTarget('raporlar'));
-    expect(lockButton()).toHaveTextContent('🔒 Salt okunur');
-    showTarget(prodTarget('app'));
-    expect(lockButton()).toHaveTextContent('🔓 Yazma açık');
   });
 
   it('prod olmayan hedefte kilit düğmesi yok ve yazma modu gönderilmez', async () => {

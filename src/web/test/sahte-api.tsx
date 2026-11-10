@@ -14,6 +14,7 @@ import {
   type PasswordWriteOutcome,
 } from '../../core/baglanti';
 import type { HostKeyProblem } from '../../core/ssh-tuneli';
+import { emptyTabs, type SavedTabs } from '../../core/konsol-sekmeleri';
 import { ApiError, ApiProvider, type ApiClient, type ConnectionRequest } from '../api/client';
 
 /** Testlerde gerçek sunucu yerine kullanılan API istemcisi; verilmeyen işlemler hata fırlatır. */
@@ -42,6 +43,9 @@ export function createFakeApi(overrides: Partial<ApiClient> = {}): ApiClient {
     openRunHistoryFolder: missing('openRunHistoryFolder'),
     previewImport: missing('previewImport'),
     applyImport: missing('applyImport'),
+    // Sekmeler yalnızca dosyadır; App'i kuran her test bunları ister.
+    readTabs: async () => emptyTabs(),
+    writeTabs: async (tabs) => tabs,
     runScript: () => {
       throw new Error('Sahte API: runScript tanımlı değil');
     },
@@ -132,6 +136,10 @@ export interface FakeConnections {
   forgottenHostKeys: string[];
   /** Host anahtarı kutusunda/testte gösterilecek bilinmeyen anahtar; güvenilene kadar bağlanılmaz. */
   unknownHostKey: HostKeyProblem | null;
+  /** Diskteki konsol sekmeleri (açılışta okunur). */
+  savedTabs: SavedTabs;
+  /** Arayüzün yazdığı sekme listeleri, sırasıyla. */
+  tabWrites: SavedTabs[];
 }
 
 export interface FakeServer {
@@ -177,6 +185,8 @@ export function createFakeConnections(
     trustedHostKeys: [],
     forgottenHostKeys: [],
     unknownHostKey: null,
+    savedTabs: emptyTabs(),
+    tabWrites: [],
     api: undefined as unknown as ApiClient,
   };
   let next = 1;
@@ -361,6 +371,12 @@ export function createFakeConnections(
       }
       state.sessionPasswords.set(id, password);
       return { connection: structuredClone(found), password: saveToKeychain ? 'reddedildi' : 'oturumda' };
+    },
+    readTabs: async () => structuredClone(state.savedTabs),
+    async writeTabs(tabs) {
+      state.tabWrites.push(structuredClone(tabs));
+      state.savedTabs = structuredClone(tabs);
+      return structuredClone(tabs);
     },
     async passwordStatus(id) {
       find(id);

@@ -58,14 +58,7 @@ export function createSettingsStore(configDir: string): SettingsStore {
 
   async function write(settings: Settings) {
     await mkdir(configDir, { recursive: true });
-    const tmp = `${file}.${randomBytes(6).toString('hex')}.tmp`;
-    try {
-      await writeFile(tmp, `${JSON.stringify(settings, null, 2)}\n`, { encoding: 'utf8', flush: true });
-      await renameWithRetry(tmp, file);
-    } catch (err) {
-      await unlink(tmp).catch(() => {});
-      throw err;
-    }
+    await writeFileAtomic(file, `${JSON.stringify(settings, null, 2)}\n`);
   }
 
   return {
@@ -82,6 +75,21 @@ export function createSettingsStore(configDir: string): SettingsStore {
       return run;
     },
   };
+}
+
+/**
+ * Dosyayı geçici dosya + rename ile yazar: okuyan ya da çöken süreç yarım dosya görmez. `mode`
+ * yalnızca POSIX'te etkilidir (ör. `0o600`).
+ */
+export async function writeFileAtomic(file: string, text: string, { mode }: { mode?: number } = {}) {
+  const tmp = `${file}.${randomBytes(6).toString('hex')}.tmp`;
+  try {
+    await writeFile(tmp, text, { encoding: 'utf8', flush: true, mode });
+    await renameWithRetry(tmp, file);
+  } catch (err) {
+    await unlink(tmp).catch(() => {});
+    throw err;
+  }
 }
 
 /**

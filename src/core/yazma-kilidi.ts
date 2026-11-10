@@ -1,13 +1,12 @@
 /**
  * prod salt okunurluğu (wayfinder 07, 23). Bir kaza önleyicidir, güvenlik sınırı değildir: prod
  * pool'u `default_transaction_read_only=on` ile açılır, transaction kilide göre `BEGIN READ ONLY`
- * ya da `BEGIN READ WRITE` ile başlar ve yazmayı Postgres reddeder. Yazma kilidi editör ve hedef
- * başına, sayfa açık kaldıkça tutulur; tek tıkla açılır, çalıştırmadan önce onay istenmez.
+ * ya da `BEGIN READ WRITE` ile başlar ve yazmayı Postgres reddeder. Yazma kilidi sekme ve hedef
+ * başınadır (bkz. `konsol-sekmeleri`); tek tıkla açılır, çalıştırmadan önce onay istenmez.
  */
 import { isProd, type EnvTag } from './baglanti';
 import { analyzeScript, blockReasons, type ScriptAnalysis } from './calistirma-modu';
 import { positionOf, type Statement } from './ifade-bolme';
-import { isTarget, type Target } from './veritabani-secimi';
 
 /** Yazma kilidi: prod hedef salt okunur ya da yazma modunda; prod olmayan hedefte `null`. */
 export type WriteLockState = 'salt-okunur' | 'yazma-acik' | null;
@@ -33,21 +32,6 @@ export function beginStatement(lock: WriteLockState, { deneme = false }: { denem
     default:
       return 'BEGIN';
   }
-}
-
-// ---------- Yazma modu açık hedefler ----------
-
-/** Yazma modu açılmış hedefler; listede olmayan prod hedef salt okunurdur. */
-export type WritableTargets = readonly Target[];
-
-export function isWritable(writable: WritableTargets, target: Target): boolean {
-  return writable.some((t) => isTarget(t, target.connectionId, target.database));
-}
-
-/** Hedefin yazma modunu açar ya da kapatır (tek tık). */
-export function toggleWritable(writable: WritableTargets, target: Target): WritableTargets {
-  if (!isWritable(writable, target)) return [...writable, { connectionId: target.connectionId, database: target.database }];
-  return writable.filter((t) => !isTarget(t, target.connectionId, target.database));
 }
 
 // ---------- Çalıştırma engelleri ----------

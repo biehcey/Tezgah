@@ -788,8 +788,81 @@ button.kucuk {
 }
 
 /* Script ekranı (ticket 23 varyant B): üstte hedef başlığı, altında editör */
-.script-ekrani[hidden] {
+.script-ekrani[hidden],
+.konsol[hidden] {
   display: none;
+}
+
+/* Sekmeli konsol: hedef başlığının üstünde sekme şeridi, altında aktif sekmenin ekranı. */
+.konsol {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+}
+
+.konsol-seridi {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  min-width: 0;
+  border-bottom: 1px solid var(--cizgi);
+}
+
+.konsol-sekmeleri {
+  display: flex;
+  gap: 2px;
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.konsol-sekmesi {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  max-width: 240px;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+}
+
+.konsol-sekmesi.aktif {
+  border-color: var(--cizgi);
+  background: var(--kenar-zemin);
+}
+
+.konsol-sekmesi-adi {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  border: none;
+  background: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.konsol-sekmesi:not(.aktif) .konsol-sekmesi-adi {
+  color: var(--soluk);
+}
+
+.sekme-rengi {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border: 1px solid var(--cizgi);
+  border-radius: 50%;
+}
+
+.sekme-kapat,
+.yeni-sekme {
+  flex-shrink: 0;
+}
+
+.bos-konsol {
+  padding: 16px;
 }
 
 .script-ekrani {

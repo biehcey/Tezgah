@@ -14,9 +14,13 @@ Sunucu yalnızca `127.0.0.1`'de dinler. Her açılışta rastgele bir erişim an
 
 ## prod salt okunurluğu
 
-`prod` etiketli bir hedef salt okunur açılır: bağlantılar `default_transaction_read_only=on` ile kurulur, script'ler `BEGIN READ ONLY` ile başlar ve yazma girişimlerini Postgres reddeder. Salt okunurken transaction dışı (Autocommit) script'ler sunucuya hiç gönderilmez. Araç çubuğundaki 🔒 Salt okunur / 🔓 Yazma açık düğmesi yazma modunu tek tıkla açar ve kapatır; kilit editör ve hedef başına, sayfa açık kaldıkça geçerlidir ve çalıştırmadan önce ayrıca onay istenmez.
+`prod` etiketli bir hedef salt okunur açılır: bağlantılar `default_transaction_read_only=on` ile kurulur, script'ler `BEGIN READ ONLY` ile başlar ve yazma girişimlerini Postgres reddeder. Salt okunurken transaction dışı (Autocommit) script'ler sunucuya hiç gönderilmez. Araç çubuğundaki 🔒 Salt okunur / 🔓 Yazma açık düğmesi yazma modunu tek tıkla açar ve kapatır; kilit sekme ve hedef başınadır: bir sekmede yazmayı açmak başka bir sekmeyi etkilemez, sekmenin hedefi değişince ya da Tezgah yeniden açılınca kilit kapanır. Çalıştırmadan önce ayrıca onay istenmez.
 
 **prod salt okunurluğu bir kaza önleyicidir, güvenlik sınırı değildir.** Yanlış sekmede yanlışlıkla yazmayı önler; veritabanı kullanıcısının yetkilerini kısıtlamaz. prod'u gerçekten korumak için salt okunur yetkili bir rol kullanın.
+
+## Konsol sekmeleri
+
+Konsol sekmelerinin metni ve hedefi (bağlantı, veritabanı) yapılandırma dizinindeki `konsol/sekmeler.json` dosyasına yazılır ve Tezgah açılınca geri gelir; geri gelen sekmeler hiçbir sunucuya kendiliğinden bağlanmaz. Yazma kilidi ve sonuçlar dosyaya yazılmaz. Dosya düz metindir ve script'teki sırlar maskelenmez; POSIX'te `0600` izinle yazılır.
 
 ## Çalıştırma kayıtları
 

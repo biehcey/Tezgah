@@ -16,6 +16,7 @@ import type { AgentEnvironment } from '../core/ssh-tuneli';
 import { createSessionPasswords } from './oturum-sifreleri';
 import { createFolderRoutes } from './klasorler';
 import { createImportRoutes, type ImportEnvironment } from './ice-aktarma';
+import { createTabRoutes, createTabStore } from './konsol-sekmeleri';
 import { BodyError, json } from './http';
 import type { Keychain } from './keychain';
 import { systemClock, type Clock } from './saat';
@@ -116,6 +117,9 @@ export async function startServer(options: ServerOptions): Promise<TezgahServer>
     log: options.log,
   });
 
+  // Konsol sekmeleri yalnızca dosyaya yazılır ve okunur; hiçbir sunucuya bağlanmaz.
+  const tabRoutes = createTabRoutes({ tabs: createTabStore(options.configDir) });
+
   async function handle(req: IncomingMessage, res: ServerResponse) {
     const url = requestUrl(req);
 
@@ -149,6 +153,7 @@ export async function startServer(options: ServerOptions): Promise<TezgahServer>
     if (await folderRoutes(req, res, url.pathname)) return;
     if (await historyRoutes(req, res, url.pathname)) return;
     if (await importRoutes(req, res, url.pathname)) return;
+    if (await tabRoutes(req, res, url.pathname)) return;
     if (url.pathname === '/api' || url.pathname.startsWith('/api/')) return json(res, 404, { hata: 'Bulunamadı' });
     if (req.method !== 'GET' && req.method !== 'HEAD') return sendStatus(res, 405);
     await serveStatic(options.webRoot, url.pathname, res);

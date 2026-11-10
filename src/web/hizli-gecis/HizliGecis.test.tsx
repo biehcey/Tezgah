@@ -228,7 +228,7 @@ describe('Cmd/Ctrl+K paleti: URL yapıştırma', () => {
     await user.paste('postgres://postgres@db.prod/raporlar');
     await user.keyboard('{Enter}');
     expect(within(header()).getByRole('heading')).toHaveTextContent('Prod / raporlar');
-    await user.click(screen.getByRole('button', { name: /^Prod/ }));
+    await user.click(within(screen.getByRole('navigation', { name: 'Bağlantılar' })).getByRole('button', { name: /^Prod/ }));
     expect(await within(panel()).findByRole('button', { name: 'raporlar' })).toHaveAttribute('aria-current', 'true');
     expect(fake.connections[1]!.databaseSelection.map((d) => d.database)).toEqual(['faturalar', 'raporlar']);
   });

@@ -22,14 +22,14 @@ export class BodyError extends Error {
   }
 }
 
-export async function readJson(req: IncomingMessage): Promise<unknown> {
+export async function readJson(req: IncomingMessage, { maxBytes = MAX_BODY_BYTES }: { maxBytes?: number } = {}): Promise<unknown> {
   const type = req.headers['content-type']?.split(';')[0]?.trim().toLowerCase();
   if (type !== 'application/json') throw new BodyError(415, 'İçerik türü application/json olmalı');
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of req as AsyncIterable<Buffer>) {
     size += chunk.length;
-    if (size > MAX_BODY_BYTES) throw new BodyError(413, 'İstek gövdesi çok büyük');
+    if (size > maxBytes) throw new BodyError(413, 'İstek gövdesi çok büyük');
     chunks.push(chunk);
   }
   try {

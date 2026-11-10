@@ -11,7 +11,20 @@ import { asksForSessionPassword, isPasswordRejected } from '../core/baglanti-tes
 import { buildConnectionUrl } from '../core/baglanti-url';
 import { asksForSshSecret, type HostKeyProblem } from '../core/ssh-tuneli';
 import { HostAnahtariKutusu } from './baglantilar/HostAnahtariKutusu';
-import { toggleWritable, type WritableTargets } from '../core/yazma-kilidi';
+import {
+  activateTab,
+  closeTab,
+  emptyTabs,
+  forgetConnection,
+  openConsoleTab,
+  restoreTabs,
+  savedTabs,
+  setTabScript,
+  setTabTarget,
+  toggleWriteMode,
+  type ConsoleState,
+  type SavedTabs,
+} from '../core/konsol-sekmeleri';
 import { ApiError, connectionRequest, useApi } from './api/client';
 import { HizliGecis, type PaletteCommand } from './hizli-gecis/HizliGecis';
 import { BaglantiFormu } from './baglantilar/BaglantiFormu';
@@ -25,7 +38,7 @@ import { SifrePenceresi } from './baglantilar/SifrePenceresi';
 import { SilmeOnayi } from './baglantilar/SilmeOnayi';
 import { Menu, type MenuItem, type MenuPosition } from './ortak/Menu';
 import { Onay } from './ortak/Onay';
-import { ScriptEkrani } from './script/ScriptEkrani';
+import { Konsol } from './konsol/Konsol';
 import {
   changesServerSession,
   defaultTargetDatabase,
@@ -81,6 +94,11 @@ function errorMessage(err: unknown): string {
 const KEYCHAIN_UNREACHABLE = "keychain'e erişilemedi (erişim reddedildi ya da keychain kilitli)";
 const SAVE_DENIED = `keychain'deki şifre güncellenemedi: ${KEYCHAIN_UNREACHABLE}.`;
 
+/** Sekme değişiklikleri bu kadar duraklamadan sonra diske yazılır. */
+const TABS_WRITE_DELAY_MS = 300;
+
+const newTabId = () => crypto.randomUUID();
+
 export function App() {
   const api = useApi();
   const [status, setStatus] = useState<Status>({ kind: 'loading' });
@@ -94,8 +112,13 @@ export function App() {
   const [notice, setNotice] = useState<string | null>(null);
   /** Geçici bilgi satırı (ör. "URL kopyalandı"). */
   const [info, setInfo] = useState<string | null>(null);
-  /** Editörün hedefi; bağlanmadan da seçilebilir. */
-  const [target, setTarget] = useState<Target | null>(null);
+  /** Konsol sekmeleri; aktif sekmenin hedefi editörün hedefidir, bağlanmadan da seçilebilir. */
+  const [konsol, setKonsol] = useState<ConsoleState>({ tabs: [], active: null });
+  /**
+   * Diske en son yazılan (ya da okunan) sekmeler; `null`: sekmeler okunamadı ya da henüz okunmadı.
+   * Bu durumda yazılmaz: okunamayan dosyanın üzerine boş liste yazılmasın.
+   */
+  const persisted = useRef<string | null>(null);
   /** Bağlantı kimliğine göre sunucu oturumu; olmayan bağlantı bağlı değildir. */
   const [sessions, setSessions] = useState<Record<string, ConnectionSession>>({});
   const [passwordPrompt, setPasswordPrompt] = useState<PasswordPrompt | null>(null);
@@ -103,11 +126,8 @@ export function App() {
   const [hostKeyPrompt, setHostKeyPrompt] = useState<HostKeyPrompt | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [reveal, setReveal] = useState<Reveal | null>(null);
-  /** Script çalışırken ve karar beklenirken hedef değiştirilemez; neden. */
-  const [targetLock, setTargetLock] = useState<string | null>(null);
-  /** prod yazma kilidi hedef başına, sayfa açık kaldıkça; script ekranı kapanıp açılınca da korunur. */
-  const [writable, setWritable] = useState<WritableTargets>([]);
-  const toggleWriteMode = useCallback((t: Target) => setWritable((current) => toggleWritable(current, t)), []);
+  /** Sekme başına hedef kilidi: script çalışırken ve karar beklenirken hedef değiştirilemez; neden. */
+  const [targetLocks, setTargetLocks] = useState<Record<string, string>>({});
   const urlFormCount = useRef(0);
   const [importOpen, setImportOpen] = useState(false);
   const [importResult, setImportResult] = useState<ImportApplyResponse | null>(null);
@@ -135,22 +155,75 @@ export function App() {
       (s) => active && setStatus((prev) => (prev.kind === 'error' ? prev : { kind: 'ok', version: s.surum })),
       fail,
     );
-    // Bağlantılar klasörleriyle birlikte gösterilir; liste bir an yanlış bölümlenmesin.
-    Promise.all([api.listConnections(), api.listFolders()]).then(([list, folderList]) => {
+    // Bağlantılar klasörleriyle birlikte gösterilir; liste bir an yanlış bölümlenmesin. Sekmeler de
+    // bağlantılarla birlikte açılır: silinmiş bağlantıya işaret eden sekme hedefsiz kalır. Sekmeler
+    // yalnızca dosyadan okunur; geri gelen sekme hiçbir sunucuya bağlanmaz.
+    const tabs = api.readTabs().then(
+      (saved): SavedTabs | null => saved,
+      (err: unknown) => {
+        if (active && !(err instanceof ApiError && err.status === 401)) {
+          setNotice(`Konsol sekmeleri okunamadı: ${errorMessage(err)} Bu oturumda sekmeler diske yazılmayacak.`);
+        }
+        return null;
+      },
+    );
+    Promise.all([api.listConnections(), api.listFolders(), tabs]).then(([list, folderList, saved]) => {
       if (!active) return;
       setFolders(folderList);
       setConnections(list);
+      const restored = restoreTabs(saved ?? emptyTabs(), list.map((c) => c.id));
+      persisted.current = saved ? JSON.stringify(savedTabs(restored)) : null;
+      setKonsol(restored.tabs.length > 0 ? restored : openConsoleTab(restored, newTabId(), null));
     }, fail);
     return () => {
       active = false;
     };
   }, [api]);
 
+  // Sekme değişiklikleri gecikmeli yazılır; değişmeyen liste yeniden yazılmaz.
+  useEffect(() => {
+    if (persisted.current === null) return;
+    const tabs = savedTabs(konsol);
+    const text = JSON.stringify(tabs);
+    if (text === persisted.current) return;
+    const write = (keepalive: boolean) => {
+      persisted.current = text;
+      api.writeTabs(tabs, { keepalive }).catch((err: unknown) => setNotice(`Konsol sekmeleri kaydedilemedi: ${errorMessage(err)}`));
+    };
+    const id = setTimeout(() => write(false), TABS_WRITE_DELAY_MS);
+    // Sayfa kapanırken bekleyen yazma kaybolmasın.
+    const flush = () => {
+      clearTimeout(id);
+      write(true);
+    };
+    window.addEventListener('pagehide', flush);
+    return () => {
+      clearTimeout(id);
+      window.removeEventListener('pagehide', flush);
+    };
+  }, [konsol, api]);
+
+  const activeTab = konsol.tabs.find((t) => t.id === konsol.active) ?? null;
+  const target: Target | null = activeTab?.hedef
+    ? { connectionId: activeTab.hedef.connectionId, database: activeTab.hedef.database }
+    : null;
+  const targetLock = (konsol.active && targetLocks[konsol.active]) || null;
+
+  const changeTargetLock = useCallback((id: string, reason: string | null) => {
+    setTargetLocks((locks) => {
+      if ((locks[id] ?? null) === reason) return locks;
+      const { [id]: _old, ...rest } = locks;
+      return reason === null ? rest : { ...rest, [id]: reason };
+    });
+  }, []);
+  const changeTabScript = useCallback((id: string, script: string) => setKonsol((k) => setTabScript(k, id, script)), []);
+  const toggleTabWriteMode = useCallback((id: string) => setKonsol((k) => toggleWriteMode(k, id)), []);
+  const openPalette = useCallback(() => setPaletteOpen(true), []);
+
   const edited = editing?.kind === 'duzenle' ? connections?.find((c) => c.id === editing.id) : undefined;
   const formOpen = editing?.kind === 'yeni' || edited !== undefined;
   const selected = connections?.find((c) => c.id === selectedId);
   const targetConnection = target ? connections?.find((c) => c.id === target.connectionId) : undefined;
-  const targetView = target && targetConnection ? { connection: targetConnection, database: target.database } : null;
 
   function open(next: Editing) {
     setNotice(null);
@@ -285,10 +358,16 @@ export function App() {
     }
   }
 
-  /** Editörün hedefini değiştirmenin tek yolu (panel, menü, palet); kilitliyken hiçbiri değiştiremez. */
+  /**
+   * Aktif sekmenin hedefini değiştirmenin tek yolu (panel, menü, palet); sekme kilitliyken hiçbiri
+   * değiştiremez. Açık sekme yoksa hedef yeni bir sekmede açılır. Şema seçilmez: hedef bağlantı +
+   * veritabanıdır, `search_path` değişmez.
+   */
   function chooseTarget(next: Target): boolean {
     if (targetLock) return false;
-    setTarget(next);
+    const hedef = { connectionId: next.connectionId, database: next.database, schema: null };
+    const id = konsol.active;
+    setKonsol((k) => (id ? setTabTarget(k, id, hedef) : openConsoleTab(k, newTabId(), hedef)));
     return true;
   }
 
@@ -397,7 +476,7 @@ export function App() {
       const result = await api.deleteConnection(connection.id);
       setConnections((list) => (list ?? []).filter((c) => c.id !== connection.id));
       if (selectedId === connection.id) setSelectedId(null);
-      if (target?.connectionId === connection.id) setTarget(null);
+      setKonsol((k) => forgetConnection(k, connection.id));
       setSession(connection.id, null);
       setEditing(null);
       setNotice(
@@ -630,13 +709,17 @@ export function App() {
             onDelete={setDeleting}
           />
         )}
-        {/* Form açıkken gizlenir ama kapanmaz: script, log ve karar bekleyen transaction korunur. */}
-        <ScriptEkrani
-          target={targetView}
-          onChangeTarget={() => setPaletteOpen(true)}
-          onTargetLockChange={setTargetLock}
-          writable={writable}
-          onToggleWriteMode={toggleWriteMode}
+        {/* Form açıkken gizlenir ama kapanmaz: sekmeler, log ve karar bekleyen transaction'lar korunur. */}
+        <Konsol
+          state={konsol}
+          connections={connections ?? []}
+          onActivate={(id) => setKonsol((k) => activateTab(k, id))}
+          onNew={() => setKonsol((k) => openConsoleTab(k, newTabId(), activeTab?.hedef ?? null))}
+          onClose={(id) => setKonsol((k) => closeTab(k, id))}
+          onScriptChange={changeTabScript}
+          onToggleWriteMode={toggleTabWriteMode}
+          onTargetLockChange={changeTargetLock}
+          onChangeTarget={openPalette}
           hidden={formOpen}
         />
       </main>

@@ -13,6 +13,7 @@ import type {
   ValidationErrorResponse,
 } from '../../core/baglanti';
 import type { ConnectionTestRequest, ConnectionTestResponse } from '../../core/baglanti-testi';
+import type { SavedTabs } from '../../core/konsol-sekmeleri';
 import type { ImportApplyRequest, ImportApplyResponse, ImportPreviewRequest, ImportPreviewResponse } from '../../core/ice-aktarma/sozlesme';
 import type { HostKeyForgetRequest, HostKeyForgetResponse, HostKeyTrustRequest, HostKeyTrustResponse } from '../../core/ssh-tuneli';
 import type { ClientMessage, ServerEvent } from '../../core/script-calistirma';
@@ -63,6 +64,13 @@ export interface ApiClient {
   previewImport(input: ImportPreviewRequest): Promise<ImportPreviewResponse>;
   /** Seçilen adayları ekler; şifreler sunucuda keychain'e kopyalanır. */
   applyImport(input: ImportApplyRequest): Promise<ImportApplyResponse>;
+  /** Diskteki konsol sekmeleri; yalnızca dosya okunur, hiçbir sunucuya bağlanılmaz. */
+  readTabs(): Promise<SavedTabs>;
+  /**
+   * Konsol sekmelerinin tümünü yazar; sunucu biçime göre süzüp yazılanı döndürür. `keepalive`:
+   * sayfa kapanırken de gitsin (tarayıcı sınırı nedeniyle yalnızca küçük gövdelerde uygulanır).
+   */
+  writeTabs(tabs: SavedTabs, options?: { keepalive?: boolean }): Promise<SavedTabs>;
 }
 
 /** Çalıştırmanın hedefi, script'i ve (prod'da) yazma kilidi durumu. */
@@ -118,6 +126,9 @@ export class ApiError extends Error {
   }
 }
 
+/** `keepalive` gövdesi için karakter sınırı: UTF-8'de karakter başına 4 bayta kadar, 64 KiB altında. */
+const KEEPALIVE_MAX_CHARS = 16 * 1024;
+
 /** Gerçek istemci: erişim cookie'si tarayıcıda olduğundan istekler aynı origin'e gider. */
 export function createHttpApiClient(): ApiClient {
   async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -161,6 +172,17 @@ export function createHttpApiClient(): ApiClient {
     },
     previewImport: (input) => send('POST', '/api/ice-aktarma/onizleme', input),
     applyImport: (input) => send('POST', '/api/ice-aktarma/uygula', input),
+    readTabs: () => request<SavedTabs>('/api/konsol-sekmeleri'),
+    writeTabs: (tabs, { keepalive = false } = {}) => {
+      const body = JSON.stringify(tabs);
+      return request<SavedTabs>('/api/konsol-sekmeleri', {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body,
+        // Tarayıcılar keepalive gövdesini 64 KiB ile sınırlar; büyük gövde normal istekle gider.
+        keepalive: keepalive && body.length < KEEPALIVE_MAX_CHARS,
+      });
+    },
   };
 }
 
