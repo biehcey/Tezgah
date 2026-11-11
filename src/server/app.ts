@@ -18,6 +18,7 @@ import { createFolderRoutes } from './klasorler';
 import { createImportRoutes, type ImportEnvironment } from './ice-aktarma';
 import { createCatalogCache, createCatalogRoutes } from './katalog';
 import { createTabRoutes, createTabStore } from './konsol-sekmeleri';
+import { createTablePageRoutes } from './tablo-sayfasi';
 import { BodyError, json } from './http';
 import type { Keychain } from './keychain';
 import { systemClock, type Clock } from './saat';
@@ -108,6 +109,8 @@ export async function startServer(options: ServerOptions): Promise<TezgahServer>
   });
   const databaseRoutes = createDatabaseRoutes({ store, pools, catalogs });
   const catalogRoutes = createCatalogRoutes({ store, catalogs });
+  // Tablo sekmesinin sayfaları: kısa süreli client, salt okunur; Çalıştırma kaydına yazılmaz.
+  const tablePageRoutes = createTablePageRoutes({ store, pools, catalogs });
   const history = createRunHistory({ configDir: options.configDir, log: options.log });
   const historyRoutes = createRunHistoryRoutes({ history, openFolder: options.openFolder ?? openFolder });
   // Her `/ws` bağlantısı kendi çalıştırmasını taşır; koparsa transaction geri alınır (ADR-0002).
@@ -156,6 +159,7 @@ export async function startServer(options: ServerOptions): Promise<TezgahServer>
     if (await connectionRoutes(req, res, url.pathname)) return;
     if (await databaseRoutes(req, res, url.pathname)) return;
     if (await catalogRoutes(req, res, url.pathname)) return;
+    if (await tablePageRoutes(req, res, url.pathname)) return;
     if (await connectionTestRoutes(req, res, url.pathname)) return;
     if (await hostKeyRoutes(req, res, url.pathname)) return;
     if (await folderRoutes(req, res, url.pathname)) return;

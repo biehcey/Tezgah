@@ -8,7 +8,9 @@ import {
   visibleSchemas,
   type Target,
 } from '../../core/veritabani-secimi';
+import { searchTables } from '../../core/katalog';
 import { ApiError, useApi } from '../api/client';
+import { catalogKey, type CatalogEntry } from '../katalog/kataloglar';
 import { menuBelow, type MenuPosition } from '../ortak/Menu';
 import type { ConnectionSession } from './hedef';
 
@@ -30,6 +32,18 @@ interface Props {
   onSelectionChange: (selection: DatabaseSelection[]) => void;
   onEdit: () => void;
   onMenu: (at: MenuPosition) => void;
+  /** Hedef başına katalog (bkz. `catalogKey`); tablo listesi bundan. */
+  catalogs?: Readonly<Record<string, CatalogEntry>>;
+  /** Tablo listesi açıldı: veritabanının katalogu istenir (yoksa). */
+  onCatalog?: (target: Target) => void;
+  /** Listeden bir tablo seçildi: Tablo sekmesinde açılır. */
+  onOpenTable?: (database: string, schema: string, table: string) => void;
+}
+
+/** Tablo listesi açık şema; aynı anda bir tane. */
+interface OpenList {
+  database: string;
+  schema: string;
 }
 
 type SchemaState = { kind: 'yukleniyor' } | { kind: 'tamam'; schemas: string[] } | { kind: 'hata'; message: string };
@@ -51,10 +65,15 @@ export function VeritabaniPaneli({
   onSelectionChange,
   onEdit,
   onMenu,
+  catalogs = {},
+  onCatalog,
+  onOpenTable,
 }: Props) {
   const api = useApi();
   const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
   const [schemas, setSchemas] = useState<Record<string, SchemaState>>({});
+  const [tableList, setTableList] = useState<OpenList | null>(null);
+  const [tableFilter, setTableFilter] = useState('');
 
   const sectionRef = useRef<HTMLElement>(null);
   useEffect(() => {
@@ -133,20 +152,76 @@ export function VeritabaniPaneli({
       <div role="group" aria-label={`${entry.database} şemaları`} className="sema-cipleri">
         {state.schemas.map((schema) => {
           const on = visible.includes(schema);
+          const listed = tableList?.database === entry.database && tableList.schema === schema;
           return (
-            <button
-              key={schema}
-              type="button"
-              className="sema-cipi"
-              aria-pressed={on}
-              onClick={() =>
-                onSelectionChange(setSchemaVisible(connection.databaseSelection, entry.database, schema, !on, state.schemas))
-              }
-            >
-              {schema}
-            </button>
+            <span key={schema} className={`sema-cipi${on ? ' acik' : ''}${listed ? ' listeleniyor' : ''}`}>
+              <button
+                type="button"
+                className="sema-cipi-adi"
+                aria-expanded={listed}
+                disabled={!on}
+                title={on ? 'Tabloları listele' : 'Görünür değil; tabloları için görünür yapın'}
+                onClick={() => toggleTableList(entry.database, schema)}
+              >
+                {schema}
+              </button>
+              <button
+                type="button"
+                className="sema-gorunurluk"
+                aria-label={`${schema} görünürlüğü`}
+                aria-pressed={on}
+                title={on ? 'Görünürlükten çıkar' : 'Görünür yap'}
+                onClick={() => {
+                  // Gizlenen şemanın tabloları katalogdan düşer; listesi açık kalmasın.
+                  if (listed && on) setTableList(null);
+                  onSelectionChange(setSchemaVisible(connection.databaseSelection, entry.database, schema, !on, state.schemas));
+                }}
+              >
+                {on ? '●' : '○'}
+              </button>
+            </span>
           );
         })}
+      </div>
+    );
+  };
+
+  function toggleTableList(database: string, schema: string) {
+    if (tableList?.database === database && tableList.schema === schema) {
+      setTableList(null);
+      return;
+    }
+    setTableList({ database, schema });
+    setTableFilter('');
+    onCatalog?.({ connectionId: connection.id, database });
+  }
+
+  /** Şemanın tabloları, katalogdan; filtre kutusu ada göre daraltır. */
+  const tables = ({ database, schema }: OpenList) => {
+    const entry = catalogs[catalogKey({ connectionId: connection.id, database })];
+    const found = entry?.katalog ? searchTables(entry.katalog, [schema], tableFilter) : [];
+    return (
+      <div className="tablo-listesi">
+        <input
+          type="search"
+          className="tablo-filtresi"
+          aria-label={`${schema} tablolarını filtrele`}
+          placeholder="Tablo ara…"
+          value={tableFilter}
+          onChange={(e) => setTableFilter(e.target.value)}
+        />
+        {entry?.durum === 'hata' && <p className="uyari-metni kucuk">Tablolar okunamadı: {entry.hata}</p>}
+        {!entry?.katalog && entry?.durum !== 'hata' && <p className="soluk kucuk">Tablolar yükleniyor…</p>}
+        {entry?.katalog && found.length === 0 && <p className="soluk kucuk">{tableFilter ? 'Eşleşen tablo yok.' : 'Bu şemada tablo yok.'}</p>}
+        <ul aria-label={`${schema} tabloları`}>
+          {found.map((r) => (
+            <li key={r.ad}>
+              <button type="button" className="tablo-adi" onClick={() => onOpenTable?.(database, schema, r.ad)}>
+                {r.ad}
+              </button>
+            </li>
+          ))}
+        </ul>
       </div>
     );
   };
@@ -231,6 +306,7 @@ export function VeritabaniPaneli({
                     {expanded ? '▾' : '▸'} şemalar
                   </button>
                   {expanded && chips(entry)}
+                  {expanded && tableList?.database === entry.database && tables(tableList)}
                 </>,
               );
             })}

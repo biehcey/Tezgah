@@ -17,6 +17,7 @@ import type { HostKeyProblem } from '../../core/ssh-tuneli';
 import { emptyTabs, type SavedTabs } from '../../core/konsol-sekmeleri';
 import type { HistoryEntry, HistoryQuery } from '../../core/gecmis-filtresi';
 import type { Catalog } from '../../core/katalog';
+import type { TablePageRequest, TablePageResponse } from '../../core/tablo-sayfasi';
 import { GridOlcumu } from '../grid/olcum';
 import { JSDOM_OLCUMU } from './grid';
 import { ApiError, ApiProvider, type ApiClient, type ConnectionRequest } from '../api/client';
@@ -46,6 +47,7 @@ export function createFakeApi(overrides: Partial<ApiClient> = {}): ApiClient {
     disconnect: missing('disconnect'),
     getCatalog: missing('getCatalog'),
     refreshCatalog: missing('refreshCatalog'),
+    readTablePage: missing('readTablePage'),
     openRunHistoryFolder: missing('openRunHistoryFolder'),
     listRunHistory: missing('listRunHistory'),
     previewImport: missing('previewImport'),
@@ -170,6 +172,10 @@ export interface FakeConnections {
   catalogs: Map<string, Catalog>;
   /** Katalog istekleri (`getir <bağlantı>/<veritabanı>`, `yenile …`), sırasıyla. */
   catalogRequests: string[];
+  /** Tablo sayfası istekleri, hedefiyle (`<bağlantı>/<veritabanı>`), sırasıyla. */
+  tablePageRequests: ({ hedef: string } & TablePageRequest)[];
+  /** Tablo sayfasının yanıtı; verilmezse istek reddedilir. */
+  tablePage: (hedef: string, request: TablePageRequest) => Promise<TablePageResponse>;
 }
 
 /** Hiç ilişkisi olmayan katalog. */
@@ -226,6 +232,8 @@ export function createFakeConnections(
     historyRequests: [],
     catalogs: new Map(),
     catalogRequests: [],
+    tablePageRequests: [],
+    tablePage: () => Promise.reject(new Error('Sahte API: tablePage tanımlı değil')),
     api: undefined as unknown as ApiClient,
   };
   let next = 1;
@@ -399,6 +407,11 @@ export function createFakeConnections(
       find(id);
       state.catalogRequests.push(`yenile ${id}/${database}`);
       return structuredClone(state.catalogs.get(`${id}/${database}`) ?? emptyCatalog());
+    },
+    async readTablePage(id, database, request) {
+      find(id);
+      state.tablePageRequests.push({ hedef: `${id}/${database}`, ...structuredClone(request) });
+      return structuredClone(await state.tablePage(`${id}/${database}`, request));
     },
     async giveSessionPassword(id, { password, saveToKeychain, secret }) {
       state.requests.push({ method: 'POST', id: `${id}/oturum-sifresi${secret === 'ssh' ? ':ssh' : ''}` });

@@ -24,7 +24,7 @@ export interface ConsoleTab {
   metin: string;
 }
 
-/** Tablo sekmesi (ticket 09/10): biçimde şimdiden tanımlı. */
+/** Tablo sekmesi: tabloya filtreli/sayfalı göz atar; editörü yoktur. */
 export interface TableTab {
   id: string;
   tur: 'tablo';
@@ -176,13 +176,36 @@ export function savedTabs(state: ConsoleState): SavedTabs {
   return { version: TABS_VERSION, sekmeler, aktif: state.active };
 }
 
-/** Konsol sekmesi (varsayılan boş) aktif sekmenin sağında açılır ve aktif olur; kilit kapalı. */
-export function openConsoleTab(state: ConsoleState, id: string, hedef: TabTarget | null, metin = ''): ConsoleState {
-  const tab: OpenTab = { id, tur: 'konsol', hedef, metin, yazmaModu: false };
+/** Yeni sekme aktif sekmenin sağına eklenir ve aktif olur. */
+function insertAfterActive(state: ConsoleState, tab: OpenTab): ConsoleState {
   const at = state.tabs.findIndex((t) => t.id === state.active);
   const tabs = [...state.tabs];
   tabs.splice(at === -1 ? tabs.length : at + 1, 0, tab);
-  return { tabs, active: id };
+  return { tabs, active: tab.id };
+}
+
+/** Konsol sekmesi (varsayılan boş) aktif sekmenin sağında açılır ve aktif olur; kilit kapalı. */
+export function openConsoleTab(state: ConsoleState, id: string, hedef: TabTarget | null, metin = ''): ConsoleState {
+  const tab: OpenTab = { id, tur: 'konsol', hedef, metin, yazmaModu: false };
+  return insertAfterActive(state, tab);
+}
+
+/**
+ * Tablo sekmesi aktif sekmenin sağında açılır ve aktif olur; filtre ve sıralama boş. Aynı hedefte
+ * (bağlantı + veritabanı) aynı tablonun sekmesi zaten açıksa yenisi açılmaz, o sekme aktif olur.
+ */
+export function openTableTab(state: ConsoleState, id: string, hedef: TabTarget, sema: string, tablo: string): ConsoleState {
+  const existing = state.tabs.find(
+    (t) =>
+      t.tur === 'tablo' &&
+      t.sema === sema &&
+      t.tablo === tablo &&
+      t.hedef?.connectionId === hedef.connectionId &&
+      t.hedef.database === hedef.database,
+  );
+  if (existing) return { ...state, active: existing.id };
+  const tab: OpenTab = { id, tur: 'tablo', hedef, sema, tablo, where: '', orderBy: '', yazmaModu: false };
+  return insertAfterActive(state, tab);
 }
 
 export function activateTab(state: ConsoleState, id: string): ConsoleState {

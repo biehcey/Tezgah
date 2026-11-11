@@ -17,6 +17,7 @@ import {
   emptyTabs,
   forgetConnection,
   openConsoleTab,
+  openTableTab,
   restoreTabs,
   savedTabs,
   setTabScript,
@@ -131,6 +132,8 @@ export function App() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [reveal, setReveal] = useState<Reveal | null>(null);
+  /** Bu oturumda listeden açılan Tablo sekmeleri; ilk sayfaları hemen çekilir. */
+  const [autoLoadTabs, setAutoLoadTabs] = useState<ReadonlySet<string>>(new Set());
   /** Sekme başına hedef kilidi: script çalışırken ve karar beklenirken hedef değiştirilemez; neden. */
   const [targetLocks, setTargetLocks] = useState<Record<string, string>>({});
   const urlFormCount = useRef(0);
@@ -403,6 +406,17 @@ export function App() {
 
   function selectTarget(connection: Connection, database: string) {
     chooseTarget({ connectionId: connection.id, database });
+  }
+
+  /**
+   * Veritabanı panelinin tablo listesinden: tablo yeni bir Tablo sekmesinde açılır (aynı tablonun
+   * sekmesi açıksa ona geçilir). Aktif sekmenin hedefi değişmez.
+   */
+  function openTable(connection: Connection, database: string, schema: string, table: string) {
+    // Açık ama henüz yüklenmemiş (geri gelen) sekmesine geçilirse o da yüklenir: kullanıcı tabloyu açtı.
+    const next = openTableTab(konsol, newTabId(), { connectionId: connection.id, database, schema }, schema, table);
+    setKonsol(next);
+    setAutoLoadTabs((ids) => new Set(ids).add(next.active!));
   }
 
   /** Paletten (gizli veritabanı, URL eşleşmesi): hedef olur; seçimde yoksa görünür yapılır. */
@@ -711,6 +725,9 @@ export function App() {
             onSelectionChange={(selection) => void changeSelection(selected, selection)}
             onEdit={() => edit(selected.id)}
             onMenu={(at) => connectionMenu(selected, at)}
+            catalogs={catalogs.entries}
+            onCatalog={(t) => catalogs.request(t, 'hedef')}
+            onOpenTable={(database, schema, table) => openTable(selected, database, schema, table)}
           />
         )}
         <footer className="kenar-alt">{status.kind === 'ok' && <span>v{status.version}</span>}</footer>
@@ -760,6 +777,7 @@ export function App() {
           historyOpen={historyOpen}
           onCloseHistory={closeHistory}
           onOpenFromHistory={openFromHistory}
+          autoLoadTabs={autoLoadTabs}
         />
       </main>
       {paletteOpen && (

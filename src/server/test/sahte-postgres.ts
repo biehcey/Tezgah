@@ -3,7 +3,8 @@ import { createServer, type AddressInfo, type Socket } from 'node:net';
 /**
  * Şifre doğrulamasını ve basit sorgu protokolünü konuşan küçük bir Postgres taklidi (wire protokolü
  * v3, düz metin şifre): her sorgu `resultFor`'un verdiği sonucu (yoksa tek kolonlu ad listesini)
- * döner ya da `failOn`'un verdiği hatayla düşer. Parametreli sorgular (extended protocol) yalnızca kaydedilir ve satırsız döner. Gerçek Postgres olmadan `28P01` akışını ve script çalıştırmanın kayıtlarını sınamak için.
+ * döner ya da `failOn`'un verdiği hatayla düşer. Parametreli sorgular (extended protocol) kaydedilir,
+ * parametreleri `parameters`'a yazılır; `extendedResultFor` sonuç vermezse satırsız döner. Gerçek Postgres olmadan `28P01` akışını ve script çalıştırmanın kayıtlarını sınamak için.
  */
 export interface FakePostgres {
   port: number;
@@ -19,6 +20,10 @@ export interface FakePostgres {
   failOn: (sql: string) => { code: string; message: string; position?: number } | undefined;
   /** Sorgunun sonucu; `undefined` dönerse `names` listesi döner. Değerler metindir, NULL `null`. */
   resultFor: (sql: string) => FakeResult | undefined;
+  /** Extended protocol sorgusunun sonucu (parametreler metin, NULL `null`); `undefined`: satırsız. */
+  extendedResultFor: (sql: string, params: (string | null)[]) => FakeResult | undefined;
+  /** Extended protocol sorgularının parametreleri, sırasıyla. */
+  parameters: (string | null)[][];
   /** Sorgu hiç yanıtlanmasın mı (uzun süren ifade; iptal edilene kadar çalışıyor görünür). */
   hangOn: (sql: string) => boolean;
   /** Açık oturumları düşürür (bağlantı koptu). */
@@ -45,6 +50,8 @@ export async function startFakePostgres({ password }: { password: string }): Pro
     queries: [],
     failOn: () => undefined,
     resultFor: () => undefined,
+    extendedResultFor: () => undefined,
+    parameters: [],
     hangOn: () => false,
     dropSessions: () => {
       for (const socket of sockets) socket.destroy();
@@ -62,6 +69,7 @@ export async function startFakePostgres({ password }: { password: string }): Pro
     socket.on('error', () => {});
     let buffer = Buffer.alloc(0);
     let started = false;
+    const extended: Extended = { sql: '', params: [], failed: false };
     socket.on('data', (chunk) => {
       buffer = Buffer.concat([buffer, chunk]);
       for (;;) {
@@ -85,12 +93,12 @@ export async function startFakePostgres({ password }: { password: string }): Pro
         if (buffer.length < 1 + length) return;
         const body = buffer.subarray(5, 1 + length);
         buffer = buffer.subarray(1 + length);
-        handle(socket, type, body);
+        handle(socket, type, body, extended);
       }
     });
   });
 
-  function handle(socket: Socket, type: string, body: Buffer) {
+  function handle(socket: Socket, type: string, body: Buffer, extended: Extended) {
     if (type === 'p') {
       const offered = body.subarray(0, body.indexOf(0)).toString('utf8');
       fake.attempts.push(offered);
@@ -113,30 +121,86 @@ export async function startFakePostgres({ password }: { password: string }): Pro
         rows: fake.names.map((name) => [name]),
         command: `SELECT ${fake.names.length}`,
       };
-      const column = (name: string) => Buffer.concat([cstring(name), int32(0), int16(0), int32(25), int16(-1), int32(-1), int16(0)]);
-      const cell = (value: string | null) => {
-        if (value === null) return int32(-1);
-        const bytes = Buffer.from(value, 'utf8');
-        return Buffer.concat([int32(bytes.length), bytes]);
-      };
-      const rows = result.rows.map((row) => message('D', Buffer.concat([int16(row.length), ...row.map(cell)])));
-      const description = result.columns.length > 0 ? [message('T', Buffer.concat([int16(result.columns.length), ...result.columns.map(column)]))] : [];
+      const rows = result.rows.map(dataRow);
+      const description = result.columns.length > 0 ? [rowDescription(result.columns)] : [];
       socket.write(Buffer.concat([...description, ...rows, message('C', cstring(result.command)), ready()]));
+    } else if (type === 'S') {
+      extended.failed = false;
+      socket.write(ready());
+    } else if (extended.failed && type !== 'X') {
+      // Hatadan sonra Sync'e kadar gelenler yok sayılır (Postgres gibi).
     } else if (type === 'P') {
-      // Extended protocol (parametreli sorgu): yalnızca kaydedilir, satırsız başarılı döner.
       const sql = body.subarray(body.indexOf(0) + 1);
-      fake.queries.push(sql.subarray(0, sql.indexOf(0)).toString('utf8'));
+      extended.sql = sql.subarray(0, sql.indexOf(0)).toString('utf8');
+      fake.queries.push(extended.sql);
+      const failure = fake.failOn(extended.sql);
+      if (failure) {
+        extended.failed = true;
+        socket.write(errorResponse(failure.code, failure.message, 'ERROR', failure.position));
+        return;
+      }
       socket.write(message('1', Buffer.alloc(0)));
-    } else if (type === 'B') socket.write(message('2', Buffer.alloc(0)));
-    else if (type === 'D') socket.write(message('n', Buffer.alloc(0)));
-    else if (type === 'E') socket.write(message('C', cstring('SELECT 0')));
-    else if (type === 'S') socket.write(ready());
+    } else if (type === 'B') {
+      extended.params = bindParameters(body);
+      fake.parameters.push(extended.params);
+      socket.write(message('2', Buffer.alloc(0)));
+    } else if (type === 'D') {
+      const result = fake.extendedResultFor(extended.sql, extended.params);
+      socket.write(result && result.columns.length > 0 ? rowDescription(result.columns) : message('n', Buffer.alloc(0)));
+    } else if (type === 'E') {
+      const result = fake.extendedResultFor(extended.sql, extended.params);
+      socket.write(Buffer.concat([...(result?.rows.map(dataRow) ?? []), message('C', cstring(result?.command ?? 'SELECT 0'))]));
+    }
     else if (type === 'X') socket.end();
   }
 
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   fake.port = (server.address() as AddressInfo).port;
   return fake;
+}
+
+/** Socket başına extended protocol durumu: son Parse'ın ifadesi, son Bind'ın parametreleri. */
+interface Extended {
+  sql: string;
+  params: (string | null)[];
+  /** Hata gönderildi; Sync'e kadar mesajlar yok sayılır. */
+  failed: boolean;
+}
+
+/** Bind: portal, ifade, biçim kodları, parametreler (uzunluk + bayt, NULL `-1`); metin biçimi varsayılır. */
+function bindParameters(body: Buffer): (string | null)[] {
+  let at = body.indexOf(0) + 1;
+  at = body.indexOf(0, at) + 1;
+  at += 2 + body.readInt16BE(at) * 2;
+  const count = body.readInt16BE(at);
+  at += 2;
+  const params: (string | null)[] = [];
+  for (let i = 0; i < count; i++) {
+    const length = body.readInt32BE(at);
+    at += 4;
+    if (length === -1) {
+      params.push(null);
+      continue;
+    }
+    params.push(body.subarray(at, at + length).toString('utf8'));
+    at += length;
+  }
+  return params;
+}
+
+/** Her kolon `text` (OID 25). */
+function rowDescription(columns: string[]): Buffer {
+  const column = (name: string) => Buffer.concat([cstring(name), int32(0), int16(0), int32(25), int16(-1), int32(-1), int16(0)]);
+  return message('T', Buffer.concat([int16(columns.length), ...columns.map(column)]));
+}
+
+function dataRow(row: (string | null)[]): Buffer {
+  const cell = (value: string | null) => {
+    if (value === null) return int32(-1);
+    const bytes = Buffer.from(value, 'utf8');
+    return Buffer.concat([int32(bytes.length), bytes]);
+  };
+  return message('D', Buffer.concat([int16(row.length), ...row.map(cell)]));
 }
 
 function message(type: string, body: Buffer): Buffer {

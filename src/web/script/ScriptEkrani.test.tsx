@@ -281,7 +281,7 @@ describe('Script ekranı: Çalıştırma modu', () => {
     setEditorScript('INSERT INTO t VALUES (1);\nVACUUM t;\nSELECT 1');
     await waitFor(() => expect(runButton()).toBeDisabled());
     expect(screen.getByText(/ayrı çalıştır/)).toBeInTheDocument();
-    expect(gutterMarks()).toEqual({ 2: '⚠' });
+    await waitFor(() => expect(gutterMarks()).toEqual({ 2: '⚠' }));
     expect(document.querySelectorAll('.cm-transaction-disi')).toHaveLength(1);
     expect(document.querySelector('.cm-transaction-disi')).toHaveTextContent('VACUUM t;');
   });
@@ -784,7 +784,7 @@ describe('Script ekranı: Deneme modu', () => {
     setEditorScript('UPDATE t SET a = 1;\nVACUUM t');
     await waitFor(() => expect(tryButton()).toBeDisabled());
     expect(runButton()).toBeDisabled();
-    expect(gutterMarks()).toEqual({ 2: '⚠' });
+    await waitFor(() => expect(gutterMarks()).toEqual({ 2: '⚠' }));
     expect(tryButton()).toHaveAccessibleDescription(expect.stringContaining('Satır 2: Transaction dışı komut Deneme modunda'));
   });
 });

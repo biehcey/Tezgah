@@ -675,7 +675,8 @@ button.kucuk {
   white-space: nowrap;
 }
 
-.panel-basligi .bosluk {
+.panel-basligi .bosluk,
+.tablo-basligi .bosluk {
   flex: 1;
 }
 
@@ -767,16 +768,74 @@ button.kucuk {
   padding: 2px 0 4px 22px;
 }
 
+/* Şema çipi: adı tablo listesini açar, yanındaki nokta görünürlüğü değiştirir. */
 .sema-cipi {
-  padding: 0 7px;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--cizgi);
   border-radius: 9px;
   color: var(--soluk);
   font-size: 11px;
 }
 
-.sema-cipi[aria-pressed='true'] {
+.sema-cipi.acik {
   border-color: var(--vurgu);
   color: var(--metin);
+}
+
+.sema-cipi.listeleniyor {
+  background: var(--secili);
+}
+
+.sema-cipi button {
+  padding: 0 4px 0 7px;
+  border: 0;
+  background: none;
+  font-size: inherit;
+}
+
+.sema-cipi .sema-gorunurluk {
+  padding: 0 7px 0 2px;
+  color: var(--vurgu);
+}
+
+.tablo-listesi {
+  display: flex;
+  flex-basis: 100%;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0 0 6px 22px;
+}
+
+.tablo-filtresi {
+  width: 100%;
+  padding: 2px 6px;
+  border: 1px solid var(--cizgi);
+  border-radius: 4px;
+  background: var(--zemin);
+  font-size: 12px;
+}
+
+.tablo-listesi ul {
+  max-height: 240px;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.tablo-adi {
+  width: 100%;
+  padding: 1px 6px;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  font-size: 12px;
+  text-align: left;
+}
+
+.tablo-adi:hover {
+  background: var(--secili);
 }
 
 .gizli-basligi {
@@ -789,6 +848,7 @@ button.kucuk {
 
 /* Script ekranı (ticket 23 varyant B): üstte hedef başlığı, altında editör */
 .script-ekrani[hidden],
+.tablo-sekmesi[hidden],
 .konsol[hidden] {
   display: none;
 }
@@ -2032,4 +2092,41 @@ button.kucuk {
 /* Katalog "↻": okunamadıysa uyarı renginde. */
 .katalog-yenile.hata {
   color: var(--uyari, #b91c1c);
+}
+
+/* Tablo sekmesi: başlık (tablo adı, ≈ N satır, ↻), durum satırı, grid; editör yok. */
+.tablo-sekmesi {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  border: 1px solid var(--cizgi);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.tablo-basligi {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--cizgi);
+}
+
+.tablo-basligi h2 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.tablo-durumu,
+.tablo-sekmesi > p,
+.tablo-yukle {
+  margin: 0;
+  padding: 6px 12px;
+}
+
+.tablo-yukle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }

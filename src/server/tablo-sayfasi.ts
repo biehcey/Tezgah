@@ -1,0 +1,137 @@
+import type { IncomingMessage, ServerResponse } from 'node:http';
+import pg from 'pg';
+import type { Connection } from '../core/baglanti';
+import { classifyListError, toDriverError } from '../core/baglanti-testi';
+import {
+  nextCursor,
+  parseTablePageRequest,
+  tablePageQuery,
+  type PageQuery,
+  type TableMeta,
+  type TablePageError,
+  type TablePageRequest,
+  type TablePageResponse,
+} from '../core/tablo-sayfasi';
+import type { TargetErrorResponse } from '../core/veritabani-secimi';
+import type { SettingsStore } from './ayar-deposu';
+import { TargetError, type PoolManager } from './havuzlar';
+import { json, methodNotAllowed, notFound, readJson } from './http';
+import type { CatalogCache } from './katalog';
+
+/** Değerler ham metin olarak gelir: grid ve keyset imleci Postgres'in metnini kullanır. */
+const RAW_TYPES = { getTypeParser: () => (value: string) => value };
+/** Sayfa kısa bir sorgu olmalı; uzarsa client bırakılır (pool'a dönmez). */
+const TIMEOUT_MS = 30_000;
+
+const ESTIMATE_SQL = `SELECT c.reltuples::text AS satir FROM pg_catalog.pg_class c
+  JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = $1 AND c.relname = $2`;
+
+/** Postgres'in kendi hatası (sorgu çalıştı ve reddedildi); bağlantı sağlam. */
+function serverError(err: unknown): TablePageError | null {
+  if (!(err instanceof pg.DatabaseError) || err.code === undefined) return null;
+  const konum = Number(err.position);
+  return { hata: err.message, sqlstate: err.code, ...(Number.isInteger(konum) && konum > 0 && { konum }) };
+}
+
+/** Parametreli, tek ifade: extended protocol birden fazla ifadeyi reddeder. */
+function extendedQuery(client: pg.ClientBase, text: string, values: unknown[]) {
+  // `queryMode` ve `query_timeout` desteklenir ama @types/pg'de tanımlı değil.
+  const config = { text, values, rowMode: 'array', types: RAW_TYPES, queryMode: 'extended', query_timeout: TIMEOUT_MS } as pg.QueryArrayConfig;
+  return client.query(config);
+}
+
+type PageOutcome = { ok: true; page: TablePageResponse } | { ok: false; error: TablePageError };
+
+/**
+ * Bir sayfa: kısa süreli client (oturum sayılmaz), ortamdan bağımsız `BEGIN READ ONLY`, tek ifade,
+ * `COMMIT`. Açık imleç ya da transaction tutulmaz; Çalıştırma kaydına yazılmaz.
+ */
+function readPage(pools: PoolManager, connection: Connection, database: string, meta: TableMeta, request: TablePageRequest, query: PageQuery) {
+  return pools.withClient(connection, database, async (client, discard): Promise<PageOutcome> => {
+    try {
+      await client.query('BEGIN READ ONLY');
+      const estimate = request.sonraki === null ? await extendedQuery(client, ESTIMATE_SQL, [meta.sema, meta.tablo]) : null;
+      const result = await extendedQuery(client, query.text, query.values);
+      await client.query('COMMIT');
+      const satirlar = result.rows as (string | null)[][];
+      const satir = estimate?.rows[0]?.[0];
+      return {
+        ok: true,
+        page: {
+          kolonlar: result.fields.map((f) => f.name),
+          tipler: result.fields.map((f) => f.dataTypeID),
+          satirlar,
+          sonraki: nextCursor(meta, request.sonraki, satirlar),
+          tutarlilikNotu: query.mod === 'offset',
+          ...(estimate && { satirTahmini: satir == null ? -1 : Number(satir) }),
+        },
+      };
+    } catch (err) {
+      const error = serverError(err);
+      if (error) {
+        try {
+          await client.query('ROLLBACK');
+          return { ok: false, error };
+        } catch {
+          discard();
+          return { ok: false, error };
+        }
+      }
+      // Bağlantı ya da zaman aşımı: transaction açık kalmış olabilir, client pool'a dönmez.
+      discard();
+      const driver = toDriverError(err);
+      throw new TargetError({ ...classifyListError(driver), mesaj: `Tablo okunamadı: ${driver.message}` });
+    }
+  });
+}
+
+const PATH = /^\/api\/baglantilar\/([^/]+)\/veritabanlari\/([^/]+)\/tablo-sayfasi$/;
+
+/** `POST …/veritabanlari/:db/tablo-sayfasi`: Tablo sekmesinin bir sayfası. Kolonlar ve PK katalogdan. */
+export function createTablePageRoutes({ store, pools, catalogs }: { store: SettingsStore; pools: PoolManager; catalogs: CatalogCache }) {
+  return async function handle(req: IncomingMessage, res: ServerResponse, pathname: string): Promise<boolean> {
+    const match = PATH.exec(pathname);
+    if (!match) return false;
+    if (req.method !== 'POST') {
+      methodNotAllowed(res);
+      return true;
+    }
+    const id = decodeURIComponent(match[1]!);
+    const database = decodeURIComponent(match[2]!);
+    const request = parseTablePageRequest(await readJson(req));
+    if (!request) {
+      json(res, 400, { hata: 'Geçersiz tablo sayfası isteği' });
+      return true;
+    }
+    const connection = (await store.read()).connections.find((c) => c.id === id);
+    if (!connection) {
+      notFound(res, 'Bağlantı bulunamadı');
+      return true;
+    }
+    try {
+      const catalog = await catalogs.get(connection, database);
+      const relation = catalog.iliskiler.find((r) => r.sema === request.sema && r.ad === request.tablo);
+      if (!relation) {
+        notFound(res, `${request.sema}.${request.tablo} katalogda yok: tablo silinmiş ya da şeması Veritabanı seçiminde görünür değil.`);
+        return true;
+      }
+      const meta: TableMeta = { sema: relation.sema, tablo: relation.ad, kolonlar: relation.kolonlar.map((k) => k.ad), pk: relation.pk };
+      let query: PageQuery;
+      try {
+        query = tablePageQuery(meta, request.sonraki);
+      } catch (err) {
+        json(res, 400, { hata: (err as Error).message });
+        return true;
+      }
+      const outcome = await readPage(pools, connection, database, meta, request, query);
+      if (outcome.ok) json(res, 200, outcome.page);
+      else json(res, 400, outcome.error);
+    } catch (err) {
+      if (!(err instanceof TargetError)) throw err;
+      const { mesaj: hata, kod, hostAnahtari } = err.failure;
+      const body: TargetErrorResponse = { hata, kod, ...(hostAnahtari && { hostAnahtari }) };
+      json(res, 502, body);
+    }
+    return true;
+  };
+}

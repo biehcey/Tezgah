@@ -6,6 +6,7 @@ import { GecmisPaneli } from '../gecmis/GecmisPaneli';
 import { catalogKey, type CatalogEntry, type CatalogReason } from '../katalog/kataloglar';
 import type { Target } from '../../core/veritabani-secimi';
 import { ScriptEkrani } from '../script/ScriptEkrani';
+import { TabloSekmesi } from '../tablo/TabloSekmesi';
 
 interface Props {
   state: ConsoleState;
@@ -32,6 +33,8 @@ interface Props {
   onCloseHistory: () => void;
   /** Geçmişten çift tık: kaydın metni yeni sekmede, kaydın hedefiyle. */
   onOpenFromHistory: (entry: HistoryEntry) => void;
+  /** Bu oturumda listeden açılan Tablo sekmeleri: ilk sayfa hemen çekilir (geri gelenler "Yükle" bekler). */
+  autoLoadTabs?: ReadonlySet<string>;
 }
 
 /** Sekmenin hedefi: bağlantısı hâlâ varsa bağlantı + veritabanı. */
@@ -40,8 +43,14 @@ function resolveTarget(hedef: TabTarget | null, connections: readonly Connection
   return connection && hedef ? { connection, database: hedef.database } : null;
 }
 
-function tabTitle(target: ReturnType<typeof resolveTarget>): string {
+function targetTitle(target: ReturnType<typeof resolveTarget>): string {
   return target ? `${target.connection.name} / ${target.database}` : 'Hedefsiz';
+}
+
+/** Şeritteki ad: konsol sekmesinde hedef, Tablo sekmesinde tablo adı. */
+function tabTitle(tab: OpenTab, target: ReturnType<typeof resolveTarget>): { ad: string; ipucu: string } {
+  const hedef = targetTitle(target);
+  return tab.tur === 'tablo' ? { ad: tab.tablo, ipucu: `${hedef} · ${tab.sema}.${tab.tablo}` } : { ad: hedef, ipucu: hedef };
 }
 
 /**
@@ -67,6 +76,7 @@ export function Konsol({
   historyOpen,
   onCloseHistory,
   onOpenFromHistory,
+  autoLoadTabs = new Set(),
 }: Props) {
   const openSessions = new Set(Object.keys(targetLocks));
   const activeTarget = resolveTarget(state.tabs.find((t) => t.id === state.active)?.hedef ?? null, connections);
@@ -76,7 +86,7 @@ export function Konsol({
         <div role="tablist" aria-label="Konsol sekmeleri" className="konsol-sekmeleri">
           {state.tabs.map((tab) => {
             const target = resolveTarget(tab.hedef, connections);
-            const title = tabTitle(target);
+            const { ad: title, ipucu } = tabTitle(tab, target);
             const active = tab.id === state.active;
             return (
               <div key={tab.id} className={`konsol-sekmesi${active ? ' aktif' : ''}`}>
@@ -85,7 +95,7 @@ export function Konsol({
                   role="tab"
                   aria-selected={active}
                   className="konsol-sekmesi-adi"
-                  title={title}
+                  title={ipucu}
                   onClick={() => onActivate(tab.id)}
                 >
                   <span
@@ -119,6 +129,18 @@ export function Konsol({
           {state.tabs.map((tab) => {
             const target = resolveTarget(tab.hedef, connections);
             const key = target && catalogKey({ connectionId: target.connection.id, database: target.database });
+            if (tab.tur === 'tablo') {
+              return (
+                <TabloSekmesi
+                  key={tab.id}
+                  tab={tab}
+                  target={target}
+                  autoLoad={autoLoadTabs.has(tab.id)}
+                  catalog={key ? catalogs[key] : undefined}
+                  hidden={tab.id !== state.active}
+                />
+              );
+            }
             return (
               <KonsolSekmesi
                 key={tab.id}
@@ -181,14 +203,7 @@ function KonsolSekmesi({
     },
     [connectionId, database, onCatalog],
   );
-  if (tab.tur !== 'konsol') {
-    // Tablo sekmesi ticket 09'da gelir; kayıtlı olanı kaybetmemek için yalnızca yerinde tutulur.
-    return (
-      <p className="soluk kucuk" hidden={hidden}>
-        {tab.sema}.{tab.tablo} Tablo sekmesi bu sürümde açılamıyor.
-      </p>
-    );
-  }
+  if (tab.tur !== 'konsol') return null;
   return (
     <ScriptEkrani
       target={target}

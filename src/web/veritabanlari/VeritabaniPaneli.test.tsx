@@ -119,7 +119,7 @@ describe('Veritabanı paneli: bağlanınca', () => {
     expect(within(panel()).getByRole('heading', { name: 'Gizli (2)' })).toBeInTheDocument();
   });
 
-  it('şema çipleri açılıp kapanır; sistem şemaları kapalı, çipe tıklamak görünürlüğü değiştirir', async () => {
+  it('şema çipleri açılıp kapanır; sistem şemaları kapalı, çipin görünürlük düğmesi görünürlüğü değiştirir', async () => {
     const { user, fake } = setup(
       withServer(
         createFakeConnections([
@@ -140,12 +140,14 @@ describe('Veritabanı paneli: bağlanınca', () => {
     expect(toggle).toHaveAttribute('aria-expanded', 'true');
 
     const chips = within(await within(panel()).findByRole('group', { name: 'app şemaları' }));
-    expect(chips.getByRole('button', { name: 'public' })).toHaveAttribute('aria-pressed', 'true');
-    expect(chips.getByRole('button', { name: 'raporlar' })).toHaveAttribute('aria-pressed', 'true');
-    expect(chips.getByRole('button', { name: 'pg_catalog' })).toHaveAttribute('aria-pressed', 'false');
+    expect(chips.getByRole('button', { name: 'public görünürlüğü' })).toHaveAttribute('aria-pressed', 'true');
+    expect(chips.getByRole('button', { name: 'raporlar görünürlüğü' })).toHaveAttribute('aria-pressed', 'true');
+    expect(chips.getByRole('button', { name: 'pg_catalog görünürlüğü' })).toHaveAttribute('aria-pressed', 'false');
 
-    await user.click(chips.getByRole('button', { name: 'raporlar' }));
-    await waitFor(() => expect(chips.getByRole('button', { name: 'raporlar' })).toHaveAttribute('aria-pressed', 'false'));
+    // Gizli şemanın tabloları katalogda yok: adı tablo listesi açmaz.
+    expect(chips.getByRole('button', { name: 'pg_catalog' })).toBeDisabled();
+    await user.click(chips.getByRole('button', { name: 'raporlar görünürlüğü' }));
+    await waitFor(() => expect(chips.getByRole('button', { name: 'raporlar görünürlüğü' })).toHaveAttribute('aria-pressed', 'false'));
     expect(fake.connections[0]!.databaseSelection).toEqual([
       { database: 'postgres', schemas: null },
       { database: 'app', schemas: ['public'] },

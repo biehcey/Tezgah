@@ -16,6 +16,7 @@ import type { ConnectionTestRequest, ConnectionTestResponse } from '../../core/b
 import type { Catalog } from '../../core/katalog';
 import { historySearchParams, type HistoryPage, type HistoryQuery } from '../../core/gecmis-filtresi';
 import type { SavedTabs } from '../../core/konsol-sekmeleri';
+import type { TablePageError, TablePageRequest, TablePageResponse } from '../../core/tablo-sayfasi';
 import type { ImportApplyRequest, ImportApplyResponse, ImportPreviewRequest, ImportPreviewResponse } from '../../core/ice-aktarma/sozlesme';
 import type { HostKeyForgetRequest, HostKeyForgetResponse, HostKeyTrustRequest, HostKeyTrustResponse } from '../../core/ssh-tuneli';
 import type { ClientMessage, ServerEvent } from '../../core/script-calistirma';
@@ -62,6 +63,11 @@ export interface ApiClient {
   getCatalog(id: string, database: string): Promise<Catalog>;
   /** "↻": hedefin katalogunu sunucuda yeniden okur. */
   refreshCatalog(id: string, database: string): Promise<Catalog>;
+  /**
+   * Tablo sekmesinin bir sayfası: kısa, salt okunur, ayrı bir sorgu. Kolonlar ve PK sunucunun
+   * katalogundan (yoksa okunur). Postgres hatası 400 (`sqlstate`, `konum`) olarak gelir.
+   */
+  readTablePage(id: string, database: string, request: TablePageRequest): Promise<TablePageResponse>;
   /**
    * Script'i hedefte çalıştırır; olaylar `onEvent`'e sırayla gelir. Transaction bu çalıştırmaya
    * bağlıdır: `close` ya da sekmenin kapanması açık transaction'ı geri aldırır (ADR-0002).
@@ -130,7 +136,7 @@ export class ApiError extends Error {
   constructor(
     readonly status: number,
     /** Sunucunun JSON hata gövdesi (`hata`, doğrulamada `alanlar`, hedef hatasında `kod`). */
-    readonly body?: Partial<ValidationErrorResponse & TargetErrorResponse>,
+    readonly body?: Partial<ValidationErrorResponse & TargetErrorResponse & TablePageError>,
   ) {
     super(body?.hata ?? `Sunucu ${status} döndü`);
     this.name = 'ApiError';
@@ -177,6 +183,7 @@ export function createHttpApiClient(): ApiClient {
     updateDatabaseSelection: (id, selection) => send('PUT', `${connectionUrl(id)}/veritabani-secimi`, selection),
     getCatalog: (id, database) => request(catalogUrl(id, database)),
     refreshCatalog: (id, database) => send('POST', `${catalogUrl(id, database)}/yenile`),
+    readTablePage: (id, database, body) => send('POST', `${connectionUrl(id)}/veritabanlari/${encodeURIComponent(database)}/tablo-sayfasi`, body),
     disconnect: async (id) => {
       await send('POST', `${connectionUrl(id)}/baglantiyi-kes`);
     },

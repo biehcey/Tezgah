@@ -126,7 +126,7 @@ describe('Katalog: yalnızca kullanıcı eylemiyle istenir', () => {
     fake.catalogs.set('d1/postgres', { ...POSTGRES_CATALOG, semalar: ['public'] });
     // Seçim değişince eski katalog atılır ve (kullanıcı eylemi olduğundan) yeniden istenir.
     const chips = await connectInPanel(user);
-    await user.click(chips.getByRole('button', { name: 'rapor' }));
+    await user.click(chips.getByRole('button', { name: 'rapor görünürlüğü' }));
     await waitFor(() => expect(schemaNames()).toEqual(['public']));
     expect(fake.catalogRequests).toEqual(['getir d1/postgres', 'getir d1/postgres']);
   });

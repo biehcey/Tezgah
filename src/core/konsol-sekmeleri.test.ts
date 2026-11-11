@@ -6,6 +6,7 @@ import {
   closeTab,
   forgetConnection,
   openConsoleTab,
+  openTableTab,
   parseTabs,
   restoreTabs,
   savedTabs,
@@ -106,6 +107,24 @@ describe('Sekme durumu', () => {
     expect(state.tabs.map((t) => t.id)).toEqual(['s1', 's4', 's2', 's3']);
     expect(state.active).toBe('s4');
     expect(tab(state, 's4')).toMatchObject({ tur: 'konsol', metin: '', hedef: null, yazmaModu: false });
+  });
+
+  it('Tablo sekmesi aktif sekmenin sağında açılır; hedefi, şeması ve tablosuyla diske yazılır ve geri gelir', () => {
+    const hedef = { connectionId: 'p1', database: 'app', schema: 'satis' };
+    const state = openTableTab(activateTab(restored(), 's1'), 's4', hedef, 'satis', 'Sipariş');
+    expect(state.tabs.map((t) => t.id)).toEqual(['s1', 's4', 's2', 's3']);
+    expect(state.active).toBe('s4');
+    const saved = savedTabs(state);
+    expect(saved.sekmeler[1]).toEqual({ id: 's4', tur: 'tablo', hedef, sema: 'satis', tablo: 'Sipariş', where: '', orderBy: '' });
+    expect(tab(restoreTabs(parseTabs(JSON.parse(JSON.stringify(saved))), ['p1']), 's4')).toMatchObject({ tur: 'tablo', tablo: 'Sipariş', hedef });
+  });
+
+  it('aynı hedefte aynı tablonun sekmesi zaten açıksa yenisi açılmaz, o sekme aktif olur', () => {
+    const state = openTableTab(restored(), 's4', { ...prodHedef, schema: 'public' }, 'public', 'siparis');
+    expect(state.tabs.map((t) => t.id)).toEqual(['s1', 's2', 's3']);
+    expect(state.active).toBe('s3');
+    const other = openTableTab(restored(), 's4', { ...prodHedef, database: 'raporlar' }, 'public', 'siparis');
+    expect(other.tabs.map((t) => t.id)).toEqual(['s1', 's2', 's4', 's3']);
   });
 
   it('aktif sekme kapanınca sağındaki, yoksa solundaki aktif olur; son sekme kapanınca aktif yok', () => {
