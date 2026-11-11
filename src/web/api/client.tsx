@@ -13,6 +13,7 @@ import type {
   ValidationErrorResponse,
 } from '../../core/baglanti';
 import type { ConnectionTestRequest, ConnectionTestResponse } from '../../core/baglanti-testi';
+import { historySearchParams, type HistoryPage, type HistoryQuery } from '../../core/gecmis-filtresi';
 import type { SavedTabs } from '../../core/konsol-sekmeleri';
 import type { ImportApplyRequest, ImportApplyResponse, ImportPreviewRequest, ImportPreviewResponse } from '../../core/ice-aktarma/sozlesme';
 import type { HostKeyForgetRequest, HostKeyForgetResponse, HostKeyTrustRequest, HostKeyTrustResponse } from '../../core/ssh-tuneli';
@@ -60,6 +61,8 @@ export interface ApiClient {
   runScript(request: ScriptRunRequest, onEvent: (event: ServerEvent) => void): ScriptRunHandle;
   /** Çalıştırma kayıtları klasörünü işletim sisteminin dosya yöneticisinde açar. */
   openRunHistoryFolder(): Promise<void>;
+  /** Filtreye uyan Çalıştırma kayıtları, yeniden eskiye bir sayfa; yalnızca dosya okunur. */
+  listRunHistory(query: HistoryQuery): Promise<HistoryPage>;
   /** İçe aktarma kaynaklarını (`.pgpass`) tarar; adaylar şifre değeri olmadan gelir. */
   previewImport(input: ImportPreviewRequest): Promise<ImportPreviewResponse>;
   /** Seçilen adayları ekler; şifreler sunucuda keychain'e kopyalanır. */
@@ -170,6 +173,7 @@ export function createHttpApiClient(): ApiClient {
     openRunHistoryFolder: async () => {
       await send('POST', '/api/calistirma-kayitlari/klasoru-ac');
     },
+    listRunHistory: (query) => request(`/api/calistirma-kayitlari?${new URLSearchParams(historySearchParams(query))}`),
     previewImport: (input) => send('POST', '/api/ice-aktarma/onizleme', input),
     applyImport: (input) => send('POST', '/api/ice-aktarma/uygula', input),
     readTabs: () => request<SavedTabs>('/api/konsol-sekmeleri'),

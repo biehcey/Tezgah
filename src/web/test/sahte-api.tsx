@@ -15,6 +15,7 @@ import {
 } from '../../core/baglanti';
 import type { HostKeyProblem } from '../../core/ssh-tuneli';
 import { emptyTabs, type SavedTabs } from '../../core/konsol-sekmeleri';
+import type { HistoryEntry, HistoryQuery } from '../../core/gecmis-filtresi';
 import { GridOlcumu } from '../grid/olcum';
 import { JSDOM_OLCUMU } from './grid';
 import { ApiError, ApiProvider, type ApiClient, type ConnectionRequest } from '../api/client';
@@ -43,6 +44,7 @@ export function createFakeApi(overrides: Partial<ApiClient> = {}): ApiClient {
     updateDatabaseSelection: missing('updateDatabaseSelection'),
     disconnect: missing('disconnect'),
     openRunHistoryFolder: missing('openRunHistoryFolder'),
+    listRunHistory: missing('listRunHistory'),
     previewImport: missing('previewImport'),
     applyImport: missing('applyImport'),
     // Sekmeler yalnızca dosyadır; App'i kuran her test bunları ister.
@@ -154,6 +156,13 @@ export interface FakeConnections {
   savedTabs: SavedTabs;
   /** Arayüzün yazdığı sekme listeleri, sırasıyla. */
   tabWrites: SavedTabs[];
+  /**
+   * Çalıştırma kayıtları, yeniden eskiye. Sahte uç yalnızca hedef filtresini uygular (filtrenin
+   * kendisi core'da ve sunucuda sınanır); imleç bir sonraki kaydın sırasıdır.
+   */
+  history: HistoryEntry[];
+  /** Arayüzün geçmiş istekleri, sırasıyla. */
+  historyRequests: HistoryQuery[];
 }
 
 export interface FakeServer {
@@ -201,6 +210,8 @@ export function createFakeConnections(
     unknownHostKey: null,
     savedTabs: emptyTabs(),
     tabWrites: [],
+    history: [],
+    historyRequests: [],
     api: undefined as unknown as ApiClient,
   };
   let next = 1;
@@ -385,6 +396,15 @@ export function createFakeConnections(
       }
       state.sessionPasswords.set(id, password);
       return { connection: structuredClone(found), password: saveToKeychain ? 'reddedildi' : 'oturumda' };
+    },
+    async listRunHistory(query) {
+      state.historyRequests.push(structuredClone(query));
+      const matching = state.history.filter(
+        (e) => !query.hedef || (e.hedef.baglantiId === query.hedef.baglantiId && e.hedef.veritabani === query.hedef.veritabani),
+      );
+      const from = query.imlec ? Number(query.imlec) : 0;
+      const to = from + query.limit;
+      return { kayitlar: structuredClone(matching.slice(from, to)), sonraki: to < matching.length ? String(to) : null };
     },
     readTabs: async () => structuredClone(state.savedTabs),
     async writeTabs(tabs) {

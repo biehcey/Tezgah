@@ -39,6 +39,7 @@ import { SilmeOnayi } from './baglantilar/SilmeOnayi';
 import { Menu, type MenuItem, type MenuPosition } from './ortak/Menu';
 import { Onay } from './ortak/Onay';
 import { Konsol } from './konsol/Konsol';
+import type { HistoryEntry } from '../core/gecmis-filtresi';
 import {
   changesServerSession,
   defaultTargetDatabase,
@@ -125,6 +126,7 @@ export function App() {
   const promptCount = useRef(0);
   const [hostKeyPrompt, setHostKeyPrompt] = useState<HostKeyPrompt | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [reveal, setReveal] = useState<Reveal | null>(null);
   /** Sekme başına hedef kilidi: script çalışırken ve karar beklenirken hedef değiştirilemez; neden. */
   const [targetLocks, setTargetLocks] = useState<Record<string, string>>({});
@@ -134,12 +136,21 @@ export function App() {
   const [importMarks, setImportMarks] = useState<ImportMarks>({ newIds: [], tests: {} });
   /** Başka bir pencere (klasör, onay, şifre) açıkken kısayol paleti onun üstüne açmaz. */
   const dialogOpen = useRef(false);
+  /** Bağlantı formu açıkken konsol gizlidir; geçmiş kısayolu çalışmaz. */
+  const consoleHidden = useRef(false);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'k') {
         e.preventDefault();
         if (!dialogOpen.current) setPaletteOpen(true);
+      }
+      // Sorgu geçmişi: Ctrl/Cmd+Alt+E, yalnızca konsol görünürken. Alt ile `key` klavyeye göre değişir,
+      // `code` değişmez. Windows'ta AltGr de Ctrl+Alt gelir: AltGr+E (€) yazmaya devam etmeli.
+      if ((e.metaKey || e.ctrlKey) && e.altKey && !e.shiftKey && e.code === 'KeyE' && !e.getModifierState('AltGraph')) {
+        if (dialogOpen.current || consoleHidden.current) return;
+        e.preventDefault();
+        setHistoryOpen((open) => !open);
       }
     };
     window.addEventListener('keydown', onKey);
@@ -219,9 +230,20 @@ export function App() {
   const changeTabScript = useCallback((id: string, script: string) => setKonsol((k) => setTabScript(k, id, script)), []);
   const toggleTabWriteMode = useCallback((id: string) => setKonsol((k) => toggleWriteMode(k, id)), []);
   const openPalette = useCallback(() => setPaletteOpen(true), []);
+  const closeHistory = useCallback(() => setHistoryOpen(false), []);
+  /** Geçmişten açılan kayıt yeni sekmede, kaydın hedefiyle; bağlantı artık yoksa hedefsiz. */
+  const openFromHistory = useCallback(
+    ({ hedef, script }: HistoryEntry) => {
+      const exists = connections?.some((c) => c.id === hedef.baglantiId) ?? false;
+      const tabTarget = exists ? { connectionId: hedef.baglantiId, database: hedef.veritabani, schema: null } : null;
+      setKonsol((k) => openConsoleTab(k, newTabId(), tabTarget, script));
+    },
+    [connections],
+  );
 
   const edited = editing?.kind === 'duzenle' ? connections?.find((c) => c.id === editing.id) : undefined;
   const formOpen = editing?.kind === 'yeni' || edited !== undefined;
+  consoleHidden.current = formOpen;
   const selected = connections?.find((c) => c.id === selectedId);
   const targetConnection = target ? connections?.find((c) => c.id === target.connectionId) : undefined;
 
@@ -722,6 +744,9 @@ export function App() {
           targetLocks={targetLocks}
           onChangeTarget={openPalette}
           hidden={formOpen}
+          historyOpen={historyOpen}
+          onCloseHistory={closeHistory}
+          onOpenFromHistory={openFromHistory}
         />
       </main>
       {paletteOpen && (

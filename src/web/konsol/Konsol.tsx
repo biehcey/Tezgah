@@ -1,6 +1,8 @@
 import { useCallback } from 'react';
 import type { Connection } from '../../core/baglanti';
 import { sessionTabs, type ConsoleState, type OpenTab, type SessionTab, type TabTarget } from '../../core/konsol-sekmeleri';
+import type { HistoryEntry } from '../../core/gecmis-filtresi';
+import { GecmisPaneli } from '../gecmis/GecmisPaneli';
 import { ScriptEkrani } from '../script/ScriptEkrani';
 
 interface Props {
@@ -19,6 +21,11 @@ interface Props {
   onChangeTarget: () => void;
   /** Konsol gizli (ör. bağlantı formu açık); sekmeler ve açık transaction'ları korunur. */
   hidden?: boolean;
+  /** Sorgu geçmişi paneli açık mı (Ctrl/Cmd+Alt+E). */
+  historyOpen: boolean;
+  onCloseHistory: () => void;
+  /** Geçmişten çift tık: kaydın metni yeni sekmede, kaydın hedefiyle. */
+  onOpenFromHistory: (entry: HistoryEntry) => void;
 }
 
 /** Sekmenin hedefi: bağlantısı hâlâ varsa bağlantı + veritabanı. */
@@ -49,8 +56,12 @@ export function Konsol({
   targetLocks,
   onChangeTarget,
   hidden = false,
+  historyOpen,
+  onCloseHistory,
+  onOpenFromHistory,
 }: Props) {
   const openSessions = new Set(Object.keys(targetLocks));
+  const activeTarget = resolveTarget(state.tabs.find((t) => t.id === state.active)?.hedef ?? null, connections);
   return (
     <div className="konsol" hidden={hidden}>
       <div className="konsol-seridi">
@@ -94,21 +105,33 @@ export function Konsol({
           +
         </button>
       </div>
-      {state.tabs.length === 0 && <p className="soluk kucuk bos-konsol">Açık sekme yok. “+” ile yeni bir konsol sekmesi açın.</p>}
-      {state.tabs.map((tab) => (
-        <KonsolSekmesi
-          key={tab.id}
-          tab={tab}
-          target={resolveTarget(tab.hedef, connections)}
-          hidden={tab.id !== state.active}
-          sessionTabs={sessionTabs(state, tab.id, openSessions)}
-          onActivate={onActivate}
-          onScriptChange={onScriptChange}
-          onToggleWriteMode={onToggleWriteMode}
-          onTargetLockChange={onTargetLockChange}
-          onChangeTarget={onChangeTarget}
-        />
-      ))}
+      <div className="konsol-govde">
+        <div className="konsol-ekrani">
+          {state.tabs.length === 0 && <p className="soluk kucuk bos-konsol">Açık sekme yok. “+” ile yeni bir konsol sekmesi açın.</p>}
+          {state.tabs.map((tab) => (
+            <KonsolSekmesi
+              key={tab.id}
+              tab={tab}
+              target={resolveTarget(tab.hedef, connections)}
+              hidden={tab.id !== state.active}
+              sessionTabs={sessionTabs(state, tab.id, openSessions)}
+              onActivate={onActivate}
+              onScriptChange={onScriptChange}
+              onToggleWriteMode={onToggleWriteMode}
+              onTargetLockChange={onTargetLockChange}
+              onChangeTarget={onChangeTarget}
+            />
+          ))}
+        </div>
+        {historyOpen && (
+          <GecmisPaneli
+            connections={connections}
+            activeTarget={activeTarget && { connectionId: activeTarget.connection.id, database: activeTarget.database }}
+            onOpen={onOpenFromHistory}
+            onClose={onCloseHistory}
+          />
+        )}
+      </div>
     </div>
   );
 }

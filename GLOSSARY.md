@@ -99,3 +99,7 @@ _Avoid_: Sonuç tablosu, result set, veri grid'i
 **Çalıştırma kaydı**:
 Bir script çalıştırmasının sonradan değiştirilmeyen kaydı: ne çalıştırıldı, hangi hedefte, nasıl sonuçlandı. Deneme modu ve hatalı çalıştırmalar da kaydedilir; çalıştırmanın döndürdüğü veriyi içermez.
 _Avoid_: Geçmiş, log, audit log, denetim kaydı
+
+**Sorgu geçmişi**:
+Konsolda Ctrl/Cmd+Alt+E ile açılıp kapanan, Çalıştırma kayıtlarını yeniden eskiye listeleyen yan panel. Bir kayda çift tıklamak metnini yeni bir Sekmede, kaydın hedefiyle açar. Panelin adıdır; içindeki her öğe bir Çalıştırma kaydıdır.
+_Avoid_: Geçmiş kaydı, log

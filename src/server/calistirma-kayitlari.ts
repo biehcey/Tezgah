@@ -1,17 +1,30 @@
 import { randomUUID } from 'node:crypto';
-import { appendFile, mkdir } from 'node:fs/promises';
+import { appendFile, mkdir, readFile, readdir } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { join } from 'node:path';
 import {
   finishedLine,
   formatLine,
   historyFileName,
+  parseRecords,
   startedLine,
   type RecordLine,
   type RecordResult,
   type StartedLine,
   type StatementSummary,
 } from '../core/calistirma-kaydi';
+import {
+  compareKeys,
+  compareNewestFirst,
+  encodeCursor,
+  historyEntry,
+  historyKey,
+  matchesHistoryFilter,
+  parseHistorySearchParams,
+  type HistoryKey,
+  type HistoryPage,
+  type HistoryQuery,
+} from '../core/gecmis-filtresi';
 import { json, methodNotAllowed } from './http';
 
 /** Yapılandırma dizininde Çalıştırma kayıtlarının alt dizini. */
@@ -90,9 +103,22 @@ function withTimeout(write: Promise<void>): Promise<void> {
   return Promise.race([write, timeout]).finally(() => clearTimeout(timer));
 }
 
-/** `/api/calistirma-kayitlari/klasoru-ac`: klasörü (yoksa oluşturup) OS dosya yöneticisinde açar. */
+/**
+ * `GET /api/calistirma-kayitlari`: filtreli, yeniden eskiye sayfalı kayıtlar.
+ * `POST /api/calistirma-kayitlari/klasoru-ac`: klasörü (yoksa oluşturup) OS dosya yöneticisinde açar.
+ */
 export function createRunHistoryRoutes({ history, openFolder }: { history: RunHistory; openFolder: (dir: string) => void }) {
   return async function handle(req: IncomingMessage, res: ServerResponse, pathname: string): Promise<boolean> {
+    if (pathname === '/api/calistirma-kayitlari') {
+      if (req.method !== 'GET') {
+        methodNotAllowed(res);
+        return true;
+      }
+      const parsed = parseHistorySearchParams(new URL(req.url ?? '', 'http://127.0.0.1').searchParams);
+      if (!parsed.ok) json(res, 400, { hata: parsed.hata });
+      else json(res, 200, await readHistoryPage(history.dir, parsed.query, parsed.cursor));
+      return true;
+    }
     if (pathname !== '/api/calistirma-kayitlari/klasoru-ac') return false;
     if (req.method !== 'POST') {
       methodNotAllowed(res);
@@ -102,5 +128,63 @@ export function createRunHistoryRoutes({ history, openFolder }: { history: RunHi
     openFolder(history.dir);
     json(res, 200, { klasor: history.dir });
     return true;
+  };
+}
+
+const MONTH_FILE = /^(\d{4})-(\d{2})\.jsonl$/;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Aylık dosyanın kayıtlarının başlama zamanı için güvenli aralık. Dosya yerel saatle seçildiğinden
+ * (saat dilimi o zamandan beri değişmiş olabilir) ay sınırları bir gün genişletilir.
+ */
+function monthBounds(year: number, month: number): { from: number; to: number } {
+  return { from: Date.UTC(year, month - 1, 1) - DAY_MS, to: Date.UTC(year, month, 1) + DAY_MS };
+}
+
+/**
+ * Dosyalar yeniden eskiye okunur; sayfa dolduktan sonra kalan dosyaların hiçbir kaydı sayfaya
+ * giremeyecekse durulur. İmleç son kaydın sıradaki konumudur: sayfalar arasında eklenen yeni
+ * çalıştırmalar sonraki sayfayı kaydırmaz.
+ */
+async function readHistoryPage(dir: string, query: HistoryQuery, cursor: HistoryKey | null): Promise<HistoryPage> {
+  let names: string[];
+  try {
+    names = await readdir(dir);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { kayitlar: [], sonraki: null };
+    throw err;
+  }
+  const files = names
+    .flatMap((name) => {
+      const match = MONTH_FILE.exec(name);
+      return match ? [{ name, ...monthBounds(Number(match[1]), Number(match[2])) }] : [];
+    })
+    .sort((a, b) => (a.name < b.name ? 1 : -1));
+  const cursorAt = cursor ? Date.parse(cursor.zaman) : Infinity;
+  const found = [];
+  for (const file of files) {
+    if (file.from > cursorAt) continue;
+    // Sayfa + "sonraki var mı" için limit + 1 kayıt yeter; bu dosya o kayıttan yenisini içeremez.
+    const boundary = found.length > query.limit ? found.sort(compareNewestFirst)[query.limit]! : null;
+    if (boundary && Date.parse(boundary.basladi.zaman) >= file.to) break;
+    let text: string;
+    try {
+      text = await readFile(join(dir, file.name), 'utf8');
+    } catch (err) {
+      // Okunurken silinen dosya boştur; okunamayan dosya (izin, kilit) sessizce kayıt düşürmesin.
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+      text = '';
+    }
+    for (const record of parseRecords(text)) {
+      if (cursor && compareKeys(historyKey(record), cursor) >= 0) continue;
+      if (matchesHistoryFilter(record, query)) found.push(record);
+    }
+  }
+  found.sort(compareNewestFirst);
+  const page = found.slice(0, query.limit);
+  return {
+    kayitlar: page.map(historyEntry),
+    sonraki: found.length > query.limit ? encodeCursor(historyKey(page.at(-1)!)) : null,
   };
 }

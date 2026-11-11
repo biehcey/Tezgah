@@ -176,9 +176,9 @@ export function savedTabs(state: ConsoleState): SavedTabs {
   return { version: TABS_VERSION, sekmeler, aktif: state.active };
 }
 
-/** Boş konsol sekmesi aktif sekmenin sağında açılır ve aktif olur. */
-export function openConsoleTab(state: ConsoleState, id: string, hedef: TabTarget | null): ConsoleState {
-  const tab: OpenTab = { id, tur: 'konsol', hedef, metin: '', yazmaModu: false };
+/** Konsol sekmesi (varsayılan boş) aktif sekmenin sağında açılır ve aktif olur; kilit kapalı. */
+export function openConsoleTab(state: ConsoleState, id: string, hedef: TabTarget | null, metin = ''): ConsoleState {
+  const tab: OpenTab = { id, tur: 'konsol', hedef, metin, yazmaModu: false };
   const at = state.tabs.findIndex((t) => t.id === state.active);
   const tabs = [...state.tabs];
   tabs.splice(at === -1 ? tabs.length : at + 1, 0, tab);

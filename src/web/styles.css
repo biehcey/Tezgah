@@ -1888,3 +1888,143 @@ button.kucuk {
     border-top: 1px solid var(--cizgi);
   }
 }
+
+/* Konsol gövdesi: solda aktif sekmenin ekranı, sağda (açıksa) Sorgu geçmişi paneli. */
+.konsol-govde {
+  display: flex;
+  flex: 1;
+  gap: 6px;
+  min-height: 0;
+}
+
+.konsol-ekrani {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.gecmis-paneli {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  width: 340px;
+  min-height: 0;
+  border: 1px solid var(--cizgi);
+  border-radius: 6px;
+  background: var(--kenar-zemin);
+  overflow: hidden;
+}
+
+.gecmis-basligi {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--cizgi);
+}
+
+.gecmis-basligi h2 {
+  margin: 0;
+  font-size: 13px;
+}
+
+.gecmis-filtresi {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--cizgi);
+  font-size: 12px;
+}
+
+.gecmis-satiri {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+}
+
+.gecmis-satiri label {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.gecmis-satiri input[type='date'] {
+  flex: 1;
+  min-width: 0;
+}
+
+.gecmis-listesi {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.gecmis-kaydi {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--cizgi);
+  cursor: default;
+  user-select: none;
+}
+
+.gecmis-kaydi:hover,
+.gecmis-kaydi:focus {
+  outline: none;
+  background: var(--secili);
+}
+
+.gecmis-ust {
+  display: flex;
+  justify-content: space-between;
+  color: var(--soluk);
+  font-size: 11px;
+}
+
+.gecmis-hedefi {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.gecmis-scripti {
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gecmis-sonucu {
+  font-weight: 600;
+}
+
+.gecmis-sonucu.basarili {
+  color: var(--basarili);
+}
+
+.gecmis-sonucu.hata {
+  color: var(--uyari);
+}
+
+.gecmis-sonucu.deneme,
+.gecmis-sonucu.rollback {
+  color: var(--dikkat);
+}
+
+.gecmis-sonucu.bilinmiyor {
+  color: var(--soluk);
+  font-style: italic;
+}
+
+.gecmis-durumu {
+  padding: 8px 10px;
+}
