@@ -88,6 +88,14 @@ _Avoid_: Zaman aşımı, timeout
 Bir sekmenin hedefte client tutan çalıştırması: script çalışıyor, karar bekliyor ya da Okuma transaction'ı açık. Hedef başına en fazla 5 açık oturum olabilir; sınırı aşan çalıştırma beklemeden reddedilir. Katalog okuma, iptal gibi kısa süreli sorgular açık oturum sayılmaz. Hedefin eş anlamlısı değildir.
 _Avoid_: Bağlantı, client, session
 
+**Sonuç sekmesi**:
+Bir çalıştırmada satır döndüren her ifade için editörün altında açılan, o ifadenin Sonuç grid'ini gösteren alt sekme. Bir Sekme değildir: diske yazılmaz, kapatılmaz; script yeniden çalıştırılınca hepsi silinir.
+_Avoid_: Sonuç penceresi, sekme (tek başına)
+
+**Sonuç grid'i**:
+Bir ifadenin döndürdüğü satırların ilk sayfasını (500 satır) gösteren salt okunur tablo. Hücre seçilir, aralık kopyalanır (başlıksız TSV), tam değer F2 ile açılır; değer düzenlenmez. NULL boş metinden ayrı gösterilir.
+_Avoid_: Sonuç tablosu, result set, veri grid'i
+
 **Çalıştırma kaydı**:
 Bir script çalıştırmasının sonradan değiştirilmeyen kaydı: ne çalıştırıldı, hangi hedefte, nasıl sonuçlandı. Deneme modu ve hatalı çalıştırmalar da kaydedilir; çalıştırmanın döndürdüğü veriyi içermez.
 _Avoid_: Geçmiş, log, audit log, denetim kaydı

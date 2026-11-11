@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { isProd, type Connection } from '../../core/baglanti';
 import { analyzeScript, forceTransaction, type RunMode, type ScriptAnalysis } from '../../core/calistirma-modu';
 import { DML_VERBS, FALLBACK_NOTES } from '../../core/deneme';
@@ -22,6 +22,7 @@ import type { Target } from '../../core/veritabani-secimi';
 import { runBlockReasons, writeLockState } from '../../core/yazma-kilidi';
 import { STATUS_LABELS, STATUS_SYMBOLS, WRITE_LOCK_LABELS, type AnalysisMark } from './durum';
 import { ScriptEditoru, type EditorMarks, type ScriptEditoruHandle } from './ScriptEditoru';
+import { resultSummary, resultTotal } from '../../core/grid/ozet';
 import { SonucGridi } from '../grid/SonucGridi';
 
 interface Props {
@@ -737,22 +738,41 @@ function StatementDetail({ statement: s, onForceTransaction }: { statement: Stat
 /**
  * Editörün altındaki sonuç sekmeleri: satır döndüren her ifadeye bir sekme. Yeni çalıştırmanın
  * görünümünde önizleme yoktur; eski sekmeler kendiliğinden silinir. Gizli sekmelerin grid'leri
- * (seçim, kolon genişliği) yerinde kalır.
+ * (seçim, kolon genişliği) yerinde kalır. Sekme şeridi tek sekme durağıdır: oklar ve Home/End
+ * sekme seçer.
  */
 function Sonuclar({ run, runNo, selected, onSelect }: { run: RunView | null; runNo: number; selected: number | null; onSelect: (i: number) => void }) {
+  const id = useId();
   const results = run?.ifadeler.filter((s) => s.onizleme && s.onizleme.kolonlar.length > 0) ?? [];
   const shown = results.find((s) => s.i === selected) ?? results[0];
+  const tabId = (s: StatementView) => `${id}-sekme-${runNo}-${s.i}`;
+  const panelId = (s: StatementView) => `${id}-panel-${runNo}-${s.i}`;
+
+  function onTabKeyDown(e: KeyboardEvent<HTMLDivElement>) {
+    const at = results.indexOf(shown!);
+    const last = results.length - 1;
+    const to = { ArrowRight: at === last ? 0 : at + 1, ArrowLeft: at === 0 ? last : at - 1, Home: 0, End: last }[e.key];
+    if (to === undefined) return;
+    e.preventDefault();
+    const next = results[to]!;
+    onSelect(next.i);
+    document.getElementById(tabId(next))?.focus();
+  }
+
   return (
     <section aria-label="Sonuçlar" className={`sonuclar${shown ? '' : ' bos'}`}>
       {shown ? (
         <>
-          <div role="tablist" className="sekmeler sonuc-sekmeleri">
+          <div role="tablist" aria-label="Sonuç sekmeleri" className="sekmeler sonuc-sekmeleri" onKeyDown={onTabKeyDown}>
             {results.map((s) => (
               <button
                 key={s.i}
+                id={tabId(s)}
                 type="button"
                 role="tab"
                 aria-selected={s === shown}
+                aria-controls={panelId(s)}
+                tabIndex={s === shown ? 0 : -1}
                 className={`sekme${s === shown ? ' secili' : ''}`}
                 onClick={() => onSelect(s.i)}
               >
@@ -761,9 +781,9 @@ function Sonuclar({ run, runNo, selected, onSelect }: { run: RunView | null; run
             ))}
           </div>
           {results.map((s) => (
-            <div key={`${runNo}:${s.i}`} role="tabpanel" aria-label={resultLabel(s)} className="sonuc-paneli" hidden={s !== shown}>
-              <p className="kucuk soluk sonuc-ozeti">{resultSummary(s)}</p>
-              <SonucGridi etiket={`${resultLabel(s)} sonucu`} kolonlar={s.onizleme!.kolonlar} satirlar={s.onizleme!.satirlar} toplamSatir={s.rowCount ?? (s.onizleme!.dahaVar ? null : s.onizleme!.satirlar.length)} />
+            <div key={`${runNo}:${s.i}`} id={panelId(s)} role="tabpanel" aria-labelledby={tabId(s)} className="sonuc-paneli" hidden={s !== shown}>
+              <p className="kucuk soluk sonuc-ozeti">{resultSummary(s.onizleme!, s.rowCount)}</p>
+              <SonucGridi etiket={`${resultLabel(s)} sonucu`} kolonlar={s.onizleme!.kolonlar} satirlar={s.onizleme!.satirlar} toplamSatir={resultTotal(s.onizleme!, s.rowCount)} />
             </div>
           ))}
         </>
@@ -776,15 +796,6 @@ function Sonuclar({ run, runNo, selected, onSelect }: { run: RunView | null; run
 
 function resultLabel(s: StatementView): string {
   return `${s.komut} · satır ${s.satir}`;
-}
-
-/** "N satır" ya da yüklenenden fazlası varsa "N satır · ilk M satır gösteriliyor". */
-function resultSummary(s: StatementView): string {
-  const loaded = s.onizleme!.satirlar.length;
-  const total = s.rowCount ?? null;
-  if (total !== null && total > loaded) return `${total} satır · ilk ${loaded} satır gösteriliyor`;
-  if (s.onizleme!.dahaVar) return `ilk ${loaded} satır gösteriliyor`;
-  return `${loaded} satır`;
 }
 
 function Onizleme({ preview }: { preview: NonNullable<StatementView['onizleme']> }) {

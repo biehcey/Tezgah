@@ -1392,12 +1392,12 @@ button.kucuk {
   margin: 4px 12px;
 }
 
-/* Sonuç grid'i: satır 24px, başlık 26px sabit (SonucGridi.tsx ile aynı). */
+/* Sonuç grid'i: satır ve başlık yüksekliği sabittir; SonucGridi.tsx `--grid-satir` ve `--grid-baslik` olarak verir. */
 .sonuc-gridi {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  scroll-padding-top: 26px;
+  scroll-padding-top: var(--grid-baslik);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12px;
   user-select: none;
@@ -1417,7 +1417,7 @@ button.kucuk {
   position: sticky;
   top: 0;
   z-index: 2;
-  height: 26px;
+  height: var(--grid-baslik);
   background: var(--kenar-zemin);
 }
 
@@ -1429,13 +1429,13 @@ button.kucuk {
   position: absolute;
   top: 0;
   left: 0;
-  height: 24px;
+  height: var(--grid-satir);
 }
 
 .grid-kolon-basligi {
   position: relative;
   flex: none;
-  height: 26px;
+  height: var(--grid-baslik);
   padding: 4px 8px;
   border-right: 1px solid var(--cizgi);
   border-bottom: 1px solid var(--cizgi);
@@ -1462,7 +1462,7 @@ button.kucuk {
 
 .grid-hucresi {
   flex: none;
-  height: 24px;
+  height: var(--grid-satir);
   padding: 3px 8px;
   overflow: hidden;
   border-right: 1px solid var(--cizgi);

@@ -1,16 +1,19 @@
 import { defaultRangeExtractor, useVirtualizer } from '@tanstack/react-virtual';
-import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type PointerEvent } from 'react';
-import { NULL_LABEL, cellDisplay, initialColumnWidths } from '../../core/grid/gosterim';
+import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent, type PointerEvent } from 'react';
+import { NULL_LABEL, cellDisplay, initialColumnWidths, type TextWidth } from '../../core/grid/gosterim';
 import { MIN_COLUMN_WIDTH, PAGE_ROWS } from '../../core/grid/sabitler';
 import { extendTo, isSelected, navigate, selectCell, selectedValues, type Cell, type Selection } from '../../core/grid/secim';
 import { toTsv } from '../../core/grid/tsv';
-import { GridOlcumu } from './olcum';
+import { GridOlcumu, canvasTextWidth } from './olcum';
 
-/** Sabit satır ve başlık yüksekliği (px); satırlar ölçülmez. `styles.css` ile aynı. */
+/** Sabit satır ve başlık yüksekliği (px); satırlar ölçülmez. CSS bunları `--grid-*` olarak alır. */
 const ROW_HEIGHT = 24;
 const HEADER_HEIGHT = 26;
-/** Hücre yazısının (12px sabit genişlikli) yaklaşık karakter genişliği; ilk kolon genişliği için. */
+/** Canvas yoksa yazı genişliği: 12px sabit genişlikli yazının yaklaşık karakter genişliği. */
 const CHAR_PX = 7.5;
+const estimateWidth: TextWidth = (metin) => [...metin].length * CHAR_PX;
+/** Sürüklerken imleç grid'in dışındayken her bu kadar ms'de bir satır kaydırılır. */
+export const AUTO_SCROLL_MS = 40;
 /** Tam değer kutusunun en az genişliği (px). */
 const VALUE_BOX_MIN_WIDTH = 320;
 
@@ -33,13 +36,18 @@ interface Props {
 export function SonucGridi({ etiket, kolonlar, satirlar, toplamSatir }: Props) {
   const olcum = useContext(GridOlcumu);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const [widths, setWidths] = useState(() => initialColumnWidths(kolonlar, satirlar.slice(0, PAGE_ROWS), CHAR_PX));
+  const firstPage = satirlar.slice(0, PAGE_ROWS);
+  // Ölçü verilmediyse (tarayıcı) genişlik, yazı tipi okunabilsin diye ilk çizimden hemen sonra ölçülür.
+  const [measured, setWidths] = useState(() => (olcum.metinGenisligi ? initialColumnWidths(kolonlar, firstPage, olcum.metinGenisligi) : null));
+  const widths = measured ?? kolonlar.map(() => MIN_COLUMN_WIDTH);
   const [sel, setSel] = useState<Selection>(() => selectCell({ satir: 0, kolon: 0 }));
   /** Tam değeri gösterilen hücre (F2 / çift tık). */
   const [valueCell, setValueCell] = useState<Cell | null>(null);
   /** Sonraki çizimden sonra aktif hücre odaklanmalı (klavye, tık, değer kutusunun kapanması). */
   const focusPending = useRef(false);
   const dragging = useRef(false);
+  /** Sürüklerken imleç grid'in üstünde (-1) ya da altında (1); kaydırma zamanlayıcısı. */
+  const autoScroll = useRef<{ yon: -1 | 1; zamanlayici: number } | null>(null);
   const resize = useRef<{ kolon: number; x: number; genislik: number } | null>(null);
 
   const virtualizer = useVirtualizer({
@@ -57,8 +65,11 @@ export function SonucGridi({ etiket, kolonlar, satirlar, toplamSatir }: Props) {
       if (active >= satirlar.length || indexes.includes(active)) return indexes;
       return [...indexes, active].sort((a, b) => a - b);
     },
-    ...olcum,
+    ...olcum.sanal,
   });
+  /** Zamanlayıcı ve pencere dinleyicileri güncel seçimi buradan okur. */
+  const latest = useRef({ sel, satirSayisi: satirlar.length, virtualizer });
+  latest.current = { sel, satirSayisi: satirlar.length, virtualizer };
   const items = virtualizer.getVirtualItems();
   const offsets = useMemo(() => widths.reduce<number[]>((acc, w, i) => [...acc, acc[i]! + w], [0]), [widths]);
 
@@ -70,10 +81,50 @@ export function SonucGridi({ etiket, kolonlar, satirlar, toplamSatir }: Props) {
     focusPending.current = false;
   });
 
+  useLayoutEffect(() => {
+    if (measured) return;
+    const grid = scrollRef.current!;
+    const header = grid.querySelector('.grid-kolon-basligi') ?? grid;
+    const cell = grid.querySelector('.grid-hucresi') ?? grid;
+    const olc = canvasTextWidth(getComputedStyle(cell), getComputedStyle(header)) ?? estimateWidth;
+    setWidths(initialColumnWidths(kolonlar, firstPage, olc));
+    // Yalnızca ilk çizimde: sonraki genişlikler kullanıcının sürüklemesidir.
+  }, []);
+
   useEffect(() => {
-    const stop = () => (dragging.current = false);
-    window.addEventListener('mouseup', stop);
-    return () => window.removeEventListener('mouseup', stop);
+    function stopAutoScroll() {
+      if (autoScroll.current) window.clearInterval(autoScroll.current.zamanlayici);
+      autoScroll.current = null;
+    }
+    // Sürükleme imleci grid'in dışına taşıyınca aktif satır her adımda bir satır ilerler ve görünür kalır.
+    function step() {
+      const { sel: s, satirSayisi, virtualizer: v } = latest.current;
+      const satir = Math.min(Math.max(s.aktif.satir + (autoScroll.current?.yon ?? 0), 0), satirSayisi - 1);
+      if (satir === s.aktif.satir) return;
+      const next = extendTo(s, { satir, kolon: s.aktif.kolon });
+      latest.current.sel = next;
+      setSel(next);
+      v.scrollToIndex(satir);
+    }
+    function onMove(e: globalThis.MouseEvent) {
+      const rect = dragging.current ? scrollRef.current?.getBoundingClientRect() : undefined;
+      const yon = !rect ? 0 : e.clientY < rect.top + HEADER_HEIGHT ? -1 : e.clientY > rect.bottom ? 1 : 0;
+      if (yon === 0) return stopAutoScroll();
+      if (autoScroll.current?.yon === yon) return;
+      stopAutoScroll();
+      autoScroll.current = { yon, zamanlayici: window.setInterval(step, AUTO_SCROLL_MS) };
+    }
+    function onUp() {
+      dragging.current = false;
+      stopAutoScroll();
+    }
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => {
+      stopAutoScroll();
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
   }, []);
 
   function moveTo(next: Selection) {
@@ -133,7 +184,7 @@ export function SonucGridi({ etiket, kolonlar, satirlar, toplamSatir }: Props) {
     const r = resize.current;
     if (!r) return;
     const genislik = Math.max(MIN_COLUMN_WIDTH, r.genislik + e.clientX - r.x);
-    setWidths((ws) => ws.map((w, i) => (i === r.kolon ? genislik : w)));
+    setWidths(widths.map((w, i) => (i === r.kolon ? genislik : w)));
   }
 
   const value = valueCell ? (satirlar[valueCell.satir]?.[valueCell.kolon] ?? null) : null;
@@ -148,6 +199,7 @@ export function SonucGridi({ etiket, kolonlar, satirlar, toplamSatir }: Props) {
       aria-multiselectable="true"
       aria-readonly="true"
       className="sonuc-gridi"
+      style={{ '--grid-satir': `${ROW_HEIGHT}px`, '--grid-baslik': `${HEADER_HEIGHT}px` } as CSSProperties}
       onKeyDown={onKeyDown}
     >
       <div className="grid-icerik" style={{ height: virtualizer.getTotalSize(), width: offsets.at(-1) }}>

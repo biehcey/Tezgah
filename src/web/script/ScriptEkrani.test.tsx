@@ -813,6 +813,36 @@ describe('Script ekranı: sonuç sekmeleri', () => {
     expect(resultTabs()[1]).toHaveAttribute('aria-selected', 'true');
   });
 
+  it('sonuç sekmeleri oklarla ve Home/End ile gezilir; her sekme kendi panelini denetler', async () => {
+    const { user, run } = await startRun('SELECT 1;\nSELECT 2;\nSELECT 3');
+    run.emit(
+      { type: 'done', i: 0, rowCount: 1, ms: 1, komut: 'SELECT', onizleme: page('bir') },
+      { type: 'done', i: 1, rowCount: 1, ms: 1, komut: 'SELECT', onizleme: page('iki') },
+      { type: 'done', i: 2, rowCount: 1, ms: 1, komut: 'SELECT', onizleme: page('üç') },
+    );
+    const [first, second, third] = resultTabs() as [HTMLElement, HTMLElement, HTMLElement];
+    expect(first).toHaveAttribute('tabindex', '0');
+    expect(second).toHaveAttribute('tabindex', '-1');
+    const panel = document.getElementById(first.getAttribute('aria-controls')!);
+    expect(panel).toHaveAttribute('role', 'tabpanel');
+    expect(panel).toHaveAccessibleName('SELECT · satır 1');
+
+    first.focus();
+    await user.keyboard('{ArrowRight}');
+    expect(second).toHaveFocus();
+    expect(second).toHaveAttribute('aria-selected', 'true');
+    expect(within(results()).getByRole('grid')).toHaveTextContent('iki');
+    await user.keyboard('{End}');
+    expect(third).toHaveFocus();
+    await user.keyboard('{ArrowRight}');
+    expect(first).toHaveFocus();
+    await user.keyboard('{ArrowLeft}');
+    expect(third).toHaveFocus();
+    await user.keyboard('{Home}');
+    expect(first).toHaveFocus();
+    expect(within(results()).getByRole('grid')).toHaveTextContent('bir');
+  });
+
   it('yeniden çalıştırınca eski sonuç sekmeleri silinir', async () => {
     const { user, fake } = await startRun('SELECT 1;\nSELECT 2');
     fake.last().emit(

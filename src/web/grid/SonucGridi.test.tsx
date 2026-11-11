@@ -1,9 +1,9 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { JSDOM_OLCUMU } from '../test/grid';
 import { GridOlcumu } from './olcum';
-import { SonucGridi } from './SonucGridi';
+import { AUTO_SCROLL_MS, SonucGridi } from './SonucGridi';
 
 const KOLONLAR = ['id', 'ad', 'not'];
 
@@ -122,6 +122,46 @@ describe('Sonuç grid’i: gezinme ve seçim', () => {
     expect(cell(1, 0)).toHaveFocus();
   });
 
+  it('PageDown/PageUp görünen satır sayısı kadar taşır', async () => {
+    const { user } = setup({ satirlar: rows(500) });
+    await user.click(cell(0, 1));
+    // 400 px yüksekliğin 26 px'i başlık: 374 / 24 = 15 tam satır.
+    await user.keyboard('{PageDown}');
+    expect(cell(15, 1)).toHaveFocus();
+    await user.keyboard('{PageDown}{PageUp}{PageUp}');
+    expect(cell(0, 1)).toHaveFocus();
+  });
+
+  it('sürüklerken imleç grid’in altına ya da başlığın üstüne çıkınca kaydırıp seçimi genişletir', () => {
+    vi.useFakeTimers();
+    try {
+      setup({ satirlar: rows(500) });
+      vi.spyOn(grid(), 'getBoundingClientRect').mockReturnValue(DOMRect.fromRect({ x: 0, y: 100, width: 1000, height: 400 }));
+      fireEvent.mouseDown(cell(0, 1), { button: 0 });
+      fireEvent.mouseMove(window, { clientY: 520 });
+      act(() => vi.advanceTimersByTime(AUTO_SCROLL_MS * 20));
+      expect(cell(20, 1)).toHaveAttribute('aria-selected', 'true');
+      expect(cell(20, 1)).toHaveClass('aktif');
+      expect(cell(0, 1)).toHaveAttribute('aria-selected', 'true');
+
+      // Başlığın üstü yukarı kaydırır.
+      fireEvent.mouseMove(window, { clientY: 110 });
+      act(() => vi.advanceTimersByTime(AUTO_SCROLL_MS * 5));
+      expect(cell(15, 1)).toHaveClass('aktif');
+
+      // İmleç grid'e dönünce ya da bırakınca kaydırma durur.
+      fireEvent.mouseMove(window, { clientY: 300 });
+      act(() => vi.advanceTimersByTime(AUTO_SCROLL_MS * 5));
+      expect(cell(15, 1)).toHaveClass('aktif');
+      fireEvent.mouseMove(window, { clientY: 520 });
+      fireEvent.mouseUp(window);
+      act(() => vi.advanceTimersByTime(AUTO_SCROLL_MS * 5));
+      expect(cell(15, 1)).toHaveClass('aktif');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('Ctrl+C seçili aralığı başlıksız TSV olarak kopyalar; NULL boş', async () => {
     const { user } = setup({ satirlar: [['1', 'a\tb', null], ['2', 'say "hi"', 'x']] });
     await user.click(cell(0, 0));
@@ -159,6 +199,19 @@ describe('Sonuç grid’i: tam değer ve kolon genişliği', () => {
     const editor = screen.getByRole('textbox', { name: 'not değeri' });
     expect(editor).toHaveValue('');
     expect(editor).toHaveAttribute('placeholder', 'NULL');
+  });
+
+  it('ilk kolon genişliği başlığın ve hücrelerin ölçülen yazı genişliğinden gelir', () => {
+    const olc = (metin: string, baslik: boolean) => (baslik && metin === 'ad' ? 300 : 10);
+    render(
+      <GridOlcumu.Provider value={{ ...JSDOM_OLCUMU, metinGenisligi: olc }}>
+        <SonucGridi etiket="Sonuç 1" kolonlar={KOLONLAR} satirlar={rows(3)} toplamSatir={3} />
+      </GridOlcumu.Provider>,
+    );
+    const headers = within(grid()).getAllByRole('columnheader');
+    expect(headers[1]).toHaveStyle({ width: '316px' });
+    expect(headers[0]).toHaveStyle({ width: '48px' });
+    expect(cell(0, 1)).toHaveStyle({ width: '316px' });
   });
 
   it('kolon genişliği başlıktaki tutamaçtan sürüklenerek değişir', () => {

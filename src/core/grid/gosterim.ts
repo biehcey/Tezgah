@@ -26,20 +26,29 @@ export function cellDisplay(value: string | null): CellDisplay {
 
 /** Kolon kenarlarının iç boşluğu (px). */
 const CELL_PADDING = 16;
+/**
+ * Ölçülen gösterimin en fazla uzunluğu: 400 px sınırını en dar yazıda da aşmaya yeter; 1000
+ * karakterlik hücreyi baştan sona ölçmeye gerek yok.
+ */
+const MEASURE_CHARS = 200;
+
+/** Metnin hücre yazısıyla piksel genişliği; başlık kalın yazılır. */
+export type TextWidth = (metin: string, baslik: boolean) => number;
 
 /**
- * İlk sayfadan ölçülen kolon genişlikleri: başlığın ve hücre gösterimlerinin en uzunu, sabit
- * genişlikli yazıda `karakterPx` ile; en az 48, en fazla 400 px.
+ * İlk sayfadan ölçülen kolon genişlikleri: başlığın ve hücre gösterimlerinin en genişi, iç
+ * boşlukla; en az 48, en fazla 400 px. Ölçüm gerçek yazıyla yapıldığından geniş karakterler
+ * (CJK, emoji) ve kalın başlık da hesaba girer.
  */
-export function initialColumnWidths(kolonlar: readonly string[], satirlar: readonly (readonly (string | null)[])[], karakterPx: number): number[] {
+export function initialColumnWidths(kolonlar: readonly string[], satirlar: readonly (readonly (string | null)[])[], olc: TextWidth): number[] {
+  const cap = MAX_INITIAL_WIDTH - CELL_PADDING;
   return kolonlar.map((ad, c) => {
-    let chars = ad.length;
-    const cap = Math.ceil(MAX_INITIAL_WIDTH / karakterPx);
+    let widest = olc(ad, true);
     for (const row of satirlar) {
-      if (chars >= cap) break;
+      if (widest >= cap) break;
       const shown = cellDisplay(row[c] ?? null);
-      chars = Math.max(chars, shown.null ? NULL_LABEL.length : shown.metin.length);
+      widest = Math.max(widest, olc(shown.null ? NULL_LABEL : shown.metin.slice(0, MEASURE_CHARS), false));
     }
-    return Math.min(Math.max(chars * karakterPx + CELL_PADDING, MIN_COLUMN_WIDTH), MAX_INITIAL_WIDTH);
+    return Math.min(Math.max(Math.ceil(widest) + CELL_PADDING, MIN_COLUMN_WIDTH), MAX_INITIAL_WIDTH);
   });
 }
