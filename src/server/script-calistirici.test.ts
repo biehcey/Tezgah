@@ -202,10 +202,10 @@ describePg('script çalıştırma: Transaction modu, gerçek Postgres', () => {
     expect(await ids()).toEqual([]);
   });
 
-  it("SELECT önizlemesi ilk 500 satır, kolon tip OID'leri ve dahaVar bayrağı; satır sayısı tamamıdır", async () => {
+  it("SELECT önizlemesi ilk 500 satır, kolon tip OID'leri ve dahaVar bayrağı; devamı varken satır sayısı bilinmez", async () => {
     run('SELECT g, NULL::text AS bos FROM generate_series(1, 750) g');
     const done = await ws.waitFor('done');
-    expect(done.rowCount).toBe(750);
+    expect(done.rowCount).toBeNull();
     expect(done.onizleme?.kolonlar).toEqual(['g', 'bos']);
     expect(done.onizleme?.tipler).toEqual([INT4, TEXT]);
     expect(done.onizleme?.satirlar).toHaveLength(500);
@@ -213,11 +213,68 @@ describePg('script çalıştırma: Transaction modu, gerçek Postgres', () => {
     expect(done.onizleme?.dahaVar).toBe(true);
   });
 
-  it('tam 500 satırlık sonuçta dahaVar yok', async () => {
+  it('tam 500 satırlık sonuçta dahaVar yok; satır sayısı bilinir', async () => {
     run('SELECT g FROM generate_series(1, 500) g');
     const done = await ws.waitFor('done');
     expect(done.onizleme?.satirlar).toHaveLength(500);
     expect(done.onizleme?.dahaVar).toBe(false);
+    expect(done.rowCount).toBe(500);
+  });
+
+  describe('daha fazla satır', () => {
+    /** `dahaFazla` gönderir ve yanıtını (`satirlar` ya da `uyari`) bekler. */
+    async function more(i: number): Promise<ServerEvent> {
+      const from = ws.events.length;
+      ws.send({ type: 'dahaFazla', i });
+      for (let k = 0; k < 500; k++) {
+        const found = ws.events.slice(from).find((e) => e.type === 'satirlar' || (e.type === 'uyari' && e.tur === 'dahaFazla'));
+        if (found) return found;
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      throw new Error('dahaFazla yanıtlanmadı');
+    }
+    const numbers = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, k) => [String(from + k)]);
+
+    it('Okuma’da ilk 500 satırdan sonra sonraki sayfa; sonunda devamı yok', async () => {
+      run('SELECT g FROM generate_series(1, 1100) g');
+      await ws.waitFor('okumaAcik');
+      expect(await more(0)).toEqual({ type: 'satirlar', i: 0, satirlar: numbers(501, 1000), dahaVar: true });
+      expect(await more(0)).toEqual({ type: 'satirlar', i: 0, satirlar: numbers(1001, 1100), dahaVar: false });
+    });
+
+    it('karar beklenirken çekilir; commit sonrasında reddedilir', async () => {
+      run(`INSERT INTO ${TABLE} VALUES (1);\nSELECT g FROM generate_series(1, 800) g`);
+      await ws.waitFor('kararBekleniyor');
+      expect(await more(1)).toMatchObject({ type: 'satirlar', satirlar: numbers(501, 800), dahaVar: false });
+      ws.send({ type: 'commit' });
+      expect(await ws.waitFor('bitti')).toMatchObject({ sonuc: 'commit' });
+      expect(await more(1)).toMatchObject({ type: 'uyari', tur: 'dahaFazla', i: 1 });
+      expect(await ids()).toEqual([1]);
+    });
+
+    it('100.000 satırda sınır; devamı çekilmez', async () => {
+      run('SELECT g FROM generate_series(1, 100100) g');
+      await ws.waitFor('okumaAcik');
+      let loaded = 500;
+      let last: ServerEvent | undefined;
+      while (loaded < 100_000) {
+        last = await more(0);
+        if (last.type !== 'satirlar') throw new Error(JSON.stringify(last).slice(0, 200));
+        loaded += last.satirlar.length;
+      }
+      expect(loaded).toBe(100_000);
+      expect(last).toMatchObject({ dahaVar: true, sinir: true });
+      expect(await more(0)).toMatchObject({ type: 'uyari', tur: 'dahaFazla' });
+    }, 60_000);
+
+    it('çekerken hata veren satır transaction’ı bozmaz: yazılanlar commit edilir', async () => {
+      run(`INSERT INTO ${TABLE} VALUES (1);\nSELECT 1 / (g - 700) FROM generate_series(1, 800) g`);
+      await ws.waitFor('kararBekleniyor');
+      expect(await more(1)).toMatchObject({ type: 'uyari', tur: 'dahaFazla', mesaj: expect.stringContaining('division by zero') });
+      ws.send({ type: 'commit' });
+      expect(await ws.waitFor('bitti')).toMatchObject({ sonuc: 'commit' });
+      expect(await ids()).toEqual([1]);
+    });
   });
 
   it('imleçle çalışamayan SELECT (INTO) düz çalışır ve transaction bozulmaz', async () => {

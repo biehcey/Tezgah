@@ -1392,6 +1392,11 @@ button.kucuk {
   margin: 4px 12px;
 }
 
+/* Daha fazla satır çekilemiyor (sınır, kapanan ya da hata alan transaction). */
+.sonuc-notu {
+  color: var(--uyari);
+}
+
 /* Sonuç grid'i: satır ve başlık yüksekliği sabittir; SonucGridi.tsx `--grid-satir` ve `--grid-baslik` olarak verir. */
 .sonuc-gridi {
   flex: 1;

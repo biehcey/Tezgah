@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState, type ComponentProps } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -865,5 +865,81 @@ describe('Script ekranı: sonuç sekmeleri', () => {
     await user.click(within(results()).getByRole('gridcell'));
     await user.keyboard('{Control>}c{/Control}');
     expect(await navigator.clipboard.readText()).toBe('panoya');
+  });
+});
+
+describe('Script ekranı: daha fazla satır', () => {
+  const rows = (from: number, n: number) => Array.from({ length: n }, (_, k) => [String(from + k)]);
+  const first: ServerEvent = { type: 'done', i: 0, rowCount: null, ms: 1, komut: 'SELECT', onizleme: { kolonlar: ['g'], tipler: [23], satirlar: rows(1, 500), dahaVar: true } };
+  const okuma: ServerEvent = { type: 'okumaAcik', kalanMs: 30 * DK };
+  const grid = () => within(results()).getByRole('grid');
+  const moreRequests = (run: { istekler: { type: string }[] }) => run.istekler.filter((m) => m.type === 'dahaFazla');
+  /**
+   * Grid'i yüklü `loaded` satırın sonuna kaydırır (satır 24 px). Satırlar gelince konum yerinde
+   * kalır, tarayıcıdaki gibi sona uzaklaşır.
+   */
+  function scrollToEnd(loaded = 500) {
+    const scroller = grid();
+    Object.defineProperty(scroller, 'scrollTop', { configurable: true, value: loaded * 24 });
+    fireEvent.scroll(scroller);
+  }
+
+  it('Okuma açıkken sona yaklaşınca bir kez daha fazla istenir; gelen satırlar eklenir', async () => {
+    const { run } = await startRun('SELECT g FROM t');
+    run.emit(first, okuma);
+    expect(moreRequests(run)).toEqual([]);
+    scrollToEnd();
+    scrollToEnd();
+    expect(moreRequests(run)).toEqual([{ type: 'dahaFazla', i: 0 }]);
+    expect(results()).toHaveTextContent('Satırlar yükleniyor…');
+
+    run.emit({ type: 'satirlar', i: 0, satirlar: rows(501, 500), dahaVar: true });
+    expect(results()).toHaveTextContent('ilk 1000 satır gösteriliyor');
+    expect(results()).not.toHaveTextContent('Satırlar yükleniyor…');
+    expect(moreRequests(run)).toHaveLength(1);
+    scrollToEnd(1000);
+    expect(moreRequests(run)).toHaveLength(2);
+
+    run.emit({ type: 'satirlar', i: 0, satirlar: rows(1001, 3), dahaVar: false });
+    expect(results()).toHaveTextContent('1003 satır');
+    scrollToEnd(1003);
+    expect(moreRequests(run)).toHaveLength(2);
+  });
+
+  it('script çalışırken istenmez', async () => {
+    const { run } = await startRun('SELECT g FROM t;\nSELECT 2');
+    run.emit(first);
+    scrollToEnd();
+    expect(moreRequests(run)).toEqual([]);
+  });
+
+  it('transaction kapanınca yüklenenler kalır, daha fazla kapanır ve sonuçta belirtilir', async () => {
+    const { run } = await startRun('SELECT g FROM t');
+    run.emit(first, okuma, { type: 'bitti', sonuc: 'okuma' });
+    expect(results()).toHaveTextContent('Transaction kapandı; daha fazla satır çekilemez');
+    expect(grid()).toHaveTextContent('1');
+    scrollToEnd();
+    expect(moreRequests(run)).toEqual([]);
+  });
+
+  it('karar beklenirken de istenir; sunucu reddederse neden sonuçta kalır ve yeniden istenmez', async () => {
+    const { run } = await startRun('INSERT INTO t VALUES (1);\nSELECT g FROM t');
+    run.emit({ ...first, i: 1 } as ServerEvent, { type: 'kararBekleniyor', commitEdilebilir: true, kalanMs: DK });
+    scrollToEnd();
+    expect(moreRequests(run)).toEqual([{ type: 'dahaFazla', i: 1 }]);
+    run.emit({ type: 'uyari', tur: 'dahaFazla', i: 1, mesaj: 'Satırlar çekilemedi: division by zero' });
+    expect(results()).toHaveTextContent('Satırlar çekilemedi: division by zero');
+    scrollToEnd();
+    expect(moreRequests(run)).toHaveLength(1);
+  });
+
+  it('sınıra ulaşınca sınır mesajı; daha fazla istenmez', async () => {
+    const { run } = await startRun('SELECT g FROM t');
+    run.emit(first, okuma);
+    scrollToEnd();
+    run.emit({ type: 'satirlar', i: 0, satirlar: rows(501, 500), dahaVar: true, sinir: true });
+    expect(results()).toHaveTextContent('Sınıra ulaşıldı, filtrele');
+    scrollToEnd(1000);
+    expect(moreRequests(run)).toHaveLength(1);
   });
 });

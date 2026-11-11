@@ -7,8 +7,11 @@ import { positionOf, splitStatements, type Statement } from '../../core/ifade-bo
 import { decisionStatus, formatRemaining, startDecision, type DecisionPhase, type DecisionTimer } from '../../core/karar-suresi';
 import {
   PREVIEW_ROWS,
+  ROW_LIMIT_MESSAGE,
   applyEvent,
+  canFetchMore,
   formatSummary,
+  requestMore,
   startRunView,
   targetLock,
   type RunView,
@@ -115,6 +118,8 @@ export function ScriptEkrani({
   /** Son çalıştırma prod hedefte başladı; hedef sonradan değişse de şerit o çalıştırmaya göre kalır. */
   const [runOnProd, setRunOnProd] = useState(false);
   const handle = useRef<ScriptRunHandle | null>(null);
+  /** Yanıtı beklenen "daha fazla" istekleri, ifade indeksiyle. */
+  const moreAsked = useRef(new Set<number>());
   /** Sunucunun son bildirdiği kalan süreden kurulan yerel geri sayım; yetkili sayaç sunucudadır. */
   const [deadline, setDeadline] = useState<DecisionTimer | null>(null);
   /** `havuzDolu` geldiğinde aynı hedefte açık oturumu olan sekmeler; mesaj o anki duruma göre kalır. */
@@ -189,14 +194,27 @@ export function ScriptEkrani({
     setResultTab(null);
     setDeadline(null);
     setPoolFullTabs([]);
+    moreAsked.current.clear();
     const runRequest = { target: targetRef, script: metin, yazmaModu: writeMode, deneme, ...(zorlaTransaction && { zorlaTransaction }) };
     handle.current = api.runScript(runRequest, (received) => {
       // Autocommit'te geri alınacak transaction yok; sunucu çalışan ifadeyi iptal eder.
       const event = received === CONNECTION_LOST && current.mod === 'autocommit' ? AUTOCOMMIT_CONNECTION_LOST : received;
       setRun((current) => (current ? applyEvent(current, event) : current));
+      if (event.type === 'satirlar' || (event.type === 'uyari' && event.tur === 'dahaFazla')) moreAsked.current.delete(event.i);
       if (event.type === 'kararBekleniyor' || event.type === 'uzatildi' || event.type === 'okumaAcik') setDeadline(startDecision(event.kalanMs, Date.now()));
       if (event.type === 'bitti' && event.kod === 'havuzDolu') setPoolFullTabs(sessionTabsRef.current);
     });
+  }
+
+  /**
+   * Grid sona yaklaştı: transaction açıksa ve sonucun devamı varsa bir sayfa daha istenir. Yanıt
+   * gelene kadar aynı sonuç için ikinci istek gitmez (görünüm güncellenmeden gelen kaydırmalar dahil).
+   */
+  function fetchMore(i: number) {
+    if (!run || !canFetchMore(run, i) || moreAsked.current.has(i)) return;
+    moreAsked.current.add(i);
+    handle.current?.send({ type: 'dahaFazla', i });
+    setRun((current) => (current ? requestMore(current, i) : current));
   }
 
   function request(type: 'commit' | 'rollback' | 'uzat' | 'iptal') {
@@ -318,7 +336,7 @@ export function ScriptEkrani({
               </>
             )}
           </div>
-          <Sonuclar run={run} runNo={runNo} selected={resultTab} onSelect={setResultTab} />
+          <Sonuclar run={run} runNo={runNo} selected={resultTab} onSelect={setResultTab} onMore={fetchMore} />
         </div>
         <aside aria-label="Çalıştırma" className="calistirma-sutunu">
           {run && reading ? (
@@ -730,7 +748,8 @@ function StatementDetail({ statement: s, onForceTransaction }: { statement: Stat
       );
     case 'basarili':
       // Satırlar editörün altındaki sonuç sekmesinde; kartta yalnızca sayı.
-      if (s.onizleme) return <p className="kucuk">{s.rowCount ?? s.onizleme.satirlar.length} satır</p>;
+      // Devamı olan sonucun toplamı bilinmez: yüklenenler "+" ile.
+      if (s.onizleme) return <p className="kucuk">{s.rowCount ?? `${s.onizleme.satirlar.length}${s.onizleme.dahaVar ? '+' : ''}`} satır</p>;
       return s.rowCount === null || s.rowCount === undefined ? null : <p className="kucuk">{s.rowCount} satır etkilendi</p>;
   }
 }
@@ -741,7 +760,20 @@ function StatementDetail({ statement: s, onForceTransaction }: { statement: Stat
  * (seçim, kolon genişliği) yerinde kalır. Sekme şeridi tek sekme durağıdır: oklar ve Home/End
  * sekme seçer.
  */
-function Sonuclar({ run, runNo, selected, onSelect }: { run: RunView | null; runNo: number; selected: number | null; onSelect: (i: number) => void }) {
+function Sonuclar({
+  run,
+  runNo,
+  selected,
+  onSelect,
+  onMore,
+}: {
+  run: RunView | null;
+  runNo: number;
+  selected: number | null;
+  onSelect: (i: number) => void;
+  /** `i`. sonucun grid'i yüklü satırların sonuna yaklaştı. */
+  onMore: (i: number) => void;
+}) {
   const id = useId();
   const results = run?.ifadeler.filter((s) => s.onizleme && s.onizleme.kolonlar.length > 0) ?? [];
   const shown = results.find((s) => s.i === selected) ?? results[0];
@@ -782,8 +814,19 @@ function Sonuclar({ run, runNo, selected, onSelect }: { run: RunView | null; run
           </div>
           {results.map((s) => (
             <div key={`${runNo}:${s.i}`} id={panelId(s)} role="tabpanel" aria-labelledby={tabId(s)} className="sonuc-paneli" hidden={s !== shown}>
-              <p className="kucuk soluk sonuc-ozeti">{resultSummary(s.onizleme!, s.rowCount)}</p>
-              <SonucGridi etiket={`${resultLabel(s)} sonucu`} kolonlar={s.onizleme!.kolonlar} satirlar={s.onizleme!.satirlar} toplamSatir={resultTotal(s.onizleme!, s.rowCount)} />
+              <p className="kucuk soluk sonuc-ozeti">
+                {resultSummary(s.onizleme!, s.rowCount)}
+                {s.yukleniyor && <span> · Satırlar yükleniyor…</span>}
+                {s.sinir && <span className="sonuc-notu"> · {ROW_LIMIT_MESSAGE}</span>}
+                {s.devamKapandi && <span className="sonuc-notu"> · {s.devamKapandi}</span>}
+              </p>
+              <SonucGridi
+                etiket={`${resultLabel(s)} sonucu`}
+                kolonlar={s.onizleme!.kolonlar}
+                satirlar={s.onizleme!.satirlar}
+                toplamSatir={resultTotal(s.onizleme!, s.rowCount)}
+                onSonaYaklasti={() => onMore(s.i)}
+              />
             </div>
           ))}
         </>

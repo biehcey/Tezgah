@@ -33,10 +33,12 @@ import {
   type TableName,
 } from '../core/deneme';
 import type { SchemaChange, TableSchema } from '../core/deneme-farki';
-import { PAGE_ROWS } from '../core/grid/sabitler';
+import { PAGE_ROWS, ROW_LIMIT } from '../core/grid/sabitler';
 import { splitStatements, type Statement } from '../core/ifade-bolme';
 import { TUNNEL_CLOSED } from '../core/ssh-tuneli';
 import {
+  MORE_CLOSED_FAILED,
+  MORE_CLOSED_FINISHED,
   PREVIEW_ROWS,
   autocommitSummary,
   parseClientMessage,
@@ -65,17 +67,24 @@ export interface ScriptRunnerDeps {
 const RAW_TYPES = { getTypeParser: () => (value: string) => value };
 
 /**
- * Önizleme sarmalının adı: savepoint, imleç ve CTE aynı adı taşır. Sarmallar satırların 500'den
- * (Deneme'nin değişiklik önizlemesinde 100'den) fazlasını sunucudan çekmez.
+ * Önizleme sarmalının adı: savepoint ve CTE aynı adı taşır. Deneme'nin değişiklik önizlemesi
+ * sunucudan 100'den fazla satır çekmez.
  */
 const WRAPPER = 'tezgah_onizleme';
-const CURSOR_PREFIX = `DECLARE ${WRAPPER} NO SCROLL CURSOR FOR `;
+/**
+ * SELECT sonucunun `WITHOUT HOLD` imleci, ifade başına bir tane: transaction açıkken yaşar ve
+ * "daha fazla" ile sayfa sayfa okunur; transaction kapanınca Postgres kapatır.
+ */
+const cursorName = (i: number) => `tezgah_sonuc_${i}`;
+const cursorPrefix = (i: number) => `DECLARE ${cursorName(i)} NO SCROLL CURSOR FOR `;
 /**
  * Deneme modunda DML'in değişiklik sarmalı: veri değiştiren CTE her durumda sonuna kadar çalışır,
  * `LIMIT` yalnızca istemciye aktarılan satırları sınırlar; ilk kolon toplam satır sayısıdır.
  */
 const CHANGES_PREFIX = `WITH ${WRAPPER} AS (`;
 const CHANGES_SUFFIX = `) SELECT count(*) OVER (), * FROM ${WRAPPER} LIMIT ${PREVIEW_ROWS}`;
+/** "Daha fazla" çekişinin savepoint'i: satır hesaplanırken gelen hata kullanıcının transaction'ını bozmasın. */
+const PAGE_SAVEPOINT = 'tezgah_sayfa';
 /** Katalog okumalarının savepoint'i: beklenmedik bir hata kullanıcının transaction'ını bozmasın. */
 const CATALOG_SAVEPOINT = 'tezgah_katalog';
 /** İmleçle çalıştırılmaya çalışılan ifade türleri; olmazsa (ör. `SELECT … INTO`) düz çalışır. */
@@ -124,6 +133,24 @@ interface Run {
   commitAllowed: boolean;
   /** Çalışan ifadelerin kayıt özetleri; satır verisi içermez. */
   ifadeler: StatementSummary[];
+  /** Devamı olan SELECT sonuçlarının açık imleçleri, ifade indeksiyle. */
+  imlecler: Map<number, Cursor>;
+  /** `i`. sonucun sıradaki sayfasını çeker; transaction açıldıktan sonra kurulur. */
+  fetchMore?: (i: number) => Promise<void>;
+}
+
+/** Açık bir sonuç imleci. */
+interface Cursor {
+  ad: string;
+  /** İstemciye gönderilen satır sayısı. */
+  yuklenen: number;
+  /**
+   * Sayfadan fazla çekilen (en fazla bir) satır: devamın olup olmadığını kesin bilmek için her
+   * çekişte bir satır fazla istenir, sonraki sayfanın başına konur.
+   */
+  tampon: (string | null)[][];
+  /** Çekiş yolda. */
+  mesgul: boolean;
 }
 
 type Finished = Extract<ServerEvent, { type: 'bitti' }>;
@@ -158,7 +185,7 @@ export function createScriptRunner({ store, pools, clock, history, log }: Script
     const send = (event: ServerEvent) => {
       if (open) ws.send(JSON.stringify(event));
     };
-    const warn = (tur: Extract<ServerEvent, { type: 'uyari' }>['tur'], mesaj: string) => send({ type: 'uyari', tur, mesaj });
+    const warn = (tur: Exclude<Extract<ServerEvent, { type: 'uyari' }>['tur'], 'dahaFazla'>, mesaj: string) => send({ type: 'uyari', tur, mesaj });
 
     ws.on('message', (data) => {
       let message: ClientMessage | null = null;
@@ -189,7 +216,7 @@ export function createScriptRunner({ store, pools, clock, history, log }: Script
           if (previous && previous.phase !== 'okuma') return warn('mesgul', 'Bu sekmede zaten bir çalıştırma var');
           previous?.decide?.('yeniCalistirma');
           expired = false;
-          const current: Run = { phase: 'calisiyor', stopping: null, commitAllowed: false, ifadeler: [] };
+          const current: Run = { phase: 'calisiyor', stopping: null, commitAllowed: false, ifadeler: [], imlecler: new Map() };
           run = current;
           current.done = (previous?.done ?? Promise.resolve())
             .then(() => start(current, message))
@@ -226,6 +253,13 @@ export function createScriptRunner({ store, pools, clock, history, log }: Script
           }
           run.decide?.(message.type);
           return;
+        }
+        case 'dahaFazla': {
+          const refuse = (mesaj: string) => send({ type: 'uyari', tur: 'dahaFazla', i: message.i, mesaj });
+          if (run?.phase === 'calisiyor') return refuse('Script çalışıyor; satırlar bitince çekilebilir');
+          if (run?.phase !== 'karar' && run?.phase !== 'okuma') return refuse(MORE_CLOSED_FINISHED);
+          if (run.phase === 'karar' && !run.commitAllowed) return refuse(MORE_CLOSED_FAILED);
+          return void run.fetchMore?.(message.i);
         }
       }
     }
@@ -365,6 +399,38 @@ export function createScriptRunner({ store, pools, clock, history, log }: Script
         // Yedek: Node zamanlayıcısı işlemezken (uyku) uzak sunucuda transaction açık kalmasın.
         await client.query(`SET LOCAL idle_in_transaction_session_timeout = ${serverIdleTimeoutMs(sureMs)}`);
         if (deneme?.lockTimeout) await client.query(deneme.lockTimeout);
+        current.fetchMore = async (i) => {
+          const refuse = (mesaj: string) => send({ type: 'uyari', tur: 'dahaFazla', i, mesaj });
+          const cursor = current.imlecler.get(i);
+          if (!cursor) return refuse('Bu sonucun devamı yok');
+          // Yoldaki çekişin yanıtı bu isteği de karşılar.
+          if (cursor.mesgul) return;
+          cursor.mesgul = true;
+          try {
+            // Savepoint: hesaplanırken hata veren satır (ör. sıfıra bölme) kullanıcının
+            // transaction'ını bozmaz; karar beklenirken yazılanlar commit edilebilir kalır.
+            await client.query(`SAVEPOINT ${PAGE_SAVEPOINT}`);
+            const page = await fetchPage(client, cursor);
+            await client.query(`RELEASE SAVEPOINT ${PAGE_SAVEPOINT}`);
+            // Transaction kapanınca Postgres imleci kapatır; burada CLOSE gönderilmez.
+            if (!page.dahaVar || page.sinir) current.imlecler.delete(i);
+            send({ type: 'satirlar', i, satirlar: page.satirlar, dahaVar: page.dahaVar, ...(page.sinir && { sinir: true as const }) });
+          } catch (err) {
+            // Hatalı imleçten bir daha satır çekilemez.
+            current.imlecler.delete(i);
+            // Bağlantı hatasını client'ın `error` dinleyicisi işler.
+            if (!(err instanceof pg.DatabaseError)) return refuse('Bağlantı koptu; satırlar çekilemedi');
+            try {
+              await client.query(`ROLLBACK TO SAVEPOINT ${PAGE_SAVEPOINT}`);
+              await client.query(`RELEASE SAVEPOINT ${PAGE_SAVEPOINT}`);
+            } catch {
+              // Bağlantı koptuysa karar yolu bunu bildirir.
+            }
+            refuse(`Satırlar çekilemedi: ${err.message}`);
+          } finally {
+            cursor.mesgul = false;
+          }
+        };
         const { outcome } = await runStatements(current, client, script, deneme);
         if (outcome === 'baglantiKoptu') broken = true;
         if (broken) return await lost();
@@ -544,7 +610,7 @@ export function createScriptRunner({ store, pools, clock, history, log }: Script
         if (current.stopping) return { outcome: 'tamam', applied };
         send({ type: 'started', i });
         const started = performance.now();
-        const result = await runStatement(client, statement, deneme);
+        const result = await runStatement(client, statement, deneme, i, current.imlecler);
         const ms = Math.round(performance.now() - started);
         if (result.ok) {
           const { ok: _ok, ...output } = result;
@@ -616,8 +682,14 @@ async function serverVersion(client: pg.PoolClient): Promise<number> {
   }
 }
 
-async function runStatement(client: pg.PoolClient, statement: Statement, deneme: DenemeContext | null): Promise<StatementResult> {
-  const viaCursor = CURSOR_COMMANDS.has(statement.keywords[0] ?? '') ? await runWithCursor(client, statement) : null;
+async function runStatement(
+  client: pg.PoolClient,
+  statement: Statement,
+  deneme: DenemeContext | null,
+  i: number,
+  cursors: Map<number, Cursor>,
+): Promise<StatementResult> {
+  const viaCursor = CURSOR_COMMANDS.has(statement.keywords[0] ?? '') ? await runWithCursor(client, statement, i, cursors) : null;
   if (viaCursor) return viaCursor;
   if (!deneme) return runPlain(client, statement, false);
   if (Object.hasOwn(DML_VERBS, statement.keywords[0] ?? '')) return runDml(client, statement, deneme);
@@ -789,18 +861,41 @@ function runWithChanges(client: pg.PoolClient, statement: Statement, text: strin
 }
 
 /**
- * SELECT benzeri ifadeyi imleçle çalıştırır: ilk 500 satır çekilir, kalanı `MOVE` ile sayılır ama
- * istemciye aktarılmaz. İmleç bu ifadeyi kabul etmezse `null` döner.
+ * SELECT benzeri ifadeyi `WITHOUT HOLD` imleçle çalıştırır: ilk 500 satır çekilir. Devamı varsa
+ * imleç açık kalır (`cursors`) ve satır sayısı bilinmez; yoksa kapatılır. İmleç bu ifadeyi kabul
+ * etmezse `null` döner.
  */
-function runWithCursor(client: pg.PoolClient, statement: Statement): Promise<StatementResult | null> {
-  return withWrapper(client, CURSOR_PREFIX, async () => {
-    await client.query(CURSOR_PREFIX + statement.text);
-    const fetched = await client.query({ text: `FETCH ${PAGE_ROWS} FROM ${WRAPPER}`, rowMode: 'array', types: RAW_TYPES });
-    const rest = await client.query(`MOVE FORWARD ALL IN ${WRAPPER}`);
-    await client.query(`CLOSE ${WRAPPER}`);
-    const kalan = rest.rowCount ?? 0;
-    return { ok: true, rowCount: (fetched.rowCount ?? 0) + kalan, komut: 'SELECT', onizleme: resultPage(fetched, kalan > 0) };
+function runWithCursor(client: pg.PoolClient, statement: Statement, i: number, cursors: Map<number, Cursor>): Promise<StatementResult | null> {
+  const prefix = cursorPrefix(i);
+  return withWrapper(client, prefix, async () => {
+    await client.query(prefix + statement.text);
+    const cursor: Cursor = { ad: cursorName(i), yuklenen: 0, tampon: [], mesgul: false };
+    const page = await fetchPage(client, cursor);
+    if (page.dahaVar) cursors.set(i, cursor);
+    else await client.query(`CLOSE ${cursor.ad}`);
+    return {
+      ok: true,
+      rowCount: page.dahaVar ? null : page.satirlar.length,
+      komut: 'SELECT',
+      onizleme: { kolonlar: page.fields.map((f) => f.name), tipler: page.fields.map((f) => f.dataTypeID), satirlar: page.satirlar, dahaVar: page.dahaVar },
+    };
   });
+}
+
+/**
+ * İmleçten bir sayfa (500 satır; 100.000 sınırına yaklaşınca kalanı) çeker. `dahaVar`: sonrasında
+ * satır var. `sinir`: sınıra ulaşıldı ve devamı var; sonuçtan daha fazla satır çekilmez.
+ */
+async function fetchPage(client: pg.PoolClient, cursor: Cursor) {
+  const wanted = Math.min(PAGE_ROWS, ROW_LIMIT - cursor.yuklenen);
+  const text = `FETCH ${wanted + 1 - cursor.tampon.length} FROM ${cursor.ad}`;
+  const result = await client.query({ text, rowMode: 'array', types: RAW_TYPES });
+  const rows = [...cursor.tampon, ...textRows(result.rows)];
+  const satirlar = rows.slice(0, wanted);
+  cursor.tampon = rows.slice(wanted);
+  cursor.yuklenen += satirlar.length;
+  const dahaVar = cursor.tampon.length > 0;
+  return { fields: result.fields, satirlar, dahaVar, sinir: dahaVar && cursor.yuklenen >= ROW_LIMIT };
 }
 
 /**

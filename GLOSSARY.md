@@ -93,7 +93,7 @@ Bir çalıştırmada satır döndüren her ifade için editörün altında açı
 _Avoid_: Sonuç penceresi, sekme (tek başına)
 
 **Sonuç grid'i**:
-Bir ifadenin döndürdüğü satırların ilk sayfasını (500 satır) gösteren salt okunur tablo. Hücre seçilir, aralık kopyalanır (başlıksız TSV), tam değer F2 ile açılır; değer düzenlenmez. NULL boş metinden ayrı gösterilir.
+Bir ifadenin döndürdüğü satırları gösteren salt okunur tablo. İlk sayfa 500 satırdır; transaction açıkken (karar beklenirken ya da Okuma'da) sona kaydırdıkça ifadenin imlecinden 500'er satır daha yüklenir. Transaction kapanınca yüklenenler kalır, devamı çekilemez ve bu sonuçta yazar. En fazla 100.000 satır yüklenir ("Sınıra ulaşıldı, filtrele"). Hücre seçilir, aralık kopyalanır (başlıksız TSV), tam değer F2 ile açılır; değer düzenlenmez. NULL boş metinden ayrı gösterilir.
 _Avoid_: Sonuç tablosu, result set, veri grid'i
 
 **Çalıştırma kaydı**:

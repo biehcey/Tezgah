@@ -25,12 +25,18 @@ export type ClientMessage =
   | { type: 'rollback' }
   /** Karar süresini baştan başlatır. */
   | { type: 'uzat' }
-  | { type: 'iptal' };
+  | { type: 'iptal' }
+  /**
+   * `i`. ifadenin sonucundan bir sayfa (500 satır) daha. Yalnızca transaction açıkken (karar
+   * beklenirken ya da Okuma'da) yanıtlanır; aksi hâlde `uyari{tur: 'dahaFazla'}` döner.
+   */
+  | { type: 'dahaFazla'; i: number };
 
 export function parseClientMessage(raw: unknown): ClientMessage | null {
   if (typeof raw !== 'object' || raw === null) return null;
   const m = raw as Record<string, unknown>;
   if (m.type === 'commit' || m.type === 'rollback' || m.type === 'uzat' || m.type === 'iptal') return { type: m.type };
+  if (m.type === 'dahaFazla') return Number.isInteger(m.i) && (m.i as number) >= 0 ? { type: 'dahaFazla', i: m.i as number } : null;
   if (m.type !== 'run' || typeof m.script !== 'string') return null;
   const target = m.target as Record<string, unknown> | null | undefined;
   if (typeof target?.connectionId !== 'string' || typeof target.database !== 'string') return null;
@@ -119,6 +125,11 @@ export type ServerEvent =
    * sorulmaz. `kalanMs` dolunca sunucu geri alır.
    */
   | { type: 'okumaAcik'; kalanMs: number }
+  /**
+   * `dahaFazla` yanıtı: sonucun sıradaki satırları. `dahaVar`: sonrasında satır var. `sinir`: sonuç
+   * 100.000 satır sınırına ulaştı; devamı olsa da çekilmez.
+   */
+  | { type: 'satirlar'; i: number; satirlar: (string | null)[][]; dahaVar: boolean; sinir?: true }
   /** "Uzat" sunucuda işlendi; Karar süresi baştan başladı. */
   | { type: 'uzatildi'; kalanMs: number }
   /**
@@ -126,8 +137,12 @@ export type ServerEvent =
    * hiçbir şey çalışmadı; arayüz mesajı kendi bildiği açık sekmelerle kurar (`mesaj` yedektir).
    */
   | { type: 'bitti'; sonuc: RunResult; kod?: RunFailureCode; oturum?: number; mesaj?: string; ozet?: AutocommitSummary }
-  /** İstek reddedildi ya da Çalıştırma kaydı yazılamadı; çalıştırma sürüyor. */
-  | { type: 'uyari'; tur: 'commitReddedildi' | 'mesgul' | 'gecersizIstek' | 'kayitYazilamadi'; mesaj: string };
+  /**
+   * İstek reddedildi ya da Çalıştırma kaydı yazılamadı; çalıştırma sürüyor. `dahaFazla`: `i`.
+   * sonucun satırları çekilemedi (transaction kapalı, hatalı ya da çekerken hata).
+   */
+  | { type: 'uyari'; tur: 'commitReddedildi' | 'mesgul' | 'gecersizIstek' | 'kayitYazilamadi'; mesaj: string }
+  | { type: 'uyari'; tur: 'dahaFazla'; i: number; mesaj: string };
 
 /** `bitti`'nin yapısal hata kodu. */
 export type RunFailureCode = 'havuzDolu';
@@ -144,8 +159,16 @@ export interface StatementView extends DenemeOutput {
   komut: string;
   durum: StatementStatus;
   ms?: number;
+  /** SELECT'te yalnızca imlecin sonuna gelindiyse bilinir; devamı varsa `null`. */
   rowCount?: number | null;
+  /** SELECT sonucunun yüklenen satırları; "daha fazla" geldikçe büyür. */
   onizleme?: Preview;
+  /** "Daha fazla" istendi, satırlar bekleniyor. */
+  yukleniyor?: true;
+  /** Sonuç 100.000 satır sınırına ulaştı. */
+  sinir?: true;
+  /** Devamı olan sonuçtan neden daha fazla satır çekilemeyeceği (ör. transaction kapandı). */
+  devamKapandi?: string;
   hata?: {
     sqlstate: string | null;
     mesaj: string;
@@ -159,6 +182,13 @@ export interface StatementView extends DenemeOutput {
     transactionOnerisi?: true;
   };
 }
+
+/** Transaction kapanınca devamı olan sonucun notu. */
+export const MORE_CLOSED_FINISHED = 'Transaction kapandı; daha fazla satır çekilemez';
+/** Karar beklenirken transaction hata almışsa imleçlerden satır çekilemez. */
+export const MORE_CLOSED_FAILED = 'Transaction hata aldı; daha fazla satır çekilemez';
+/** Sonuç sert sınıra ulaştı. */
+export const ROW_LIMIT_MESSAGE = 'Sınıra ulaşıldı, filtrele';
 
 /** `okuma`: Okuma script'i bitti, transaction daha fazla satır için açık; karar beklenmez. */
 export type RunPhase = 'calisiyor' | 'karar' | 'okuma' | 'bitti';
@@ -208,6 +238,31 @@ function statementView(script: string, s: Statement, i: number): StatementView {
   return { i, satir: positionOf(script, s.start).satir, komut: s.keywords[0] ?? s.text.slice(0, 12), durum: 'sirada' };
 }
 
+/**
+ * `i`. ifadenin sonucundan daha fazla satır istenebilir mi: transaction açık (karar beklenirken
+ * hatasız, ya da Okuma'da), sonucun devamı var, istek yolda değil ve sınıra ulaşılmadı.
+ */
+export function canFetchMore(view: RunView, i: number): boolean {
+  const s = view.ifadeler[i];
+  if (!s?.onizleme?.dahaVar || s.yukleniyor || s.sinir || s.devamKapandi) return false;
+  return view.evre === 'okuma' || (view.evre === 'karar' && view.commitEdilebilir);
+}
+
+/** "Daha fazla" gönderildi: yanıt gelene kadar ikinci istek yok. */
+export function requestMore(view: RunView, i: number): RunView {
+  return { ...view, ifadeler: view.ifadeler.map((s) => (s.i === i ? { ...s, yukleniyor: true } : s)) };
+}
+
+/** "Daha fazla" isteği yanıtlandı (satırlar ya da ret): yükleniyor düşer, `patch` uygulanır. */
+function answered({ yukleniyor: _y, ...s }: StatementView, patch: Partial<StatementView>): StatementView {
+  return { ...s, ...patch };
+}
+
+/** Devamı olan sonuçlarda daha fazla kapanır; yolda olan istek de düşer. */
+function closeMore(ifadeler: StatementView[], neden: string): StatementView[] {
+  return ifadeler.map((s) => (!s.onizleme?.dahaVar || s.sinir ? s : answered(s, { devamKapandi: s.devamKapandi ?? neden })));
+}
+
 export function applyEvent(view: RunView, event: ServerEvent): RunView {
   const update = (i: number, patch: Partial<StatementView>) => ({
     ...view,
@@ -242,8 +297,26 @@ export function applyEvent(view: RunView, event: ServerEvent): RunView {
       });
       return { ...next, ifadeler: next.ifadeler.map((s) => (s.durum === 'sirada' ? { ...s, durum: 'calistirilmadi' } : s)) };
     }
+    case 'satirlar': {
+      const s = view.ifadeler[event.i];
+      if (!s?.onizleme) return view;
+      const satirlar = [...s.onizleme.satirlar, ...event.satirlar];
+      const next = answered(s, {
+        onizleme: { ...s.onizleme, satirlar, dahaVar: event.dahaVar },
+        // İmlecin sonuna gelindi: toplam artık yüklenenlerdir.
+        rowCount: event.dahaVar ? null : satirlar.length,
+        ...(event.sinir && { sinir: true as const }),
+      });
+      return { ...view, ifadeler: view.ifadeler.map((x) => (x.i === event.i ? next : x)) };
+    }
     case 'kararBekleniyor':
-      return { ...view, evre: 'karar', commitEdilebilir: event.commitEdilebilir, kararSuresi: nextTimer(view, event.kalanMs) };
+      return {
+        ...view,
+        evre: 'karar',
+        commitEdilebilir: event.commitEdilebilir,
+        kararSuresi: nextTimer(view, event.kalanMs),
+        ifadeler: event.commitEdilebilir ? view.ifadeler : closeMore(view.ifadeler, MORE_CLOSED_FAILED),
+      };
     case 'okumaAcik':
       return { ...view, evre: 'okuma', kararSuresi: nextTimer(view, event.kalanMs) };
     case 'uzatildi':
@@ -258,13 +331,18 @@ export function applyEvent(view: RunView, event: ServerEvent): RunView {
         oturum: event.oturum,
         mesaj: event.mesaj,
         ozet: event.ozet,
-        ifadeler: view.ifadeler.map((s) =>
+        ifadeler: closeMore(view.ifadeler, MORE_CLOSED_FINISHED).map((s) =>
           s.durum === 'sirada' || s.durum === 'calisiyor' ? { ...s, durum: 'calistirilmadi' } : s,
         ),
       };
     case 'uyari':
       // Kayıt uyarısı bir isteğin yanıtı değil; bekleyen isteğe dokunmaz.
       if (event.tur === 'kayitYazilamadi') return { ...view, kayitUyarisi: event.mesaj };
+      // Satır isteğinin reddi o sonuca aittir; karar isteğine dokunmaz ve yeniden istenmez.
+      if (event.tur === 'dahaFazla') {
+        const { mesaj, i } = event;
+        return { ...view, ifadeler: view.ifadeler.map((s) => (s.i === i ? answered(s, { devamKapandi: mesaj }) : s)) };
+      }
       return { ...view, bekleyenIstek: null, uyari: event.mesaj };
   }
 }

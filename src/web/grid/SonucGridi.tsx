@@ -25,7 +25,15 @@ interface Props {
   satirlar: readonly (readonly (string | null)[])[];
   /** Sonucun toplam satırı (yüklenenlerden fazla olabilir); bilinmiyorsa `null`. */
   toplamSatir: number | null;
+  /**
+   * Görünen aralık yüklü satırların sonuna yaklaştı; her çizimden sonra yeniden bildirilebilir,
+   * çift isteği önlemek çağıranın işidir.
+   */
+  onSonaYaklasti?: () => void;
 }
+
+/** Sona bu kadar satır kala "daha fazla" bildirilir: sayfa, kaydırma bitmeden gelsin. */
+const NEAR_END_ROWS = 100;
 
 /**
  * Salt okunur sonuç grid'i: yalnızca satırlar sanallaştırılır, satır yüksekliği sabittir. Seçim,
@@ -33,7 +41,7 @@ interface Props {
  * Odak roving tabindex ile aktif hücrededir; aktif satır görünümden çıksa da çizilmeye devam eder
  * ki odak kaybolmasın ve klavye gezinmesi sürsün.
  */
-export function SonucGridi({ etiket, kolonlar, satirlar, toplamSatir }: Props) {
+export function SonucGridi({ etiket, kolonlar, satirlar, toplamSatir, onSonaYaklasti }: Props) {
   const olcum = useContext(GridOlcumu);
   const scrollRef = useRef<HTMLDivElement>(null);
   const firstPage = satirlar.slice(0, PAGE_ROWS);
@@ -79,6 +87,12 @@ export function SonucGridi({ etiket, kolonlar, satirlar, toplamSatir }: Props) {
     if (!el) return;
     el.focus();
     focusPending.current = false;
+  });
+
+  // Görünen aralığın sonu (overscan ve hep çizilen aktif satır hariç).
+  const visibleEnd = virtualizer.range?.endIndex;
+  useEffect(() => {
+    if (visibleEnd !== undefined && visibleEnd >= satirlar.length - NEAR_END_ROWS) onSonaYaklasti?.();
   });
 
   useLayoutEffect(() => {

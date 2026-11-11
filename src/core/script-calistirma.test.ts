@@ -1,5 +1,19 @@
 import { describe, expect, it } from 'vitest';
-import { applyEvent, autocommitSummary, formatSummary, parseClientMessage, startRunView, targetLock, type RunView, type ServerEvent } from './script-calistirma';
+import {
+  MORE_CLOSED_FAILED,
+  MORE_CLOSED_FINISHED,
+  ROW_LIMIT_MESSAGE,
+  applyEvent,
+  autocommitSummary,
+  canFetchMore,
+  requestMore,
+  formatSummary,
+  parseClientMessage,
+  startRunView,
+  targetLock,
+  type RunView,
+  type ServerEvent,
+} from './script-calistirma';
 
 describe('parseClientMessage', () => {
   it.each([
@@ -16,6 +30,10 @@ describe('parseClientMessage', () => {
     ['rollback', { type: 'rollback' }, { type: 'rollback' }],
     ['iptal', { type: 'iptal' }, { type: 'iptal' }],
     ['uzat', { type: 'uzat' }, { type: 'uzat' }],
+    ['dahaFazla', { type: 'dahaFazla', i: 2, fazla: 1 }, { type: 'dahaFazla', i: 2 }],
+    ['dahaFazla indekssiz', { type: 'dahaFazla' }, null],
+    ['dahaFazla negatif', { type: 'dahaFazla', i: -1 }, null],
+    ['dahaFazla kesirli', { type: 'dahaFazla', i: 1.5 }, null],
     ['bilinmeyen tür', { type: 'yok' }, null],
     ['hedefsiz run', { type: 'run', script: 'SELECT 1' }, null],
     ['script metin değil', { type: 'run', target: { connectionId: 'b1', database: 'app' }, script: 1 }, null],
@@ -172,5 +190,73 @@ describe('hedef kilidi', () => {
   it('karar beklenirken ve script çalışırken hedef değiştirilemez; neden döner', () => {
     expect(targetLock(play({ type: 'kararBekleniyor', commitEdilebilir: true, kalanMs: 1 }))).toBe('Commit/rollback kararı bekleniyor');
     expect(targetLock(play())).toBe('Script çalışıyor');
+  });
+});
+
+describe('çalıştırma görünümü: daha fazla satır', () => {
+  const okuma: ServerEvent = { type: 'analiz', mod: 'okuma', transactionDisi: [], reddedilenler: [] };
+  const rows = (from: number, n: number) => Array.from({ length: n }, (_, k) => [String(from + k)]);
+  const first: ServerEvent = { type: 'done', i: 1, rowCount: null, ms: 1, komut: 'SELECT', onizleme: { kolonlar: ['g'], tipler: [23], satirlar: rows(1, 500), dahaVar: true } };
+  const open = (...events: ServerEvent[]) => play(okuma, first, { type: 'okumaAcik', kalanMs: 1000 }, ...events);
+  const result = (view: RunView) => view.ifadeler[1]!;
+
+  it('Okuma açıkken devamı olan sonuçtan daha fazla istenebilir; çalışırken ve devamı yokken istenemez', () => {
+    expect(canFetchMore(open(), 1)).toBe(true);
+    expect(canFetchMore(play(okuma, first), 1)).toBe(false);
+    expect(canFetchMore(open(), 0)).toBe(false);
+  });
+
+  it('karar beklenirken istenebilir; hata alan transaction’da istenemez ve sonuçta belirtilir', () => {
+    const karar = (commitEdilebilir: boolean) => play(first, { type: 'kararBekleniyor', commitEdilebilir, kalanMs: 1 });
+    expect(canFetchMore(karar(true), 1)).toBe(true);
+    expect(canFetchMore(karar(false), 1)).toBe(false);
+    expect(result(karar(false)).devamKapandi).toBe(MORE_CLOSED_FAILED);
+  });
+
+  it('istek yanıtlanana kadar ikinci istek yok; gelen satırlar eklenir ve devamı yeniden istenebilir', () => {
+    const asked = requestMore(open(), 1);
+    expect(result(asked).yukleniyor).toBe(true);
+    expect(canFetchMore(asked, 1)).toBe(false);
+    const loaded = applyEvent(asked, { type: 'satirlar', i: 1, satirlar: rows(501, 500), dahaVar: true });
+    expect(result(loaded).onizleme!.satirlar).toEqual(rows(1, 1000));
+    expect(result(loaded).yukleniyor).toBeUndefined();
+    expect(result(loaded).rowCount).toBeNull();
+    expect(canFetchMore(loaded, 1)).toBe(true);
+  });
+
+  it('imlecin sonuna gelince devamı yok ve satır sayısı bilinir', () => {
+    const view = open({ type: 'satirlar', i: 1, satirlar: rows(501, 20), dahaVar: false });
+    expect(result(view)).toMatchObject({ rowCount: 520, onizleme: { dahaVar: false } });
+    expect(canFetchMore(view, 1)).toBe(false);
+  });
+
+  it('transaction kapanınca yüklenenler kalır, daha fazla kapanır ve bu not edilir', () => {
+    const view = open({ type: 'satirlar', i: 1, satirlar: rows(501, 500), dahaVar: true }, { type: 'bitti', sonuc: 'okuma' });
+    expect(result(view).onizleme!.satirlar).toHaveLength(1000);
+    expect(result(view).devamKapandi).toBe(MORE_CLOSED_FINISHED);
+    expect(canFetchMore(view, 1)).toBe(false);
+    // Devamı olmayan sonuçta not yok.
+    expect(play(okuma, { ...first, onizleme: { kolonlar: ['g'], satirlar: [], dahaVar: false } } as ServerEvent, { type: 'bitti', sonuc: 'okuma' }).ifadeler[1]!.devamKapandi).toBeUndefined();
+  });
+
+  it('yanıt beklenirken transaction kapanırsa yükleniyor da kapanır', () => {
+    const view = applyEvent(requestMore(open(), 1), { type: 'bitti', sonuc: 'okuma' });
+    expect(result(view).yukleniyor).toBeUndefined();
+  });
+
+  it('sınıra ulaşınca daha fazla istenemez; sınır mesajı sonuçta', () => {
+    const view = open({ type: 'satirlar', i: 1, satirlar: rows(501, 500), dahaVar: true, sinir: true });
+    expect(result(view).sinir).toBe(true);
+    expect(canFetchMore(view, 1)).toBe(false);
+    expect(ROW_LIMIT_MESSAGE).toBe('Sınıra ulaşıldı, filtrele');
+  });
+
+  it('sunucu isteği reddederse yükleniyor kapanır, neden sonuçta kalır ve yeniden istenmez; bekleyen karar isteğine dokunmaz', () => {
+    const asked = { ...requestMore(open(), 1), bekleyenIstek: 'uzat' as const };
+    const view = applyEvent(asked, { type: 'uyari', tur: 'dahaFazla', i: 1, mesaj: 'Satırlar çekilemedi' });
+    expect(result(view)).toMatchObject({ devamKapandi: 'Satırlar çekilemedi' });
+    expect(result(view).yukleniyor).toBeUndefined();
+    expect(view.bekleyenIstek).toBe('uzat');
+    expect(canFetchMore(view, 1)).toBe(false);
   });
 });

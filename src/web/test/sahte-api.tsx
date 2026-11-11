@@ -1,5 +1,5 @@
 import { act, render } from '@testing-library/react';
-import type { ServerEvent } from '../../core/script-calistirma';
+import type { ClientMessage, ServerEvent } from '../../core/script-calistirma';
 import type { Target } from '../../core/veritabani-secimi';
 import type { ReactElement } from 'react';
 import { deleteFolder, parseFolderName, type Folder } from '../../core/ayarlar';
@@ -64,6 +64,8 @@ export interface FakeRun {
   zorlaTransaction?: boolean;
   /** İstemcinin gönderdiği istekler (`commit`, `rollback`, `iptal`). */
   sent: string[];
+  /** İstemcinin gönderdiği isteklerin tamamı (ör. `dahaFazla{i}`). */
+  istekler: ClientMessage[];
   closed: boolean;
   emit(...events: ServerEvent[]): void;
 }
@@ -78,12 +80,16 @@ export function createFakeScriptRuns() {
       deneme,
       zorlaTransaction,
       sent: [],
+      istekler: [],
       closed: false,
       emit: (...events) => act(() => events.forEach(onEvent)),
     };
     runs.push(run);
     return {
-      send: (message) => run.sent.push(message.type),
+      send: (message) => {
+        run.sent.push(message.type);
+        run.istekler.push(message);
+      },
       close: () => (run.closed = true),
     };
   };
