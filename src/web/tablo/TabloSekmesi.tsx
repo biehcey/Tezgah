@@ -16,6 +16,8 @@ interface Props {
   autoLoad: boolean;
   /** Hedefin katalogu (varsa); "INSERT olarak kopyala" tip adlarını bundan çözer. */
   catalog?: CatalogEntry;
+  /** ↻: hedefin katalogunu yeniler; sunucu kolonları ve PK'yı oradan okur. */
+  onRefreshCatalog: () => Promise<unknown>;
   hidden: boolean;
 }
 
@@ -47,7 +49,7 @@ function errorText(err: unknown): string {
  * salt okunur bir sorgudur; sekme açık transaction tutmaz. Sona yaklaşınca sonraki sayfa istenir.
  * Geri gelen sekme bağlanmaz: veri "Yükle" ile çekilir.
  */
-export function TabloSekmesi({ tab, target, autoLoad, catalog, hidden }: Props) {
+export function TabloSekmesi({ tab, target, autoLoad, catalog, onRefreshCatalog, hidden }: Props) {
   const api = useApi();
   const [view, setView] = useState<View>({ durum: 'bekliyor' });
   const [estimate, setEstimate] = useState<number | null>(null);
@@ -76,6 +78,20 @@ export function TabloSekmesi({ tab, target, autoLoad, catalog, hidden }: Props) 
       (err: unknown) => current.current === gen && setView({ durum: 'hata', hata: errorText(err) }),
     );
   }, [api, connectionId, database, tab.sema, tab.tablo]);
+
+  /**
+   * ↻: önce katalog yenilenir (başka araçla yapılan DDL sonrası kolonlar ve PK güncel olsun), sonra
+   * ilk sayfa yeniden çekilir.
+   */
+  const reload = useCallback(() => {
+    const gen = ++current.current;
+    setGeneration(gen);
+    setView({ durum: 'yukleniyor' });
+    onRefreshCatalog().then(
+      () => current.current === gen && load(),
+      (err: unknown) => current.current === gen && setView({ durum: 'hata', hata: `Katalog okunamadı: ${errorText(err)}` }),
+    );
+  }, [onRefreshCatalog, load]);
 
   // Listeden açılan sekme ilk çizimde yükler; geri gelen sekme hiçbir istek göndermez.
   const started = useRef(false);
@@ -127,7 +143,7 @@ export function TabloSekmesi({ tab, target, autoLoad, catalog, hidden }: Props) 
           aria-label="Tabloyu yeniden yükle"
           title="Yeniden yükle"
           disabled={!target || view.durum === 'yukleniyor'}
-          onClick={load}
+          onClick={reload}
         >
           ↻
         </button>

@@ -33,6 +33,8 @@ export function useCatalogs(api: ApiClient) {
   /** Hedef başına son istek; atılan ya da yenisi gelen isteğin yanıtı yazılmaz. */
   const latest = useRef(new Map<string, number>());
   const counter = useRef(0);
+  /** Hedef başına yoldaki okuma; aynı hedefi isteyen onu bekler. */
+  const reading = useRef(new Map<string, Promise<Catalog>>());
 
   const write = useCallback((key: string, entry: CatalogEntry | null) => {
     const next = { ...current.current };
@@ -42,24 +44,37 @@ export function useCatalogs(api: ApiClient) {
     setEntries(next);
   }, []);
 
+  /**
+   * Katalogu ister; okunan (ya da zaten olan) katalogla çözülür, okunamazsa reddedilir. Çağıranların
+   * çoğu sonucu beklemez: durum `entries`'e yazılır.
+   */
   const request = useCallback(
-    (target: Target, reason: CatalogReason) => {
+    (target: Target, reason: CatalogReason): Promise<Catalog> => {
       const key = catalogKey(target);
       const existing = current.current[key];
-      if ((reason === 'hedef' || reason === 'calistir') && existing && existing.durum !== 'hata') return;
+      if ((reason === 'hedef' || reason === 'calistir') && existing && existing.durum !== 'hata') {
+        return reading.current.get(key) ?? Promise.resolve(existing.katalog!);
+      }
       const id = ++counter.current;
       latest.current.set(key, id);
       write(key, { durum: 'yukleniyor', katalog: existing?.katalog ?? null });
-      const reading =
+      const read =
         reason === 'yenile' ? api.refreshCatalog(target.connectionId, target.database) : api.getCatalog(target.connectionId, target.database);
-      reading.then(
-        (katalog) => latest.current.get(key) === id && write(key, { durum: 'hazir', katalog }),
+      reading.current.set(key, read);
+      read.then(
+        (katalog) => {
+          if (latest.current.get(key) !== id) return;
+          reading.current.delete(key);
+          write(key, { durum: 'hazir', katalog });
+        },
         (err: unknown) => {
           if (latest.current.get(key) !== id) return;
+          reading.current.delete(key);
           const prev = current.current[key];
           write(key, { durum: 'hata', hata: err instanceof Error ? err.message : String(err), katalog: prev?.katalog ?? null });
         },
       );
+      return read;
     },
     [api, write],
   );
@@ -74,6 +89,7 @@ export function useCatalogs(api: ApiClient) {
       const dropped = Object.keys(current.current).filter((k) => k.startsWith(prefix));
       for (const key of dropped) {
         latest.current.delete(key);
+        reading.current.delete(key);
         write(key, null);
       }
       for (const key of dropped) {

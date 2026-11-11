@@ -12,14 +12,11 @@ import {
   type TablePageRequest,
   type TablePageResponse,
 } from '../core/tablo-sayfasi';
-import type { TargetErrorResponse } from '../core/veritabani-secimi';
 import type { SettingsStore } from './ayar-deposu';
-import { TargetError, type PoolManager } from './havuzlar';
+import { RAW_TYPES, TargetError, type PoolManager } from './havuzlar';
 import { json, methodNotAllowed, notFound, readJson } from './http';
 import type { CatalogCache } from './katalog';
 
-/** Değerler ham metin olarak gelir: grid ve keyset imleci Postgres'in metnini kullanır. */
-const RAW_TYPES = { getTypeParser: () => (value: string) => value };
 /** Sayfa kısa bir sorgu olmalı; uzarsa client bırakılır (pool'a dönmez). */
 const TIMEOUT_MS = 30_000;
 
@@ -128,9 +125,7 @@ export function createTablePageRoutes({ store, pools, catalogs }: { store: Setti
       else json(res, 400, outcome.error);
     } catch (err) {
       if (!(err instanceof TargetError)) throw err;
-      const { mesaj: hata, kod, hostAnahtari } = err.failure;
-      const body: TargetErrorResponse = { hata, kod, ...(hostAnahtari && { hostAnahtari }) };
-      json(res, 502, body);
+      json(res, 502, err.body);
     }
     return true;
   };

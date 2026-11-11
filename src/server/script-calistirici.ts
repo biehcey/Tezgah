@@ -50,7 +50,7 @@ import {
 import { beginStatement, runBlockReasons, writeLockState, type WriteLockState } from '../core/yazma-kilidi';
 import type { SettingsStore } from './ayar-deposu';
 import type { RunHistory } from './calistirma-kayitlari';
-import { PoolFullError, TargetError, catalogQuery, type PoolManager } from './havuzlar';
+import { PoolFullError, RAW_TYPES, TargetError, catalogQuery, type PoolManager } from './havuzlar';
 import type { CatalogCache } from './katalog';
 import { changesCatalog } from '../core/katalog';
 import type { Clock } from './saat';
@@ -67,8 +67,6 @@ export interface ScriptRunnerDeps {
   log: (line: string) => void;
 }
 
-/** Değerler metin olarak gelir: önizleme JSON'a kayıpsız girer (bigint, numeric, tarih). */
-const RAW_TYPES = { getTypeParser: () => (value: string) => value };
 
 /**
  * Önizleme sarmalının adı: savepoint ve CTE aynı adı taşır. Deneme'nin değişiklik önizlemesi

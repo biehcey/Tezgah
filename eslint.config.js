@@ -7,9 +7,14 @@ import { builtinModules } from 'node:module';
 const coreForbiddenPackages = [...builtinModules, 'react', 'react-dom', 'pg', 'ws', 'ssh2', '@napi-rs/keyring'];
 
 export default tseslint.config(
-  { ignores: ['dist/**', 'node_modules/**'] },
+  // `.claude/` ajan çalışma ağaçlarını (worktree) taşır: depo kopyası, lint edilmez.
+  { ignores: ['dist/**', 'node_modules/**', '.claude/**'] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
+  {
+    // Alt dizinlerdeki başka tsconfig'ler (ör. worktree'ler) kök seçimini belirsizleştirmesin.
+    languageOptions: { parserOptions: { tsconfigRootDir: import.meta.dirname } },
+  },
   {
     // `const { password, ...fields } = input` ile alan ayıklamak serbest.
     rules: { '@typescript-eslint/no-unused-vars': ['error', { ignoreRestSiblings: true }] },

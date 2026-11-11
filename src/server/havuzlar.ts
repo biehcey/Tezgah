@@ -11,6 +11,7 @@ import {
   toDriverError,
   type StepFailure,
 } from '../core/baglanti-testi';
+import type { TargetErrorResponse } from '../core/veritabani-secimi';
 import { passwordAccount, sshSecretAccount, type Keychain } from './keychain';
 import type { SessionPasswords } from './oturum-sifreleri';
 import type { Clock } from './saat';
@@ -54,7 +55,19 @@ export class TargetError extends Error {
   constructor(readonly failure: StepFailure) {
     super(failure.mesaj);
   }
+
+  /** İstemciye giden 502 gövdesi. */
+  get body(): TargetErrorResponse {
+    const { mesaj: hata, kod, hostAnahtari } = this.failure;
+    return { hata, kod, ...(hostAnahtari && { hostAnahtari }) };
+  }
 }
+
+/**
+ * Değerler Postgres'in metni olarak gelir: JSON'a kayıpsız girer (bigint, numeric, tarih), sahte
+ * ve gerçek Postgres'te aynı biçimde ayrıştırılır, keyset imleci aynı metinle geri gönderilir.
+ */
+export const RAW_TYPES = { getTypeParser: () => (value: string) => value };
 
 interface Entry {
   connectionId: string;

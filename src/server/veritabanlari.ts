@@ -5,7 +5,6 @@ import {
   parseDatabaseSelection,
   type DatabaseListResponse,
   type SchemaListResponse,
-  type TargetErrorResponse,
 } from '../core/veritabani-secimi';
 import type { SettingsStore } from './ayar-deposu';
 import { TargetError, catalogQuery, type PoolManager } from './havuzlar';
@@ -42,9 +41,7 @@ export function createDatabaseRoutes({ store, pools, catalogs }: DatabaseRouteDe
       });
     } catch (err) {
       if (!(err instanceof TargetError)) throw err;
-      const { mesaj: hata, kod, hostAnahtari } = err.failure;
-      const body: TargetErrorResponse = { hata, kod, ...(hostAnahtari && { hostAnahtari }) };
-      json(res, 502, body);
+      json(res, 502, err.body);
       return null;
     }
   }

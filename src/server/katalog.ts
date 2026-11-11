@@ -3,13 +3,11 @@ import pg from 'pg';
 import type { Connection } from '../core/baglanti';
 import { classifyListError, toDriverError } from '../core/baglanti-testi';
 import { RELATION_KINDS, buildCatalog, pgBool, type Catalog } from '../core/katalog';
-import { selectionEntry, visibleSchemas, type TargetErrorResponse } from '../core/veritabani-secimi';
+import { selectionEntry, visibleSchemas } from '../core/veritabani-secimi';
 import type { SettingsStore } from './ayar-deposu';
-import { TargetError, type PoolManager } from './havuzlar';
+import { RAW_TYPES, TargetError, type PoolManager } from './havuzlar';
 import { json, methodNotAllowed, notFound } from './http';
 
-/** Değerler metin olarak gelir: satırlar sahte ve gerçek Postgres'te aynı biçimde ayrıştırılır. */
-const RAW_TYPES = { getTypeParser: () => (value: string) => value };
 /** Büyük veritabanlarında katalog okuması panelin kısa sorgularından uzun sürebilir. */
 const TIMEOUT_MS = 30_000;
 
@@ -163,9 +161,7 @@ export function createCatalogRoutes({ store, catalogs }: { store: SettingsStore;
       json(res, 200, catalog);
     } catch (err) {
       if (!(err instanceof TargetError)) throw err;
-      const { mesaj: hata, kod, hostAnahtari } = err.failure;
-      const body: TargetErrorResponse = { hata, kod, ...(hostAnahtari && { hostAnahtari }) };
-      json(res, 502, body);
+      json(res, 502, err.body);
     }
     return true;
   };

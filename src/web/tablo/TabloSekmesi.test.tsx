@@ -116,15 +116,32 @@ describe('Tablo sekmesi: başlık', () => {
     expect(tableTab()).toHaveTextContent('sayfalar arası tutarlılık garanti değil');
   });
 
-  it('↻ ilk sayfayı yeniden çeker', async () => {
+  it('↻ önce hedefin katalogunu yeniler (kolonlar ve PK oradan), sonra ilk sayfayı yeniden çeker', async () => {
     const { user, fake } = await setup();
     const list = await openTableList(user);
     await user.click(await list.findByRole('button', { name: 'users' }));
     await waitFor(() => expect(fake.tablePageRequests).toHaveLength(1));
-    fake.tablePage = async () => page({ satirlar: ids(7, 1), satirTahmini: 1 });
+    let catalogAtPage: string | undefined;
+    fake.tablePage = async () => {
+      catalogAtPage = fake.catalogRequests.at(-1);
+      return page({ satirlar: ids(7, 1), satirTahmini: 1 });
+    };
     await user.click(within(tableTab()).getByRole('button', { name: 'Tabloyu yeniden yükle' }));
     await waitFor(() => expect(within(tableTab()).getAllByRole('gridcell').map((c) => c.textContent)).toEqual(['7']));
     expect(fake.tablePageRequests.map((r) => r.sonraki)).toEqual([null, null]);
+    expect(fake.catalogRequests).toEqual(['getir d1/postgres', 'yenile d1/postgres']);
+    expect(catalogAtPage).toBe('yenile d1/postgres');
+  });
+
+  it('↻’de katalog okunamazsa hata görünür, sayfa istenmez', async () => {
+    const { user, fake } = await setup();
+    const list = await openTableList(user);
+    await user.click(await list.findByRole('button', { name: 'users' }));
+    await waitFor(() => expect(fake.tablePageRequests).toHaveLength(1));
+    fake.api.refreshCatalog = () => Promise.reject(new Error('bağlantı reddedildi'));
+    await user.click(within(tableTab()).getByRole('button', { name: 'Tabloyu yeniden yükle' }));
+    expect(await within(tableTab()).findByRole('alert')).toHaveTextContent('bağlantı reddedildi');
+    expect(fake.tablePageRequests).toHaveLength(1);
   });
 
   it('sayfa okunamazsa hata sekmede görünür', async () => {

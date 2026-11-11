@@ -23,7 +23,7 @@ interface Props {
   /** Hedef başına katalog (bkz. `catalogKey`); aynı hedefteki sekmeler aynı kaydı görür. */
   catalogs: Readonly<Record<string, CatalogEntry>>;
   /** Sekme katalog istedi (ilk çalıştırma, ↻, DDL sonrası tazelendi). */
-  onCatalog: (target: Target, reason: CatalogReason) => void;
+  onCatalog: (target: Target, reason: CatalogReason) => Promise<unknown>;
   /** "hedefi değiştir ▾": hızlı geçiş paletini açar. */
   onChangeTarget: () => void;
   /** Konsol gizli (ör. bağlantı formu açık); sekmeler ve açık transaction'ları korunur. */
@@ -137,6 +137,9 @@ export function Konsol({
                   target={target}
                   autoLoad={autoLoadTabs.has(tab.id)}
                   catalog={key ? catalogs[key] : undefined}
+                  onRefreshCatalog={() =>
+                    target ? onCatalog({ connectionId: target.connection.id, database: target.database }, 'yenile') : Promise.resolve()
+                  }
                   hidden={tab.id !== state.active}
                 />
               );
