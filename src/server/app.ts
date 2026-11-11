@@ -16,6 +16,7 @@ import type { AgentEnvironment } from '../core/ssh-tuneli';
 import { createSessionPasswords } from './oturum-sifreleri';
 import { createFolderRoutes } from './klasorler';
 import { createImportRoutes, type ImportEnvironment } from './ice-aktarma';
+import { createCatalogCache, createCatalogRoutes } from './katalog';
 import { createTabRoutes, createTabStore } from './konsol-sekmeleri';
 import { BodyError, json } from './http';
 import type { Keychain } from './keychain';
@@ -92,19 +93,25 @@ export async function startServer(options: ServerOptions): Promise<TezgahServer>
   });
   // Pool'lar ve tüneller tembel: açılışta hiçbir sunucuya bağlanılmaz.
   const pools = createPoolManager({ keychain: options.keychain, sessionPasswords, clock, openTunnel, log: options.log });
+  // Katalog önbelleği de tembel: yalnızca kullanıcı eylemiyle ya da DDL commit'inden sonra okunur.
+  const catalogs = createCatalogCache({ pools });
   const connectionRoutes = createConnectionRoutes({
     store,
     keychain: options.keychain,
     sessionPasswords,
     log: options.log,
     // Ayarı değişen ya da silinen bağlantının pool'ları eski ayarla açık kalmasın.
-    onChanged: (id) => void pools.disconnect(id),
+    onChanged: (id) => {
+      catalogs.dropConnection(id);
+      void pools.disconnect(id);
+    },
   });
-  const databaseRoutes = createDatabaseRoutes({ store, pools });
+  const databaseRoutes = createDatabaseRoutes({ store, pools, catalogs });
+  const catalogRoutes = createCatalogRoutes({ store, catalogs });
   const history = createRunHistory({ configDir: options.configDir, log: options.log });
   const historyRoutes = createRunHistoryRoutes({ history, openFolder: options.openFolder ?? openFolder });
   // Her `/ws` bağlantısı kendi çalıştırmasını taşır; koparsa transaction geri alınır (ADR-0002).
-  const attachScriptRunner = createScriptRunner({ store, pools, clock, history, log: options.log });
+  const attachScriptRunner = createScriptRunner({ store, pools, catalogs, clock, history, log: options.log });
   wss.on('connection', attachScriptRunner);
 
   const connectionTestRoutes = createConnectionTestRoutes({ store, keychain: options.keychain, openTunnel, log: options.log });
@@ -148,6 +155,7 @@ export async function startServer(options: ServerOptions): Promise<TezgahServer>
     }
     if (await connectionRoutes(req, res, url.pathname)) return;
     if (await databaseRoutes(req, res, url.pathname)) return;
+    if (await catalogRoutes(req, res, url.pathname)) return;
     if (await connectionTestRoutes(req, res, url.pathname)) return;
     if (await hostKeyRoutes(req, res, url.pathname)) return;
     if (await folderRoutes(req, res, url.pathname)) return;

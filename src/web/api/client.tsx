@@ -13,6 +13,7 @@ import type {
   ValidationErrorResponse,
 } from '../../core/baglanti';
 import type { ConnectionTestRequest, ConnectionTestResponse } from '../../core/baglanti-testi';
+import type { Catalog } from '../../core/katalog';
 import { historySearchParams, type HistoryPage, type HistoryQuery } from '../../core/gecmis-filtresi';
 import type { SavedTabs } from '../../core/konsol-sekmeleri';
 import type { ImportApplyRequest, ImportApplyResponse, ImportPreviewRequest, ImportPreviewResponse } from '../../core/ice-aktarma/sozlesme';
@@ -54,6 +55,13 @@ export interface ApiClient {
   updateDatabaseSelection(id: string, selection: DatabaseSelection[]): Promise<Connection>;
   /** Bağlantının tüm pool'larını kapatır. */
   disconnect(id: string): Promise<void>;
+  /**
+   * Hedefin Katalog önbelleği; sunucuda yoksa okunur (hedefe bağlanır). Yalnızca kullanıcı
+   * eylemiyle (hedef seçme, çalıştırma, ↻) çağrılır; geri gelen sekmeler çağırmaz.
+   */
+  getCatalog(id: string, database: string): Promise<Catalog>;
+  /** "↻": hedefin katalogunu sunucuda yeniden okur. */
+  refreshCatalog(id: string, database: string): Promise<Catalog>;
   /**
    * Script'i hedefte çalıştırır; olaylar `onEvent`'e sırayla gelir. Transaction bu çalıştırmaya
    * bağlıdır: `close` ya da sekmenin kapanması açık transaction'ı geri aldırır (ADR-0002).
@@ -147,6 +155,7 @@ export function createHttpApiClient(): ApiClient {
     });
   const connectionUrl = (id: string) => `/api/baglantilar/${encodeURIComponent(id)}`;
   const folderUrl = (id: string) => `/api/klasorler/${encodeURIComponent(id)}`;
+  const catalogUrl = (id: string, database: string) => `${connectionUrl(id)}/veritabanlari/${encodeURIComponent(database)}/katalog`;
   return {
     status: () => request<ServerStatus>('/api/durum'),
     listConnections: () => request<Connection[]>('/api/baglantilar'),
@@ -166,6 +175,8 @@ export function createHttpApiClient(): ApiClient {
     listDatabases: (id) => request(`${connectionUrl(id)}/veritabanlari`),
     listSchemas: (id, database) => request(`${connectionUrl(id)}/veritabanlari/${encodeURIComponent(database)}/semalar`),
     updateDatabaseSelection: (id, selection) => send('PUT', `${connectionUrl(id)}/veritabani-secimi`, selection),
+    getCatalog: (id, database) => request(catalogUrl(id, database)),
+    refreshCatalog: (id, database) => send('POST', `${catalogUrl(id, database)}/yenile`),
     disconnect: async (id) => {
       await send('POST', `${connectionUrl(id)}/baglantiyi-kes`);
     },

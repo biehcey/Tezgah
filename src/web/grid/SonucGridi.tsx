@@ -25,6 +25,8 @@ interface Props {
   kolonlar: readonly string[];
   /** Kolon tip OID'leri; "INSERT olarak kopyala" literal'lere `::tip` ekini bunlardan yazar. */
   tipler?: readonly number[];
+  /** Hedefin Katalog önbelleğindeki OID → tip adı; yerleşik olmayan tipler bununla çözülür. */
+  tipAdlari?: ReadonlyMap<number, string>;
   /** Ham metin değerler; NULL `null`. */
   satirlar: readonly (readonly (string | null)[])[];
   /** Sonucun toplam satırı (yüklenenlerden fazla olabilir); bilinmiyorsa `null`. */
@@ -45,7 +47,7 @@ const NEAR_END_ROWS = 100;
  * Odak roving tabindex ile aktif hücrededir; aktif satır görünümden çıksa da çizilmeye devam eder
  * ki odak kaybolmasın ve klavye gezinmesi sürsün.
  */
-export function SonucGridi({ etiket, kolonlar, tipler, satirlar, toplamSatir, onSonaYaklasti }: Props) {
+export function SonucGridi({ etiket, kolonlar, tipler, tipAdlari, satirlar, toplamSatir, onSonaYaklasti }: Props) {
   const olcum = useContext(GridOlcumu);
   const scrollRef = useRef<HTMLDivElement>(null);
   const firstPage = satirlar.slice(0, PAGE_ROWS);
@@ -208,7 +210,7 @@ export function SonucGridi({ etiket, kolonlar, tipler, satirlar, toplamSatir, on
 
   function copyAsInsert(s: Selection) {
     const r = selectionRange(s);
-    const sql = insertStatements({ tablo: PLACEHOLDER_TABLE, kolonlar, tipler, satirlar: satirlar.slice(r.ust, r.alt + 1) });
+    const sql = insertStatements({ tablo: PLACEHOLDER_TABLE, kolonlar, tipler, katalog: tipAdlari, satirlar: satirlar.slice(r.ust, r.alt + 1) });
     copyText(sql);
   }
 

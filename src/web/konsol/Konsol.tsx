@@ -3,6 +3,8 @@ import type { Connection } from '../../core/baglanti';
 import { sessionTabs, type ConsoleState, type OpenTab, type SessionTab, type TabTarget } from '../../core/konsol-sekmeleri';
 import type { HistoryEntry } from '../../core/gecmis-filtresi';
 import { GecmisPaneli } from '../gecmis/GecmisPaneli';
+import { catalogKey, type CatalogEntry, type CatalogReason } from '../katalog/kataloglar';
+import type { Target } from '../../core/veritabani-secimi';
 import { ScriptEkrani } from '../script/ScriptEkrani';
 
 interface Props {
@@ -17,6 +19,10 @@ interface Props {
   onTargetLockChange: (id: string, reason: string | null) => void;
   /** Hedef kilidi olan sekmeler (kimlik → neden): çalışan ya da karar bekleyen, yani açık oturumu olanlar. */
   targetLocks: Readonly<Record<string, string>>;
+  /** Hedef başına katalog (bkz. `catalogKey`); aynı hedefteki sekmeler aynı kaydı görür. */
+  catalogs: Readonly<Record<string, CatalogEntry>>;
+  /** Sekme katalog istedi (ilk çalıştırma, ↻, DDL sonrası tazelendi). */
+  onCatalog: (target: Target, reason: CatalogReason) => void;
   /** "hedefi değiştir ▾": hızlı geçiş paletini açar. */
   onChangeTarget: () => void;
   /** Konsol gizli (ör. bağlantı formu açık); sekmeler ve açık transaction'ları korunur. */
@@ -54,6 +60,8 @@ export function Konsol({
   onToggleWriteMode,
   onTargetLockChange,
   targetLocks,
+  catalogs,
+  onCatalog,
   onChangeTarget,
   hidden = false,
   historyOpen,
@@ -108,20 +116,26 @@ export function Konsol({
       <div className="konsol-govde">
         <div className="konsol-ekrani">
           {state.tabs.length === 0 && <p className="soluk kucuk bos-konsol">Açık sekme yok. “+” ile yeni bir konsol sekmesi açın.</p>}
-          {state.tabs.map((tab) => (
-            <KonsolSekmesi
-              key={tab.id}
-              tab={tab}
-              target={resolveTarget(tab.hedef, connections)}
-              hidden={tab.id !== state.active}
-              sessionTabs={sessionTabs(state, tab.id, openSessions)}
-              onActivate={onActivate}
-              onScriptChange={onScriptChange}
-              onToggleWriteMode={onToggleWriteMode}
-              onTargetLockChange={onTargetLockChange}
-              onChangeTarget={onChangeTarget}
-            />
-          ))}
+          {state.tabs.map((tab) => {
+            const target = resolveTarget(tab.hedef, connections);
+            const key = target && catalogKey({ connectionId: target.connection.id, database: target.database });
+            return (
+              <KonsolSekmesi
+                key={tab.id}
+                tab={tab}
+                target={target}
+                catalog={key ? catalogs[key] : undefined}
+                onCatalog={onCatalog}
+                hidden={tab.id !== state.active}
+                sessionTabs={sessionTabs(state, tab.id, openSessions)}
+                onActivate={onActivate}
+                onScriptChange={onScriptChange}
+                onToggleWriteMode={onToggleWriteMode}
+                onTargetLockChange={onTargetLockChange}
+                onChangeTarget={onChangeTarget}
+              />
+            );
+          })}
         </div>
         {historyOpen && (
           <GecmisPaneli
@@ -141,6 +155,8 @@ function KonsolSekmesi({
   target,
   hidden,
   sessionTabs,
+  catalog,
+  onCatalog,
   onActivate,
   onScriptChange,
   onToggleWriteMode,
@@ -151,10 +167,20 @@ function KonsolSekmesi({
   target: ReturnType<typeof resolveTarget>;
   hidden: boolean;
   sessionTabs: SessionTab[];
+  catalog: CatalogEntry | undefined;
+  onCatalog: Props['onCatalog'];
 } & Pick<Props, 'onActivate' | 'onScriptChange' | 'onToggleWriteMode' | 'onTargetLockChange' | 'onChangeTarget'>) {
   const { id } = tab;
   const lockChanged = useCallback((reason: string | null) => onTargetLockChange(id, reason), [id, onTargetLockChange]);
   const scriptChanged = useCallback((script: string) => onScriptChange(id, script), [id, onScriptChange]);
+  const connectionId = target?.connection.id;
+  const database = target?.database;
+  const catalogWanted = useCallback(
+    (reason: CatalogReason) => {
+      if (connectionId !== undefined && database !== undefined) onCatalog({ connectionId, database }, reason);
+    },
+    [connectionId, database, onCatalog],
+  );
   if (tab.tur !== 'konsol') {
     // Tablo sekmesi ticket 09'da gelir; kayıtlı olanı kaybetmemek için yalnızca yerinde tutulur.
     return (
@@ -173,6 +199,8 @@ function KonsolSekmesi({
       writeMode={tab.yazmaModu}
       onToggleWriteMode={() => onToggleWriteMode(id)}
       sessionTabs={sessionTabs}
+      catalog={catalog}
+      onCatalog={catalogWanted}
       onGoToTab={onActivate}
       hidden={hidden}
     />

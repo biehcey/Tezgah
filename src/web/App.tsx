@@ -39,6 +39,7 @@ import { SilmeOnayi } from './baglantilar/SilmeOnayi';
 import { Menu, type MenuItem, type MenuPosition } from './ortak/Menu';
 import { Onay } from './ortak/Onay';
 import { Konsol } from './konsol/Konsol';
+import { useCatalogs } from './katalog/kataloglar';
 import type { HistoryEntry } from '../core/gecmis-filtresi';
 import {
   changesServerSession,
@@ -120,6 +121,8 @@ export function App() {
    * Bu durumda yazılmaz: okunamayan dosyanın üzerine boş liste yazılmasın.
    */
   const persisted = useRef<string | null>(null);
+  /** Hedef başına Katalog önbelleği; yalnızca kullanıcı eylemiyle (hedef seçme, çalıştırma, ↻) dolar. */
+  const catalogs = useCatalogs(api);
   /** Bağlantı kimliğine göre sunucu oturumu; olmayan bağlantı bağlı değildir. */
   const [sessions, setSessions] = useState<Record<string, ConnectionSession>>({});
   const [passwordPrompt, setPasswordPrompt] = useState<PasswordPrompt | null>(null);
@@ -366,6 +369,8 @@ export function App() {
     try {
       await api.disconnect(connection.id);
       setSession(connection.id, null);
+      // Sunucu katalogu attı; yeniden okumak yeniden bağlanmak olurdu, istenmez.
+      catalogs.drop(connection.id);
     } catch (err) {
       setNotice(`“${connection.name}” bağlantısı kesilemedi: ${errorMessage(err)}`);
     }
@@ -375,6 +380,8 @@ export function App() {
     try {
       const updated = await api.updateDatabaseSelection(connection.id, selection);
       setConnections((list) => (list ?? []).map((c) => (c.id === updated.id ? updated : c)));
+      // Sunucu eski seçimle okunan katalogu attı; kullanıcının açtığı kataloglar yeni seçimle istenir.
+      catalogs.drop(connection.id, { reload: updated.databaseSelection.map((d) => d.database) });
     } catch (err) {
       setNotice(`Veritabanı seçimi kaydedilemedi: ${errorMessage(err)}`);
     }
@@ -390,6 +397,7 @@ export function App() {
     const hedef = { connectionId: next.connectionId, database: next.database, schema: null };
     const id = konsol.active;
     setKonsol((k) => (id ? setTabTarget(k, id, hedef) : openConsoleTab(k, newTabId(), hedef)));
+    catalogs.request(next, 'hedef');
     return true;
   }
 
@@ -481,6 +489,8 @@ export function App() {
     // Sunucu bağlanma ayarı ya da şifresi değişen bağlantının pool'larını kapattı.
     if (before && (changesServerSession(before, connection) || password === 'kaydedildi' || password === 'silindi')) {
       setSession(connection.id, null);
+      // Sunucu bu bağlantının katalogunu da attı.
+      catalogs.drop(connection.id);
     }
     setConnections((list) => {
       const current = list ?? [];
@@ -500,6 +510,7 @@ export function App() {
       if (selectedId === connection.id) setSelectedId(null);
       setKonsol((k) => forgetConnection(k, connection.id));
       setSession(connection.id, null);
+      catalogs.drop(connection.id);
       setEditing(null);
       setNotice(
         result.password === 'reddedildi'
@@ -742,6 +753,8 @@ export function App() {
           onToggleWriteMode={toggleTabWriteMode}
           onTargetLockChange={changeTargetLock}
           targetLocks={targetLocks}
+          catalogs={catalogs.entries}
+          onCatalog={catalogs.request}
           onChangeTarget={openPalette}
           hidden={formOpen}
           historyOpen={historyOpen}

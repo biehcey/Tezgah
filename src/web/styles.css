@@ -2028,3 +2028,8 @@ button.kucuk {
 .gecmis-durumu {
   padding: 8px 10px;
 }
+
+/* Katalog "↻": okunamadıysa uyarı renginde. */
+.katalog-yenile.hata {
+  color: var(--uyari, #b91c1c);
+}

@@ -51,11 +51,15 @@ import { beginStatement, runBlockReasons, writeLockState, type WriteLockState } 
 import type { SettingsStore } from './ayar-deposu';
 import type { RunHistory } from './calistirma-kayitlari';
 import { PoolFullError, TargetError, catalogQuery, type PoolManager } from './havuzlar';
+import type { CatalogCache } from './katalog';
+import { changesCatalog } from '../core/katalog';
 import type { Clock } from './saat';
 
 export interface ScriptRunnerDeps {
   store: SettingsStore;
   pools: PoolManager;
+  /** DDL içeren script commit ya da autocommit ile bitince hedefin katalogu yeniden okunur. */
+  catalogs: CatalogCache;
   /** Karar süresinin yetkili zamanlayıcısı. */
   clock: Clock;
   /** Her çalıştırma (bağlantısı bulunan) bir Çalıştırma kaydına yazılır. */
@@ -176,7 +180,7 @@ type StatementResult =
  * - Autocommit modu: ifadeler transaction'sız, sırayla ve her biri anında kalıcı çalışır; ilk
  *   hatada durulur; karar beklenmez. Soket koparsa çalışan ifade iptal edilir, kalanlar çalışmaz.
  */
-export function createScriptRunner({ store, pools, clock, history, log }: ScriptRunnerDeps) {
+export function createScriptRunner({ store, pools, catalogs, clock, history, log }: ScriptRunnerDeps) {
   return function attach(ws: WebSocket) {
     let run: Run | null = null;
     /** Bu soketin son çalıştırması Karar süresi dolarak bitti; geç gelen commit buna göre reddedilir. */
@@ -313,10 +317,17 @@ export function createScriptRunner({ store, pools, clock, history, log }: Script
       };
       void recorder.started.then((ok) => ok || recordFailed());
       let finished = false;
+      const ddl = changesCatalog(splitStatements(script));
+      /** Katalogu tazelenecek çalıştırmanın `bitti`'si: oturum client'ı bırakıldıktan sonra gider. */
+      let afterRefresh: Omit<Finished, 'type'> | null = null;
       const finish: Finish = async (event, sonuc) => {
         finished = true;
         if (!(await recorder.finish({ sonuc, mesaj: event.mesaj, ifadeler: current.ifadeler }))) recordFailed();
-        send({ type: 'bitti', ...event });
+        // Kalıcı olan DDL: commit edildi ya da autocommit'te en az bir ifade uygulandı. Yalnızca
+        // kullanıcının istediği (önbellekte ya da okunmakta olan) katalog tazelenir.
+        const persisted = event.sonuc === 'commit' || (event.ozet?.uygulandi ?? 0) > 0;
+        if (ddl && persisted && catalogs.has(connection.id, database)) afterRefresh = event;
+        else send({ type: 'bitti', ...event });
       };
       try {
         await pools.withClient(connection, database, (client, discard) => {
@@ -325,11 +336,30 @@ export function createScriptRunner({ store, pools, clock, history, log }: Script
         }, { session: true });
       } catch (err) {
         // `bitti` gitti; ikinci bir sonuç gönderilmez.
-        if (finished) return log(`Script çalıştırma hatası: ${String(err)}`);
-        if (err instanceof PoolFullError) return finish({ sonuc: 'hata', kod: 'havuzDolu', oturum: err.sessions, mesaj: err.message }, 'hata');
-        if (err instanceof TargetError) return finish({ sonuc: 'hata', mesaj: err.failure.mesaj }, 'hata');
-        log(`Script çalıştırma hatası: ${String(err)}`);
-        await finish({ sonuc: 'hata', mesaj: 'Beklenmeyen bir hata oluştu' }, 'hata');
+        if (finished) log(`Script çalıştırma hatası: ${String(err)}`);
+        else if (err instanceof PoolFullError) await finish({ sonuc: 'hata', kod: 'havuzDolu', oturum: err.sessions, mesaj: err.message }, 'hata');
+        else if (err instanceof TargetError) await finish({ sonuc: 'hata', mesaj: err.failure.mesaj }, 'hata');
+        else {
+          log(`Script çalıştırma hatası: ${String(err)}`);
+          await finish({ sonuc: 'hata', mesaj: 'Beklenmeyen bir hata oluştu' }, 'hata');
+        }
+      }
+      // Oturum bırakıldı: katalog okuması oturumun yerini tutmaz.
+      const pending = afterRefresh as Omit<Finished, 'type'> | null;
+      if (pending) {
+        const katalogYenilendi = await refreshCatalog(connection, database);
+        send({ type: 'bitti', ...pending, ...(katalogYenilendi && { katalogYenilendi: true as const }) });
+      }
+    }
+
+    /** Katalogu kısa süreli bir client'la yeniden okur; okunamazsa çalıştırma yine biter. */
+    async function refreshCatalog(connection: Connection, database: string): Promise<boolean> {
+      try {
+        await catalogs.refresh(connection, database);
+        return true;
+      } catch (err) {
+        log(`DDL sonrası katalog okunamadı (${connection.name} / ${database}): ${String(err)}`);
+        return false;
       }
     }
 

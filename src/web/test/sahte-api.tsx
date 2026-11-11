@@ -16,6 +16,7 @@ import {
 import type { HostKeyProblem } from '../../core/ssh-tuneli';
 import { emptyTabs, type SavedTabs } from '../../core/konsol-sekmeleri';
 import type { HistoryEntry, HistoryQuery } from '../../core/gecmis-filtresi';
+import type { Catalog } from '../../core/katalog';
 import { GridOlcumu } from '../grid/olcum';
 import { JSDOM_OLCUMU } from './grid';
 import { ApiError, ApiProvider, type ApiClient, type ConnectionRequest } from '../api/client';
@@ -43,6 +44,8 @@ export function createFakeApi(overrides: Partial<ApiClient> = {}): ApiClient {
     listSchemas: missing('listSchemas'),
     updateDatabaseSelection: missing('updateDatabaseSelection'),
     disconnect: missing('disconnect'),
+    getCatalog: missing('getCatalog'),
+    refreshCatalog: missing('refreshCatalog'),
     openRunHistoryFolder: missing('openRunHistoryFolder'),
     listRunHistory: missing('listRunHistory'),
     previewImport: missing('previewImport'),
@@ -163,6 +166,15 @@ export interface FakeConnections {
   history: HistoryEntry[];
   /** Arayüzün geçmiş istekleri, sırasıyla. */
   historyRequests: HistoryQuery[];
+  /** Hedefin (`<bağlantı>/<veritabanı>`) sunucudaki katalogu; verilmeyen hedefte boş katalog döner. */
+  catalogs: Map<string, Catalog>;
+  /** Katalog istekleri (`getir <bağlantı>/<veritabanı>`, `yenile …`), sırasıyla. */
+  catalogRequests: string[];
+}
+
+/** Hiç ilişkisi olmayan katalog. */
+export function emptyCatalog(overrides: Partial<Catalog> = {}): Catalog {
+  return { defaultSchema: 'public', semalar: ['public'], iliskiler: [], tipler: {}, kullaniciTipleri: [], ...overrides };
 }
 
 export interface FakeServer {
@@ -212,6 +224,8 @@ export function createFakeConnections(
     tabWrites: [],
     history: [],
     historyRequests: [],
+    catalogs: new Map(),
+    catalogRequests: [],
     api: undefined as unknown as ApiClient,
   };
   let next = 1;
@@ -375,6 +389,16 @@ export function createFakeConnections(
     async disconnect(id) {
       find(id);
       state.databaseRequests.push(`${id}: kes`);
+    },
+    async getCatalog(id, database) {
+      find(id);
+      state.catalogRequests.push(`getir ${id}/${database}`);
+      return structuredClone(state.catalogs.get(`${id}/${database}`) ?? emptyCatalog());
+    },
+    async refreshCatalog(id, database) {
+      find(id);
+      state.catalogRequests.push(`yenile ${id}/${database}`);
+      return structuredClone(state.catalogs.get(`${id}/${database}`) ?? emptyCatalog());
     },
     async giveSessionPassword(id, { password, saveToKeychain, secret }) {
       state.requests.push({ method: 'POST', id: `${id}/oturum-sifresi${secret === 'ssh' ? ':ssh' : ''}` });

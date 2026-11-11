@@ -27,6 +27,7 @@ import { STATUS_LABELS, STATUS_SYMBOLS, WRITE_LOCK_LABELS, type AnalysisMark } f
 import { ScriptEditoru, type EditorMarks, type ScriptEditoruHandle } from './ScriptEditoru';
 import { resultSummary, resultTotal } from '../../core/grid/ozet';
 import { SonucGridi } from '../grid/SonucGridi';
+import { catalogUse, type CatalogEntry, type CatalogReason } from '../katalog/kataloglar';
 
 interface Props {
   /** Hedefin bağlantısı ve veritabanı; hedef seçilmediyse `null`. */
@@ -46,6 +47,10 @@ interface Props {
   sessionTabs?: readonly SessionTab[];
   /** `havuzDolu` mesajındaki sekme adına tıklandı. */
   onGoToTab?: (id: string) => void;
+  /** Hedefin Katalog önbelleği (yoksa istenmemiş); tamamlama ve INSERT tip adları bundan. */
+  catalog?: CatalogEntry;
+  /** Katalog istendi: ilk çalıştırmada (yoksa), ↻'de ve sunucu DDL sonrası tazeleyince. */
+  onCatalog?: (reason: CatalogReason) => void;
   /**
    * Ekran gizli (ör. bağlantı formu açık). Kapanmaz: script, log ve açık transaction korunur;
    * kapanmak transaction'ı geri aldırırdı (ADR-0002).
@@ -110,6 +115,8 @@ export function ScriptEkrani({
   onToggleWriteMode,
   sessionTabs = [],
   onGoToTab,
+  catalog,
+  onCatalog,
   hidden = false,
 }: Props) {
   const api = useApi();
@@ -127,6 +134,15 @@ export function ScriptEkrani({
   // Olay geri çağrısı çalıştırma başında kurulur; o anki değil, `bitti` anındaki liste gerekir.
   const sessionTabsRef = useRef(sessionTabs);
   sessionTabsRef.current = sessionTabs;
+  // `bitti` hedef değişmeden önce başlayan çalıştırmanın geri çağrısında gelir.
+  const onCatalogRef = useRef(onCatalog);
+  onCatalogRef.current = onCatalog;
+  const connection = target?.connection;
+  const database = target?.database;
+  const { completion, tipAdlari } = useMemo(
+    () => (connection && database !== undefined ? catalogUse(catalog, connection, database) : { completion: null, tipAdlari: undefined }),
+    [catalog, connection, database],
+  );
   const editor = useRef<ScriptEditoruHandle>(null);
   const [folderError, setFolderError] = useState<string | null>(null);
   const targetRef: Target | null = target && { connectionId: target.connection.id, database: target.database };
@@ -195,6 +211,8 @@ export function ScriptEkrani({
     setDeadline(null);
     setPoolFullTabs([]);
     moreAsked.current.clear();
+    // Sekmenin ilk çalıştırması (bu hedefin katalogu yoksa) katalogu ister.
+    onCatalog?.('calistir');
     const runRequest = { target: targetRef, script: metin, yazmaModu: writeMode, deneme, ...(zorlaTransaction && { zorlaTransaction }) };
     handle.current = api.runScript(runRequest, (received) => {
       // Autocommit'te geri alınacak transaction yok; sunucu çalışan ifadeyi iptal eder.
@@ -203,6 +221,7 @@ export function ScriptEkrani({
       if (event.type === 'satirlar' || (event.type === 'uyari' && event.tur === 'dahaFazla')) moreAsked.current.delete(event.i);
       if (event.type === 'kararBekleniyor' || event.type === 'uzatildi' || event.type === 'okumaAcik') setDeadline(startDecision(event.kalanMs, Date.now()));
       if (event.type === 'bitti' && event.kod === 'havuzDolu') setPoolFullTabs(sessionTabsRef.current);
+      if (event.type === 'bitti' && event.katalogYenilendi) onCatalogRef.current?.('tazelendi');
     });
   }
 
@@ -269,6 +288,7 @@ export function ScriptEkrani({
             <span className="soluk kucuk">Soldaki Veritabanı panelinden bir veritabanı seçin.</span>
           </>
         )}
+        {target && <KatalogDugmesi catalog={catalog} onRefresh={() => onCatalog?.('yenile')} />}
         <button type="button" className="hedef-degistir" onClick={onChangeTarget}>
           hedefi değiştir ▾
         </button>
@@ -296,7 +316,7 @@ export function ScriptEkrani({
       <div className="script-govde">
         <div className="script-sol">
           <section aria-label="Script editörü" className="editor-alani">
-            <ScriptEditoru ref={editor} value={script} onChange={onScriptChange} readOnly={busy} marks={marks} />
+            <ScriptEditoru ref={editor} value={script} onChange={onScriptChange} readOnly={busy} marks={marks} completion={completion} />
           </section>
           {!busy && blocked && <BlockReasons reasons={reasons} />}
           <div className="script-cubugu">
@@ -336,7 +356,7 @@ export function ScriptEkrani({
               </>
             )}
           </div>
-          <Sonuclar run={run} runNo={runNo} selected={resultTab} onSelect={setResultTab} onMore={fetchMore} />
+          <Sonuclar run={run} runNo={runNo} selected={resultTab} onSelect={setResultTab} onMore={fetchMore} tipAdlari={tipAdlari} />
         </div>
         <aside aria-label="Çalıştırma" className="calistirma-sutunu">
           {run && reading ? (
@@ -389,6 +409,30 @@ export function ScriptEkrani({
         </aside>
       </div>
     </div>
+  );
+}
+
+/** "↻": hedefin katalogunu yeniden okutur; durum düğmenin açıklamasında. */
+function KatalogDugmesi({ catalog, onRefresh }: { catalog: CatalogEntry | undefined; onRefresh: () => void }) {
+  const loading = catalog?.durum === 'yukleniyor';
+  const title = !catalog
+    ? 'Katalog okunmadı; tamamlama için yenileyin'
+    : loading
+      ? 'Katalog okunuyor…'
+      : catalog.durum === 'hata'
+        ? `Katalog okunamadı: ${catalog.hata}`
+        : `Katalog: ${catalog.katalog.iliskiler.length} ilişki · yenile`;
+  return (
+    <button
+      type="button"
+      className={`ikon-dugme katalog-yenile${catalog?.durum === 'hata' ? ' hata' : ''}`}
+      aria-label="Katalogu yenile"
+      title={title}
+      disabled={loading}
+      onClick={onRefresh}
+    >
+      <span aria-hidden="true">↻</span>
+    </button>
   );
 }
 
@@ -766,6 +810,7 @@ function Sonuclar({
   selected,
   onSelect,
   onMore,
+  tipAdlari,
 }: {
   run: RunView | null;
   runNo: number;
@@ -773,6 +818,8 @@ function Sonuclar({
   onSelect: (i: number) => void;
   /** `i`. sonucun grid'i yüklü satırların sonuna yaklaştı. */
   onMore: (i: number) => void;
+  /** Katalogdan OID → tip adı ("INSERT olarak kopyala"). */
+  tipAdlari?: ReadonlyMap<number, string>;
 }) {
   const id = useId();
   const results = run?.ifadeler.filter((s) => s.onizleme && s.onizleme.kolonlar.length > 0) ?? [];
@@ -824,6 +871,7 @@ function Sonuclar({
                 etiket={`${resultLabel(s)} sonucu`}
                 kolonlar={s.onizleme!.kolonlar}
                 tipler={s.onizleme!.tipler}
+                tipAdlari={tipAdlari}
                 satirlar={s.onizleme!.satirlar}
                 toplamSatir={resultTotal(s.onizleme!, s.rowCount)}
                 onSonaYaklasti={() => onMore(s.i)}

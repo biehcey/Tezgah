@@ -1,9 +1,11 @@
+import { autocompletion, completionKeymap } from '@codemirror/autocomplete';
 import { history, defaultKeymap, historyKeymap } from '@codemirror/commands';
 import { PostgreSQL, sql } from '@codemirror/lang-sql';
 import { defaultHighlightStyle, syntaxHighlighting } from '@codemirror/language';
-import { Compartment, EditorState, RangeSet, StateEffect, StateField, type Extension, type Range } from '@codemirror/state';
+import { Compartment, EditorState, Facet, RangeSet, StateEffect, StateField, type Extension, type Range } from '@codemirror/state';
 import { Decoration, EditorView, GutterMarker, gutter, keymap, lineNumbers, type DecorationSet } from '@codemirror/view';
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
+import type { CompletionConfig } from '../../core/katalog';
 import type { StatementStatus } from '../../core/script-calistirma';
 import { ANALYSIS_MARKS, STATUS_LABELS, STATUS_SYMBOLS, isAnalysisMark, type AnalysisMark } from './durum';
 
@@ -27,6 +29,8 @@ interface Props {
   onChange: (value: string) => void;
   readOnly: boolean;
   marks: EditorMarks;
+  /** Katalogdan kurulan tamamlama (`lang-sql` `schema` + `defaultSchema`); katalog yoksa `null`. */
+  completion?: CompletionConfig | null;
 }
 
 
@@ -108,13 +112,20 @@ const statusGutter = gutter({
   initialSpacer: () => new StatusMarker('sirada', 0),
 });
 
+/** Editöre verilen tamamlama yapılandırması; testler editörün aldığını buradan okur. */
+export const completionConfig = Facet.define<CompletionConfig | null, CompletionConfig | null>({ combine: (values) => values[0] ?? null });
+
+/** SQL dili: renklendirme ve (katalog varsa) şema bilen tamamlama. Fonksiyonlar önerilmez. */
+function sqlLanguage(completion: CompletionConfig | null): Extension {
+  return [sql({ dialect: PostgreSQL, ...(completion ?? {}) }), completionConfig.of(completion)];
+}
+
 const baseExtensions: Extension[] = [
   statusGutter,
   lineNumbers(),
   history(),
-  keymap.of([...defaultKeymap, ...historyKeymap]),
-  // Yalnızca renklendirme: otomatik tamamlama sonraki dilimde.
-  sql({ dialect: PostgreSQL }),
+  autocompletion(),
+  keymap.of([...completionKeymap, ...defaultKeymap, ...historyKeymap]),
   syntaxHighlighting(defaultHighlightStyle),
   marksField,
   errorDecorations,
@@ -123,12 +134,16 @@ const baseExtensions: Extension[] = [
 ];
 
 /** CodeMirror 6 SQL editörü; durumu (metin, salt okunurluk, süsler) React'ten gelir. */
-export const ScriptEditoru = forwardRef<ScriptEditoruHandle, Props>(function ScriptEditoru({ value, onChange, readOnly, marks }, ref) {
+export const ScriptEditoru = forwardRef<ScriptEditoruHandle, Props>(function ScriptEditoru(
+  { value, onChange, readOnly, marks, completion = null },
+  ref,
+) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
   const readOnlyCompartment = useRef(new Compartment());
+  const languageCompartment = useRef(new Compartment());
 
   useEffect(() => {
     const created = new EditorView({
@@ -137,6 +152,7 @@ export const ScriptEditoru = forwardRef<ScriptEditoruHandle, Props>(function Scr
         doc: value,
         extensions: [
           ...baseExtensions,
+          languageCompartment.current.of(sqlLanguage(completion)),
           // Çalışırken düzenleme kapalı: ifade offset'leri sunucunun gördüğüyle aynı kalmalı.
           readOnlyCompartment.current.of(EditorState.readOnly.of(readOnly)),
           EditorView.contentAttributes.of({ 'aria-label': 'SQL script' }),
@@ -164,6 +180,11 @@ export const ScriptEditoru = forwardRef<ScriptEditoruHandle, Props>(function Scr
   useEffect(() => {
     view.current?.dispatch({ effects: setMarks.of(marks) });
   }, [marks]);
+
+  // Katalog değişince (yüklendi, ↻, DDL sonrası) dil yeniden yapılandırılır.
+  useEffect(() => {
+    view.current?.dispatch({ effects: languageCompartment.current.reconfigure(sqlLanguage(completion)) });
+  }, [completion]);
 
   useEffect(() => {
     view.current?.dispatch({ effects: readOnlyCompartment.current.reconfigure(EditorState.readOnly.of(readOnly)) });

@@ -135,8 +135,18 @@ export type ServerEvent =
   /**
    * `ozet` yalnızca Autocommit'te. `kod: 'havuzDolu'`: hedefte `oturum` açık oturumla sınır doldu,
    * hiçbir şey çalışmadı; arayüz mesajı kendi bildiği açık sekmelerle kurar (`mesaj` yedektir).
+   * `katalogYenilendi`: DDL'li script commit ya da autocommit ile bitti, sunucu hedefin Katalog
+   * önbelleğini tazeledi; arayüz katalogu yeniden çeker.
    */
-  | { type: 'bitti'; sonuc: RunResult; kod?: RunFailureCode; oturum?: number; mesaj?: string; ozet?: AutocommitSummary }
+  | {
+      type: 'bitti';
+      sonuc: RunResult;
+      kod?: RunFailureCode;
+      oturum?: number;
+      mesaj?: string;
+      ozet?: AutocommitSummary;
+      katalogYenilendi?: true;
+    }
   /**
    * İstek reddedildi ya da Çalıştırma kaydı yazılamadı; çalıştırma sürüyor. `dahaFazla`: `i`.
    * sonucun satırları çekilemedi (transaction kapalı, hatalı ya da çekerken hata).

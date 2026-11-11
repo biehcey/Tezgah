@@ -10,10 +10,13 @@ import {
 import type { SettingsStore } from './ayar-deposu';
 import { TargetError, catalogQuery, type PoolManager } from './havuzlar';
 import { json, methodNotAllowed, notFound, readJson } from './http';
+import type { CatalogCache } from './katalog';
 
 export interface DatabaseRouteDeps {
   store: SettingsStore;
   pools: PoolManager;
+  /** Bağlantı kesilince ve Veritabanı seçimi değişince hedeflerin Katalog önbelleği atılır. */
+  catalogs: CatalogCache;
 }
 
 const PATH = /^\/api\/baglantilar\/([^/]+)\/(?:(veritabanlari)(?:\/([^/]+)\/(semalar))?|(veritabani-secimi|baglantiyi-kes))$/;
@@ -22,7 +25,7 @@ const PATH = /^\/api\/baglantilar\/([^/]+)\/(?:(veritabanlari)(?:\/([^/]+)\/(sem
  * Veritabanı paneli uçları: veritabanı ve şema listesi (hedefin pool'u üzerinden), Veritabanı
  * seçimini güncelleme ve bağlantıyı kesme. İsteği ele aldıysa `true` döner.
  */
-export function createDatabaseRoutes({ store, pools }: DatabaseRouteDeps) {
+export function createDatabaseRoutes({ store, pools, catalogs }: DatabaseRouteDeps) {
   async function find(id: string): Promise<Connection | undefined> {
     return (await store.read()).connections.find((c) => c.id === id);
   }
@@ -80,6 +83,8 @@ export function createDatabaseRoutes({ store, pools }: DatabaseRouteDeps) {
       return connection;
     });
     if (!updated) return notFound(res, 'Bağlantı bulunamadı');
+    // Katalog görünür şemalardan okunur; seçim değişince eskisi geçersizdir.
+    catalogs.dropConnection(id);
     json(res, 200, updated);
   }
 
@@ -104,6 +109,7 @@ export function createDatabaseRoutes({ store, pools }: DatabaseRouteDeps) {
       return true;
     }
     if (action === 'baglantiyi-kes') {
+      catalogs.dropConnection(id);
       await pools.disconnect(id);
       json(res, 200, {});
     } else if (sub === 'semalar') await schemas(res, connection, decodeURIComponent(rawDatabase!));

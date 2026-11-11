@@ -14,6 +14,11 @@ export function visibleSchemas(entry: DatabaseSelection, all: readonly string[])
   return all.filter((s) => (visible === null ? !HIDDEN_SCHEMAS.includes(s) : visible.includes(s)));
 }
 
+/** Hedef veritabanının seçim girdisi; seçimde yoksa varsayılan şema görünürlüğüyle. */
+export function selectionEntry(connection: Pick<Connection, 'databaseSelection'>, database: string): DatabaseSelection {
+  return connection.databaseSelection.find((d) => d.database === database) ?? { database, schemas: null };
+}
+
 /** ⭐: görünür yapılan veritabanı varsayılan şema görünürlüğüyle sona eklenir; gizlenen çıkar. */
 export function setDatabaseVisible(selection: readonly DatabaseSelection[], database: string, visible: boolean): DatabaseSelection[] {
   const present = selection.some((d) => d.database === database);
