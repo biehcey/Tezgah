@@ -30,8 +30,8 @@ import {
   withReturning,
   type FallbackReason,
   type TableInfo,
-  type TableName,
 } from '../core/deneme';
+import type { TableName } from '../core/grid/sql';
 import type { SchemaChange, TableSchema } from '../core/deneme-farki';
 import { PAGE_ROWS, ROW_LIMIT } from '../core/grid/sabitler';
 import { splitStatements, type Statement } from '../core/ifade-bolme';

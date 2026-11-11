@@ -866,6 +866,14 @@ describe('Script ekranı: sonuç sekmeleri', () => {
     await user.keyboard('{Control>}c{/Control}');
     expect(await navigator.clipboard.readText()).toBe('panoya');
   });
+
+  it('sonuç grid’inde "INSERT olarak kopyala" sonucun kolon tipleriyle yer tutucu tabloya yazar', async () => {
+    const { user, run } = await startRun('SELECT 1');
+    run.emit({ type: 'done', i: 0, rowCount: 1, ms: 1, komut: 'SELECT', onizleme: { kolonlar: ['a'], tipler: [25], satirlar: [["it's"]], dahaVar: false } });
+    fireEvent.contextMenu(within(results()).getByRole('gridcell'));
+    await user.click(screen.getByRole('menuitem', { name: 'INSERT olarak kopyala' }));
+    expect(await navigator.clipboard.readText()).toBe(`INSERT INTO "tablo" ("a") VALUES ('it''s'::text);`);
+  });
 });
 
 describe('Script ekranı: daha fazla satır', () => {

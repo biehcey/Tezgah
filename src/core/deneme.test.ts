@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ddlTargets, denemeLockTimeout, decodeOldNew, dmlTarget, oldNewSelect, parseServerVersion, parseTableInfo, qualifiedName, tableInfoQuery, withReturning } from './deneme';
+import { ddlTargets, denemeLockTimeout, decodeOldNew, dmlTarget, oldNewSelect, parseServerVersion, parseTableInfo, tableInfoQuery, withReturning } from './deneme';
 import { splitStatements } from './ifade-bolme';
 
 const rewrite = (sql: string) => withReturning(splitStatements(sql)[0]!);
@@ -75,13 +75,6 @@ describe('ddlTargets: DDL ifadesinin dokunduğu tablolar', () => {
 
   it.each(['CREATE INDEX i ON t (a)', 'ALTER SEQUENCE s RESTART', 'SELECT 1', 'DROP VIEW v'])('tablo şeması değiştirmez: %s', (sql) => {
     expect(targets(sql)).toEqual([]);
-  });
-});
-
-describe('qualifiedName', () => {
-  it('her parçayı tırnaklar; to_regclass sözdizimi hatası vermez', () => {
-    expect(qualifiedName({ ad: 'a"b' })).toBe('"a""b"');
-    expect(qualifiedName({ sema: 's', ad: 't' })).toBe('"s"."t"');
   });
 });
 

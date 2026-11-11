@@ -823,6 +823,7 @@ function Sonuclar({
               <SonucGridi
                 etiket={`${resultLabel(s)} sonucu`}
                 kolonlar={s.onizleme!.kolonlar}
+                tipler={s.onizleme!.tipler}
                 satirlar={s.onizleme!.satirlar}
                 toplamSatir={resultTotal(s.onizleme!, s.rowCount)}
                 onSonaYaklasti={() => onMore(s.i)}

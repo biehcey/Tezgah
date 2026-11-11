@@ -8,6 +8,7 @@
 import { isProd, type EnvTag } from './baglanti';
 import { PREVIEW_ROWS } from './script-calistirma';
 import type { ColumnSchema, Counts, RowChanges, TableRef, TableSchema } from './deneme-farki';
+import { qualifiedName, quoteIdent, sqlLiteral, type TableName } from './grid/sql';
 import { WORD_CHAR, WORD_START, skipBlockComment, type Statement } from './ifade-bolme';
 
 // ---------- prod'da satır kilidi beklemesi (wayfinder 20) ----------
@@ -127,12 +128,6 @@ export function decodeOldNew(
       silindi: deleted! - shown.silindi,
     },
   };
-}
-
-/** Şemayla nitelenmiş ya da nitelenmemiş tablo adı; tırnaksız parçalar küçük harfe indirgenmiştir. */
-export interface TableName {
-  sema?: string;
-  ad: string;
 }
 
 type Token = { tur: 'kelime'; deger: string; anahtar: string } | { tur: 'ad'; deger: string } | { tur: 'simge'; deger: string };
@@ -260,16 +255,6 @@ export function ddlTargets(statement: Statement): TableName[] {
   return [];
 }
 
-/** Postgres tanıtıcısı olarak tırnaklar. */
-export function quoteIdent(name: string): string {
-  return `"${name.replaceAll('"', '""')}"`;
-}
-
-/** `to_regclass`'a verilecek, her parçası tırnaklı ad. */
-export function qualifiedName({ sema, ad }: TableName): string {
-  return sema === undefined ? quoteIdent(ad) : `${quoteIdent(sema)}.${quoteIdent(ad)}`;
-}
-
 /** `RETURNING old.*, new.*` desteği olan en eski sürüm (`server_version_num`). */
 export const OLD_NEW_MIN_VERSION = 180000;
 
@@ -296,10 +281,6 @@ export interface TableInfo {
   sema: TableSchema;
 }
 
-function quoteLiteral(value: string): string {
-  return `'${value.replaceAll("'", "''")}'`;
-}
-
 /**
  * Tablonun kimliğini, PK'sını ve kolonlarını tek JSON metni olarak döndüren katalog sorgusu.
  * Basit sorgu protokolüyle gider (parametresiz); ad `to_regclass` ile oturumun `search_path`'inde
@@ -310,7 +291,7 @@ export function tableInfoQuery(by: { ad: TableName } | { oid: string }): string 
   if ('oid' in by) {
     if (!/^\d+$/.test(by.oid)) throw new Error(`Geçersiz oid: ${by.oid}`);
     where = `c.oid = ${by.oid}::oid`;
-  } else where = `c.oid = to_regclass(${quoteLiteral(qualifiedName(by.ad))})`;
+  } else where = `c.oid = to_regclass(${sqlLiteral(qualifiedName(by.ad))})`;
   return [
     'SELECT json_build_object(',
     "'oid', c.oid::text,",

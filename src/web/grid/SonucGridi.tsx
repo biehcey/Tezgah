@@ -1,9 +1,11 @@
 import { defaultRangeExtractor, useVirtualizer } from '@tanstack/react-virtual';
-import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent, type PointerEvent } from 'react';
+import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent, type PointerEvent } from 'react';
 import { NULL_LABEL, cellDisplay, initialColumnWidths, type TextWidth } from '../../core/grid/gosterim';
 import { MIN_COLUMN_WIDTH, PAGE_ROWS } from '../../core/grid/sabitler';
-import { extendTo, isSelected, navigate, selectCell, selectedValues, type Cell, type Selection } from '../../core/grid/secim';
+import { PLACEHOLDER_TABLE, insertStatements } from '../../core/grid/insert';
+import { extendTo, isSelected, navigate, selectCell, selectedValues, selectionRange, type Cell, type Selection } from '../../core/grid/secim';
 import { toTsv } from '../../core/grid/tsv';
+import { Menu, menuBelow, type MenuPosition } from '../ortak/Menu';
 import { GridOlcumu, canvasTextWidth } from './olcum';
 
 /** Sabit satır ve başlık yüksekliği (px); satırlar ölçülmez. CSS bunları `--grid-*` olarak alır. */
@@ -21,6 +23,8 @@ interface Props {
   /** Grid'in erişilebilir adı. */
   etiket: string;
   kolonlar: readonly string[];
+  /** Kolon tip OID'leri; "INSERT olarak kopyala" literal'lere `::tip` ekini bunlardan yazar. */
+  tipler?: readonly number[];
   /** Ham metin değerler; NULL `null`. */
   satirlar: readonly (readonly (string | null)[])[];
   /** Sonucun toplam satırı (yüklenenlerden fazla olabilir); bilinmiyorsa `null`. */
@@ -41,7 +45,7 @@ const NEAR_END_ROWS = 100;
  * Odak roving tabindex ile aktif hücrededir; aktif satır görünümden çıksa da çizilmeye devam eder
  * ki odak kaybolmasın ve klavye gezinmesi sürsün.
  */
-export function SonucGridi({ etiket, kolonlar, satirlar, toplamSatir, onSonaYaklasti }: Props) {
+export function SonucGridi({ etiket, kolonlar, tipler, satirlar, toplamSatir, onSonaYaklasti }: Props) {
   const olcum = useContext(GridOlcumu);
   const scrollRef = useRef<HTMLDivElement>(null);
   const firstPage = satirlar.slice(0, PAGE_ROWS);
@@ -51,6 +55,10 @@ export function SonucGridi({ etiket, kolonlar, satirlar, toplamSatir, onSonaYakl
   const [sel, setSel] = useState<Selection>(() => selectCell({ satir: 0, kolon: 0 }));
   /** Tam değeri gösterilen hücre (F2 / çift tık). */
   const [valueCell, setValueCell] = useState<Cell | null>(null);
+  /** Açık sağ tık menüsü ve açıldığı andaki seçim. */
+  const [menu, setMenu] = useState<(MenuPosition & { sel: Selection; key: number }) | null>(null);
+  /** Son `contextmenu` sağ fare tuşundan mı geldi (yoksa menü tuşu / Shift+F10). */
+  const rightPressed = useRef(false);
   /** Sonraki çizimden sonra aktif hücre odaklanmalı (klavye, tık, değer kutusunun kapanması). */
   const focusPending = useRef(false);
   const dragging = useRef(false);
@@ -151,8 +159,7 @@ export function SonucGridi({ etiket, kolonlar, satirlar, toplamSatir, onSonaYakl
     const ctrl = e.ctrlKey || e.metaKey;
     if (ctrl && e.key.toLowerCase() === 'c') {
       e.preventDefault();
-      // Pano izni reddedilirse kopyalanacak başka yol yok; grid durumu değişmez.
-      navigator.clipboard?.writeText(toTsv(selectedValues(satirlar, sel))).catch(() => {});
+      copyText(toTsv(selectedValues(satirlar, sel)));
       return;
     }
     if (e.key === 'F2') {
@@ -169,6 +176,7 @@ export function SonucGridi({ etiket, kolonlar, satirlar, toplamSatir, onSonaYakl
   }
 
   function onCellMouseDown(e: MouseEvent, cell: Cell) {
+    rightPressed.current = e.button === 2;
     if (e.button !== 0) return;
     // Metin seçimi yerine hücre seçimi; odak çizimden sonra aktif hücreye verilir.
     e.preventDefault();
@@ -180,6 +188,28 @@ export function SonucGridi({ etiket, kolonlar, satirlar, toplamSatir, onSonaYakl
 
   function onCellMouseEnter(cell: Cell) {
     if (dragging.current) setSel((s) => extendTo(s, cell));
+  }
+
+  /** Sağ tık seçimin dışındaysa önce o hücreyi seçer; menü o seçimle çalışır. */
+  function onCellContextMenu(e: MouseEvent<HTMLElement>, cell: Cell) {
+    e.preventDefault();
+    const next = isSelected(sel, cell) ? sel : selectCell(cell);
+    setSel(next);
+    // Klavyeden (menü tuşu, Shift+F10) açılınca tarayıcının koordinatı imleç değildir: hücrenin altı.
+    const at = rightPressed.current ? { x: e.clientX, y: e.clientY } : menuBelow(e);
+    rightPressed.current = false;
+    setMenu((m) => ({ ...at, sel: next, key: (m?.key ?? 0) + 1 }));
+  }
+
+  const closeMenu = useCallback(() => {
+    setMenu(null);
+    focusPending.current = true;
+  }, []);
+
+  function copyAsInsert(s: Selection) {
+    const r = selectionRange(s);
+    const sql = insertStatements({ tablo: PLACEHOLDER_TABLE, kolonlar, tipler, satirlar: satirlar.slice(r.ust, r.alt + 1) });
+    copyText(sql);
   }
 
   function closeValue() {
@@ -204,96 +234,114 @@ export function SonucGridi({ etiket, kolonlar, satirlar, toplamSatir, onSonaYakl
   const value = valueCell ? (satirlar[valueCell.satir]?.[valueCell.kolon] ?? null) : null;
 
   return (
-    <div
-      ref={scrollRef}
-      role="grid"
-      aria-label={etiket}
-      aria-rowcount={toplamSatir === null ? -1 : toplamSatir + 1}
-      aria-colcount={kolonlar.length}
-      aria-multiselectable="true"
-      aria-readonly="true"
-      className="sonuc-gridi"
-      style={{ '--grid-satir': `${ROW_HEIGHT}px`, '--grid-baslik': `${HEADER_HEIGHT}px` } as CSSProperties}
-      onKeyDown={onKeyDown}
-    >
-      <div className="grid-icerik" style={{ height: virtualizer.getTotalSize(), width: offsets.at(-1) }}>
-        <div role="rowgroup" className="grid-basligi">
-          <div role="row" aria-rowindex={1} className="grid-satiri">
-            {kolonlar.map((ad, c) => (
-              <div key={c} role="columnheader" aria-colindex={c + 1} className="grid-kolon-basligi" style={{ width: widths[c] }} title={ad}>
-                <span className="grid-kolon-adi">{ad}</span>
-                <span
-                  role="separator"
-                  aria-orientation="vertical"
-                  aria-label={`${ad} genişliği`}
-                  className="grid-kolon-tutamaci"
-                  onPointerDown={(e) => onResizeStart(e, c)}
-                  onPointerMove={onResizeMove}
-                  onPointerUp={() => (resize.current = null)}
-                  onPointerCancel={() => (resize.current = null)}
-                />
-              </div>
-            ))}
+    <>
+      <div
+        ref={scrollRef}
+        role="grid"
+        aria-label={etiket}
+        aria-rowcount={toplamSatir === null ? -1 : toplamSatir + 1}
+        aria-colcount={kolonlar.length}
+        aria-multiselectable="true"
+        aria-readonly="true"
+        className="sonuc-gridi"
+        style={{ '--grid-satir': `${ROW_HEIGHT}px`, '--grid-baslik': `${HEADER_HEIGHT}px` } as CSSProperties}
+        onKeyDown={onKeyDown}
+      >
+        <div className="grid-icerik" style={{ height: virtualizer.getTotalSize(), width: offsets.at(-1) }}>
+          <div role="rowgroup" className="grid-basligi">
+            <div role="row" aria-rowindex={1} className="grid-satiri">
+              {kolonlar.map((ad, c) => (
+                <div key={c} role="columnheader" aria-colindex={c + 1} className="grid-kolon-basligi" style={{ width: widths[c] }} title={ad}>
+                  <span className="grid-kolon-adi">{ad}</span>
+                  <span
+                    role="separator"
+                    aria-orientation="vertical"
+                    aria-label={`${ad} genişliği`}
+                    className="grid-kolon-tutamaci"
+                    onPointerDown={(e) => onResizeStart(e, c)}
+                    onPointerMove={onResizeMove}
+                    onPointerUp={() => (resize.current = null)}
+                    onPointerCancel={() => (resize.current = null)}
+                  />
+                </div>
+              ))}
+            </div>
           </div>
+          <div role="rowgroup">
+            {items.map((item) => {
+              const r = item.index;
+              const row = satirlar[r]!;
+              return (
+                <div key={r} role="row" aria-rowindex={r + 2} className="grid-satiri grid-veri-satiri" style={{ transform: `translateY(${item.start}px)` }}>
+                  {kolonlar.map((_, c) => {
+                    const cell = { satir: r, kolon: c };
+                    const shown = cellDisplay(row[c] ?? null);
+                    const selected = isSelected(sel, cell);
+                    const active = sel.aktif.satir === r && sel.aktif.kolon === c;
+                    return (
+                      <div
+                        key={c}
+                        role="gridcell"
+                        aria-colindex={c + 1}
+                        aria-selected={selected}
+                        tabIndex={active ? 0 : -1}
+                        data-hucre={`${r}:${c}`}
+                        className={`grid-hucresi${shown.null ? ' null' : ''}${selected ? ' secili' : ''}${active ? ' aktif' : ''}`}
+                        style={{ width: widths[c] }}
+                        onMouseDown={(e) => onCellMouseDown(e, cell)}
+                        onMouseEnter={() => onCellMouseEnter(cell)}
+                        onDoubleClick={() => setValueCell(cell)}
+                        onContextMenu={(e) => onCellContextMenu(e, cell)}
+                      >
+                        {shown.null ? NULL_LABEL : shown.metin}
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })}
+          </div>
+          {valueCell && (
+            <textarea
+              className="hucre-degeri"
+              readOnly
+              autoFocus
+              aria-label={`${kolonlar[valueCell.kolon]} değeri`}
+              value={value ?? ''}
+              placeholder={value === null ? NULL_LABEL : undefined}
+              style={{
+                top: HEADER_HEIGHT + valueCell.satir * ROW_HEIGHT,
+                left: offsets[valueCell.kolon],
+                width: Math.max(widths[valueCell.kolon]!, VALUE_BOX_MIN_WIDTH),
+              }}
+              onKeyDown={(e) => {
+                // Kutudaki tuşlar (oklar, Ctrl+C) grid'de gezinmez.
+                e.stopPropagation();
+                if (e.key === 'Escape') {
+                  e.preventDefault();
+                  closeValue();
+                }
+              }}
+              onBlur={() => setValueCell(null)}
+            />
+          )}
         </div>
-        <div role="rowgroup">
-          {items.map((item) => {
-            const r = item.index;
-            const row = satirlar[r]!;
-            return (
-              <div key={r} role="row" aria-rowindex={r + 2} className="grid-satiri grid-veri-satiri" style={{ transform: `translateY(${item.start}px)` }}>
-                {kolonlar.map((_, c) => {
-                  const cell = { satir: r, kolon: c };
-                  const shown = cellDisplay(row[c] ?? null);
-                  const selected = isSelected(sel, cell);
-                  const active = sel.aktif.satir === r && sel.aktif.kolon === c;
-                  return (
-                    <div
-                      key={c}
-                      role="gridcell"
-                      aria-colindex={c + 1}
-                      aria-selected={selected}
-                      tabIndex={active ? 0 : -1}
-                      data-hucre={`${r}:${c}`}
-                      className={`grid-hucresi${shown.null ? ' null' : ''}${selected ? ' secili' : ''}${active ? ' aktif' : ''}`}
-                      style={{ width: widths[c] }}
-                      onMouseDown={(e) => onCellMouseDown(e, cell)}
-                      onMouseEnter={() => onCellMouseEnter(cell)}
-                      onDoubleClick={() => setValueCell(cell)}
-                    >
-                      {shown.null ? NULL_LABEL : shown.metin}
-                    </div>
-                  );
-                })}
-              </div>
-            );
-          })}
-        </div>
-        {valueCell && (
-          <textarea
-            className="hucre-degeri"
-            readOnly
-            autoFocus
-            aria-label={`${kolonlar[valueCell.kolon]} değeri`}
-            value={value ?? ''}
-            placeholder={value === null ? NULL_LABEL : undefined}
-            style={{
-              top: HEADER_HEIGHT + valueCell.satir * ROW_HEIGHT,
-              left: offsets[valueCell.kolon],
-              width: Math.max(widths[valueCell.kolon]!, VALUE_BOX_MIN_WIDTH),
-            }}
-            onKeyDown={(e) => {
-              // Kutudaki tuşlar (oklar, Ctrl+C) grid'de gezinmez.
-              e.stopPropagation();
-              if (e.key === 'Escape') {
-                e.preventDefault();
-                closeValue();
-              }
-            }}
-            onBlur={() => setValueCell(null)}
-          />
-        )}
       </div>
-    </div>
+      {menu && (
+        <Menu
+          key={menu.key}
+          x={menu.x}
+          y={menu.y}
+          label={`${etiket} menüsü`}
+          items={[{ label: 'INSERT olarak kopyala', onSelect: () => copyAsInsert(menu.sel) }]}
+          onClose={closeMenu}
+        />
+      )}
+    </>
   );
+}
+
+/** Pano izni reddedilirse kopyalanacak başka yol yok; grid durumu değişmez. */
+function copyText(metin: string) {
+  navigator.clipboard?.writeText(metin).catch(() => {});
 }

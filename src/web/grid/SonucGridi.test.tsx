@@ -11,11 +11,11 @@ function rows(n: number): (string | null)[][] {
   return Array.from({ length: n }, (_, i) => [String(i + 1), `ad ${i + 1}`, i % 2 === 0 ? null : '']);
 }
 
-function setup({ satirlar = rows(5), toplam }: { satirlar?: (string | null)[][]; toplam?: number | null } = {}) {
+function setup({ satirlar = rows(5), toplam, tipler }: { satirlar?: (string | null)[][]; toplam?: number | null; tipler?: number[] } = {}) {
   const user = userEvent.setup();
   render(
     <GridOlcumu.Provider value={JSDOM_OLCUMU}>
-      <SonucGridi etiket="Sonuç 1" kolonlar={KOLONLAR} satirlar={satirlar} toplamSatir={toplam === undefined ? satirlar.length : toplam} />
+      <SonucGridi etiket="Sonuç 1" kolonlar={KOLONLAR} tipler={tipler} satirlar={satirlar} toplamSatir={toplam === undefined ? satirlar.length : toplam} />
     </GridOlcumu.Provider>,
   );
   return { user };
@@ -175,6 +175,60 @@ describe('Sonuç grid’i: gezinme ve seçim', () => {
     await user.click(cell(1, 1));
     await user.keyboard('{Meta>}c{/Meta}');
     expect(await navigator.clipboard.readText()).toBe('ad 2');
+  });
+});
+
+describe('Sonuç grid’i: INSERT olarak kopyala', () => {
+  const INT4 = 23;
+  const TEXT = 25;
+
+  it('sağ tık menüsü seçili satırları tüm kolonlarıyla yer tutucu tabloya INSERT olarak kopyalar', async () => {
+    const { user } = setup({ satirlar: [['1', "O'Brien", null], ['2', 'b', 'x'], ['3', 'c', 'y']], tipler: [INT4, TEXT, 99999] });
+    await user.click(cell(0, 1));
+    await user.keyboard('{Shift>}{ArrowDown}{/Shift}');
+    fireEvent.contextMenu(cell(1, 1));
+    await user.click(screen.getByRole('menuitem', { name: 'INSERT olarak kopyala' }));
+    expect(await navigator.clipboard.readText()).toBe(
+      [
+        `INSERT INTO "tablo" ("id", "ad", "not") VALUES ('1'::integer, 'O''Brien'::text, NULL);`,
+        `INSERT INTO "tablo" ("id", "ad", "not") VALUES ('2'::integer, 'b'::text, 'x');`,
+      ].join('\n'),
+    );
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    expect(cell(1, 1)).toHaveFocus();
+  });
+
+  it('seçimin dışındaki hücreye sağ tık önce o hücreyi seçer', async () => {
+    const { user } = setup({ satirlar: [['1', 'a', 'p'], ['2', 'b', 'q']] });
+    await user.click(cell(0, 0));
+    fireEvent.contextMenu(cell(1, 2));
+    expect(cell(1, 2)).toHaveClass('aktif');
+    expect(cell(0, 0)).not.toHaveClass('secili');
+    await user.click(screen.getByRole('menuitem', { name: 'INSERT olarak kopyala' }));
+    expect(await navigator.clipboard.readText()).toBe(`INSERT INTO "tablo" ("id", "ad", "not") VALUES ('2', 'b', 'q');`);
+  });
+
+  it('fareyle açılan menü imlecin yanında, klavyeyle (menü tuşu) açılan hücrenin altında', () => {
+    setup();
+    fireEvent.mouseDown(cell(0, 1), { button: 2 });
+    fireEvent.contextMenu(cell(0, 1), { clientX: 120, clientY: 80 });
+    expect(screen.getByRole('menu')).toHaveStyle({ left: '120px', top: '80px' });
+    fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' });
+
+    // Klavyeden: önünde sağ mousedown yok; tarayıcının verdiği koordinat yok sayılır.
+    vi.spyOn(cell(0, 1), 'getBoundingClientRect').mockReturnValue(DOMRect.fromRect({ x: 30, y: 50, width: 100, height: 24 }));
+    fireEvent.contextMenu(cell(0, 1), { clientX: 5, clientY: 5 });
+    expect(screen.getByRole('menu')).toHaveStyle({ left: '30px', top: '74px' });
+  });
+
+  it('Escape menüyü kapatır, odak hücreye döner', async () => {
+    const { user } = setup();
+    await user.click(cell(0, 0));
+    fireEvent.contextMenu(cell(0, 0));
+    expect(screen.getByRole('menu')).toBeInTheDocument();
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    expect(cell(0, 0)).toHaveFocus();
   });
 });
 
