@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_SSL, type Connection } from './baglanti';
-import { fuzzyScore, matchUrl, searchHiddenDatabases, searchTargets } from './hizli-gecis';
+import { fuzzyScore, matchUrl, searchCatalogTables, searchHiddenDatabases, searchTargets } from './hizli-gecis';
 
 function connection(overrides: Partial<Connection> = {}): Connection {
   return {
@@ -153,5 +153,35 @@ describe('matchUrl', () => {
 
   it('geçersiz URL için ayrıştırıcının nedeni', () => {
     expect(matchUrl(all, 'postgres://a@h:99999/db', null)).toEqual({ ok: false, reason: 'Geçersiz port “99999”; 1–65535 arasında olmalı' });
+  });
+});
+
+describe('searchCatalogTables: "Tablolar" grubu', () => {
+  const c1 = connection({ id: 'b1', name: 'Yerel', databaseSelection: [{ database: 'app', schemas: ['public'] }] });
+  const c2 = connection({ id: 'b2', name: 'Prod', envTag: 'prod' });
+  const rel = (sema: string, ad: string) => ({ sema, ad, tur: 'r' as const, kolonlar: [], pk: [], reltuples: 0 });
+  const katalog = (iliskiler: ReturnType<typeof rel>[]) => ({
+    defaultSchema: 'public',
+    semalar: [...new Set(iliskiler.map((r) => r.sema))],
+    iliskiler,
+    tipler: {},
+    kullaniciTipleri: [],
+  });
+  const catalogs = [
+    { connectionId: 'b1', database: 'app', katalog: katalog([rel('public', 'musteri_siparis'), rel('gizli', 'siparis_yedek')]) },
+    { connectionId: 'b2', database: 'postgres', katalog: katalog([rel('public', 'siparis')]) },
+    { connectionId: 'silinmis', database: 'x', katalog: katalog([rel('public', 'siparis')]) },
+  ];
+
+  it('yalnızca verilen (önbelleği dolu) kataloglardan, görünür şemalardan; adı sorguyla başlayanlar önce', () => {
+    expect(searchCatalogTables([c1, c2], catalogs, 'sipar')).toEqual([
+      { connectionId: 'b2', database: 'postgres', sema: 'public', tablo: 'siparis', label: 'public.siparis', targetLabel: 'Prod / postgres', prod: true },
+      { connectionId: 'b1', database: 'app', sema: 'public', tablo: 'musteri_siparis', label: 'public.musteri_siparis', targetLabel: 'Yerel / app', prod: false },
+    ]);
+  });
+
+  it('boş sorguda listelenmez; sonuç sayısı sınırlı', () => {
+    expect(searchCatalogTables([c1, c2], catalogs, '  ')).toEqual([]);
+    expect(searchCatalogTables([c1, c2], catalogs, 's', 1)).toHaveLength(1);
   });
 });

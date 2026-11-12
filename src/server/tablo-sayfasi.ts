@@ -3,6 +3,8 @@ import pg from 'pg';
 import type { Connection } from '../core/baglanti';
 import { classifyListError, toDriverError } from '../core/baglanti-testi';
 import {
+  FilterError,
+  filterErrorPosition,
   nextCursor,
   parseTablePageRequest,
   tablePageQuery,
@@ -23,11 +25,21 @@ const TIMEOUT_MS = 30_000;
 const ESTIMATE_SQL = `SELECT c.reltuples::text AS satir FROM pg_catalog.pg_class c
   JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = $1 AND c.relname = $2`;
 
-/** Postgres'in kendi hatası (sorgu çalıştı ve reddedildi); bağlantı sağlam. */
-function serverError(err: unknown): TablePageError | null {
+/**
+ * Postgres'in kendi hatası (sorgu çalıştı ve reddedildi); bağlantı sağlam. Konum bir filtre
+ * kutusuna düşüyorsa kutu ve kutudaki konum da döner. Tahmin sorgusunun hatasında kutu aranmaz.
+ */
+function serverError(err: unknown, query: PageQuery | null): TablePageError | null {
   if (!(err instanceof pg.DatabaseError) || err.code === undefined) return null;
   const konum = Number(err.position);
-  return { hata: err.message, sqlstate: err.code, ...(Number.isInteger(konum) && konum > 0 && { konum }) };
+  const valid = Number.isInteger(konum) && konum > 0;
+  const box = query && valid ? filterErrorPosition(query, konum) : null;
+  return {
+    hata: err.message,
+    sqlstate: err.code,
+    ...(valid && { konum }),
+    ...(box && { kutu: box.kutu, kutuKonumu: box.konum }),
+  };
 }
 
 /** Parametreli, tek ifade: extended protocol birden fazla ifadeyi reddeder. */
@@ -45,10 +57,14 @@ type PageOutcome = { ok: true; page: TablePageResponse } | { ok: false; error: T
  */
 function readPage(pools: PoolManager, connection: Connection, database: string, meta: TableMeta, request: TablePageRequest, query: PageQuery) {
   return pools.withClient(connection, database, async (client, discard): Promise<PageOutcome> => {
+    /** Hata sayfa sorgusundan mı geldi (konum kullanıcı kutusuna eşlenebilir). */
+    let running: PageQuery | null = null;
     try {
       await client.query('BEGIN READ ONLY');
       const estimate = request.sonraki === null ? await extendedQuery(client, ESTIMATE_SQL, [meta.sema, meta.tablo]) : null;
+      running = query;
       const result = await extendedQuery(client, query.text, query.values);
+      running = null;
       await client.query('COMMIT');
       const satirlar = result.rows as (string | null)[][];
       const satir = estimate?.rows[0]?.[0];
@@ -58,13 +74,13 @@ function readPage(pools: PoolManager, connection: Connection, database: string, 
           kolonlar: result.fields.map((f) => f.name),
           tipler: result.fields.map((f) => f.dataTypeID),
           satirlar,
-          sonraki: nextCursor(meta, request.sonraki, satirlar),
+          sonraki: nextCursor(meta, request.sonraki, satirlar, request),
           tutarlilikNotu: query.mod === 'offset',
           ...(estimate && { satirTahmini: satir == null ? -1 : Number(satir) }),
         },
       };
     } catch (err) {
-      const error = serverError(err);
+      const error = serverError(err, running);
       if (error) {
         try {
           await client.query('ROLLBACK');
@@ -115,9 +131,10 @@ export function createTablePageRoutes({ store, pools, catalogs }: { store: Setti
       const meta: TableMeta = { sema: relation.sema, tablo: relation.ad, kolonlar: relation.kolonlar.map((k) => k.ad), pk: relation.pk };
       let query: PageQuery;
       try {
-        query = tablePageQuery(meta, request.sonraki);
+        query = tablePageQuery(meta, request.sonraki, request);
       } catch (err) {
-        json(res, 400, { hata: (err as Error).message });
+        const body: TablePageError = { hata: (err as Error).message, ...(err instanceof FilterError && { kutu: err.kutu }) };
+        json(res, 400, body);
         return true;
       }
       const outcome = await readPage(pools, connection, database, meta, request, query);

@@ -4,7 +4,8 @@
  */
 import { DEFAULT_PORT, isProd, type Connection } from './baglanti';
 import { isConnectionUrl, parseConnectionUrl, type UrlFields } from './baglanti-url';
-import { isTarget, type Target } from './veritabani-secimi';
+import { searchTables, type Catalog } from './katalog';
+import { isTarget, targetSchemas, type Target } from './veritabani-secimi';
 
 /** Aksanları ve büyük/küçük harfi (Türkçe ı/İ dahil) yok sayan karşılaştırma biçimi. */
 function fold(text: string): string {
@@ -97,6 +98,63 @@ export function searchHiddenDatabases(
     }),
     query,
   );
+}
+
+/** Paletteki bir tablo satırı: `şema.tablo`, yanında hedefi. */
+export interface TableItem {
+  connectionId: string;
+  database: string;
+  sema: string;
+  tablo: string;
+  label: string;
+  targetLabel: string;
+  prod: boolean;
+}
+
+/** Bir hedefin önbellekteki katalogu. */
+export interface CachedCatalog {
+  connectionId: string;
+  database: string;
+  katalog: Catalog;
+}
+
+/** "Tablolar" grubunda en fazla bu kadar satır. */
+export const TABLE_RESULTS = 50;
+
+/**
+ * *Tablolar*: yalnızca katalog önbelleği dolu hedeflerin, Veritabanı seçiminde görünür şemalarındaki
+ * ilişkileri (bağlanılmaz). Tablo listesiyle aynı `searchTables` filtresi; hedefler arasında adı
+ * sorguyla başlayanlar önce. Listeyi kalabalıklaştırmasın diye yalnızca sorgu varken aranır.
+ */
+export function searchCatalogTables(
+  connections: readonly Connection[],
+  catalogs: readonly CachedCatalog[],
+  query: string,
+  limit = TABLE_RESULTS,
+): TableItem[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return [];
+  const found = catalogs.flatMap(({ connectionId, database, katalog }) => {
+    const connection = connections.find((c) => c.id === connectionId);
+    if (!connection) return [];
+    return searchTables(katalog, targetSchemas(connection, database, katalog.semalar), q).map(
+      (r): TableItem => ({
+        connectionId,
+        database,
+        sema: r.sema,
+        tablo: r.ad,
+        label: `${r.sema}.${r.ad}`,
+        targetLabel: targetLabel(connection, database),
+        prod: isProd(connection.envTag),
+      }),
+    );
+  });
+  const prefix = (t: TableItem) => t.tablo.toLowerCase().startsWith(q) || t.label.toLowerCase().startsWith(q);
+  return found
+    .map((t, index) => ({ t, index, first: prefix(t) }))
+    .sort((a, b) => Number(b.first) - Number(a.first) || a.index - b.index)
+    .slice(0, limit)
+    .map((s) => s.t);
 }
 
 /** URL'le aynı sunucuya giden bağlantının, URL'deki veritabanıyla hedef satırı. */

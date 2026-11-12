@@ -2,6 +2,7 @@ import { useCallback } from 'react';
 import type { Connection } from '../../core/baglanti';
 import { sessionTabs, type ConsoleState, type OpenTab, type SessionTab, type TabTarget } from '../../core/konsol-sekmeleri';
 import type { HistoryEntry } from '../../core/gecmis-filtresi';
+import type { TableFilter } from '../../core/tablo-sayfasi';
 import { GecmisPaneli } from '../gecmis/GecmisPaneli';
 import { catalogKey, type CatalogEntry, type CatalogReason } from '../katalog/kataloglar';
 import type { Target } from '../../core/veritabani-secimi';
@@ -15,6 +16,8 @@ interface Props {
   onNew: () => void;
   onClose: (id: string) => void;
   onScriptChange: (id: string, script: string) => void;
+  /** Tablo sekmesinde uygulanan `WHERE` / `ORDER BY`. */
+  onTableFilterChange: (id: string, filter: TableFilter) => void;
   onToggleWriteMode: (id: string) => void;
   /** Sekmenin hedef kilidinin nedeni değişti (`null`: hedef değiştirilebilir); sekme kapanınca `null`. */
   onTargetLockChange: (id: string, reason: string | null) => void;
@@ -66,6 +69,7 @@ export function Konsol({
   onNew,
   onClose,
   onScriptChange,
+  onTableFilterChange,
   onToggleWriteMode,
   onTargetLockChange,
   targetLocks,
@@ -140,6 +144,7 @@ export function Konsol({
                   onRefreshCatalog={() =>
                     target ? onCatalog({ connectionId: target.connection.id, database: target.database }, 'yenile') : Promise.resolve()
                   }
+                  onFilterChange={(filter) => onTableFilterChange(tab.id, filter)}
                   hidden={tab.id !== state.active}
                 />
               );

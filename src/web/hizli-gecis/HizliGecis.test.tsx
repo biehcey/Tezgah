@@ -196,6 +196,8 @@ describe('Cmd/Ctrl+K paleti: komutlar', () => {
         target={null}
         targetLock={null}
         commands={[{ label: 'Dışa aktar', disabled: true, hint: 'yakında', run: () => ran.push('calisti') }]}
+        catalogs={[]}
+        onOpenTable={() => {}}
         onSelectTarget={() => true}
         onSelectAndShow={() => {}}
         onReveal={() => {}}

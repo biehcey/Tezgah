@@ -234,6 +234,13 @@ export function setTabScript(state: ConsoleState, id: string, metin: string): Co
   return updateTab(state, id, (t) => (t.tur === 'konsol' && t.metin !== metin ? { ...t, metin } : t));
 }
 
+/** Tablo sekmesinin uygulanan `WHERE` ve `ORDER BY`'ı; diske yazılır, geri gelince kutularda durur. */
+export function setTableFilter(state: ConsoleState, id: string, filter: { where: string; orderBy: string }): ConsoleState {
+  return updateTab(state, id, (t) =>
+    t.tur === 'tablo' && (t.where !== filter.where || t.orderBy !== filter.orderBy) ? { ...t, where: filter.where, orderBy: filter.orderBy } : t,
+  );
+}
+
 /** 🔒/🔓: yalnızca bu sekmenin kilidi değişir. */
 export function toggleWriteMode(state: ConsoleState, id: string): ConsoleState {
   return updateTab(state, id, (t) => ({ ...t, yazmaModu: !t.yazmaModu }));

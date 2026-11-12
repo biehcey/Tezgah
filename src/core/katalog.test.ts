@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { splitStatements } from './ifade-bolme';
-import { catalogCompletion, changesCatalog, searchTables, type Catalog, type CatalogRelation } from './katalog';
+import { catalogCompletion, changesCatalog, filterCompletion, searchTables, type Catalog, type CatalogRelation } from './katalog';
 
 const col = (ad: string, tip: string) => ({ ad, tip, tipOid: 0, notNull: false, varsayilan: false, uretilmis: false });
 const rel = (sema: string, ad: string, tur: CatalogRelation['tur'] = 'r', kolonlar = [col('id', 'integer')]): CatalogRelation => ({
@@ -74,6 +74,15 @@ describe('catalogCompletion', () => {
     ]);
     // lang-sql nokta içeren anahtarı yol olarak böler; kaçışlı nokta tek ad kalır.
     expect(Object.keys(s.children)).toContain('v1\\.2');
+  });
+});
+
+describe('filterCompletion', () => {
+  it('Tablo sekmesinin kutularında tablonun kolonları öneksiz, şemanın tabloları da önerilir', () => {
+    const c = catalog([rel('public', 'users'), rel('satis', 'Sipariş', 'r', [col('tutar', 'numeric')])]);
+    const config = filterCompletion(c, ['public', 'satis'], 'satis', 'Sipariş');
+    expect(config).toMatchObject({ defaultSchema: 'satis', defaultTable: 'Sipariş' });
+    expect(config.schema).toEqual(catalogCompletion(c, ['public', 'satis']).schema);
   });
 });
 

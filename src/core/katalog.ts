@@ -36,7 +36,7 @@ export interface CatalogRelation {
 
 /** `GET …/katalog` yanıtı. */
 export interface Catalog {
-  /** `current_schemas(false)[1]`: `search_path`'in ilk (var olan) şeması; yoksa `null`. */
+  /** `(current_schemas(false))[1]`: `search_path`'in ilk (var olan) şeması; yoksa `null`. */
   defaultSchema: string | null;
   /** Katalogun okunduğu görünür şemalar, sunucudaki sırayla. */
   semalar: string[];
@@ -73,6 +73,8 @@ export interface CompletionConfig {
   schema: CompletionNamespace;
   /** Verilirse bu şemanın tabloları öneksiz önerilir. */
   defaultSchema?: string;
+  /** Verilirse bu tablonun (`defaultSchema`'da) kolonları öneksiz önerilir. */
+  defaultTable?: string;
 }
 
 const KIND_LABELS: Record<RelationKind, string> = {
@@ -125,6 +127,14 @@ export function catalogCompletion(catalog: Catalog, visibleSchemas: readonly str
   }
   const defaultSchema = catalog.defaultSchema;
   return { schema, ...(defaultSchema !== null && visible.has(defaultSchema) && { defaultSchema }) };
+}
+
+/**
+ * Tablo sekmesinin `WHERE` / `ORDER BY` kutuları: editörle aynı ağaç, ama varsayılan şema tablonun
+ * şeması ve tablonun kolonları öneksiz önerilir.
+ */
+export function filterCompletion(catalog: Catalog, visibleSchemas: readonly string[], sema: string, tablo: string): CompletionConfig {
+  return { schema: catalogCompletion(catalog, visibleSchemas).schema, defaultSchema: sema, defaultTable: tablo };
 }
 
 /**

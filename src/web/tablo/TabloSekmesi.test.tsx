@@ -1,10 +1,13 @@
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { EditorView } from '@codemirror/view';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import type { Catalog } from '../../core/katalog';
 import { TABS_VERSION, type SavedTabs } from '../../core/konsol-sekmeleri';
 import type { TablePageResponse } from '../../core/tablo-sayfasi';
+import { ApiError } from '../api/client';
 import { App } from '../App';
+import { completionConfig } from '../script/ScriptEditoru';
 import { connection, createFakeConnections, emptyCatalog, renderWithApi } from '../test/sahte-api';
 
 const DEV = connection({ id: 'd1', name: 'Yerel', databaseSelection: [{ database: 'postgres', schemas: null }] });
@@ -87,7 +90,7 @@ describe('Tablo listesi → Tablo sekmesi', () => {
 
     expect(screen.getByRole('tab', { selected: true })).toHaveTextContent('users');
     await waitFor(() => expect(within(tableTab()).getAllByRole('gridcell').map((c) => c.textContent)).toEqual(['1', '2', '3']));
-    expect(fake.tablePageRequests).toEqual([{ hedef: 'd1/postgres', sema: 'public', tablo: 'users', sonraki: null }]);
+    expect(fake.tablePageRequests).toEqual([{ hedef: 'd1/postgres', sema: 'public', tablo: 'users', where: '', orderBy: '', sonraki: null }]);
     expect(within(tableTab()).getByRole('heading')).toHaveTextContent('public.users');
     expect(tableTab()).toHaveTextContent('≈ 1.300 satır');
     expect(within(tableTab()).queryByRole('region', { name: 'Script editörü' })).not.toBeInTheDocument();
@@ -237,7 +240,7 @@ describe('Tablo sekmesi: kalıcılık', () => {
 
     await user.click(within(tableTab()).getByRole('button', { name: 'Yükle' }));
     await waitFor(() => expect(within(tableTab()).getAllByRole('gridcell')).toHaveLength(3));
-    expect(fake.tablePageRequests).toEqual([{ hedef: 'd1/postgres', sema: 'public', tablo: 'users', sonraki: null }]);
+    expect(fake.tablePageRequests).toEqual([{ hedef: 'd1/postgres', sema: 'public', tablo: 'users', where: '', orderBy: '', sonraki: null }]);
   });
 
   it('geri gelen, yüklenmemiş Tablo sekmesinin tablosu listeden açılınca o sekme yüklenir', async () => {
@@ -254,5 +257,192 @@ describe('Tablo sekmesi: kalıcılık', () => {
     expect(within(tableTab()).queryByRole('button', { name: 'Yükle' })).not.toBeInTheDocument();
     expect(tableTab()).toHaveTextContent('hedefi yok');
     expect(fake.tablePageRequests).toEqual([]);
+  });
+});
+
+/** Tablo sekmesinin filtre kutusu (tek satırlık CodeMirror). */
+const filterBox = (name: 'WHERE' | 'ORDER BY') => within(tableTab()).getByRole('textbox', { name });
+const boxText = (name: 'WHERE' | 'ORDER BY') => EditorView.findFromDOM(filterBox(name))!.state.doc.toString();
+
+/** Kutuya yazar (kullanıcı yazmış gibi) ve Enter'a basar. */
+function applyBox(name: 'WHERE' | 'ORDER BY', text: string) {
+  const view = EditorView.findFromDOM(filterBox(name))!;
+  act(() => view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text }, userEvent: 'input' }));
+  fireEvent.keyDown(view.contentDOM, { key: 'Enter', keyCode: 13 });
+}
+
+const cells = () => within(tableTab()).getAllByRole('gridcell').map((c) => c.textContent);
+
+async function openUsers(user: ReturnType<typeof userEvent.setup>, fake: Awaited<ReturnType<typeof setup>>['fake']) {
+  const list = await openTableList(user);
+  await user.click(await list.findByRole('button', { name: 'users' }));
+  await waitFor(() => expect(fake.tablePageRequests).toHaveLength(1));
+  await waitFor(() => expect(cells()).toEqual(['1', '2', '3']));
+}
+
+describe('Tablo sekmesi: WHERE ve ORDER BY', () => {
+  it('Enter kutuları uygular: ilk sayfa filtreyle yeniden çekilir, filtre sekmeyle diske yazılır', async () => {
+    const { user, fake } = await setup();
+    await openUsers(user, fake);
+    fake.tablePage = async () => page({ satirlar: ids(2, 1) });
+    applyBox('ORDER BY', 'ad DESC');
+    applyBox('WHERE', 'id = 2');
+    await waitFor(() => expect(cells()).toEqual(['2']));
+    expect(fake.tablePageRequests.at(-1)).toEqual({ hedef: 'd1/postgres', sema: 'public', tablo: 'users', where: 'id = 2', orderBy: 'ad DESC', sonraki: null });
+    await waitFor(() => expect(fake.savedTabs.sekmeler.find((t) => t.tur === 'tablo')).toMatchObject({ where: 'id = 2', orderBy: 'ad DESC' }), {
+      timeout: 3000,
+    });
+  });
+
+  it('sonraki sayfalar uygulanan filtreyle istenir', async () => {
+    const { user, fake } = await setup();
+    await openUsers(user, fake);
+    fake.tablePage = async () => page({ satirlar: ids(1, 500), sonraki: { tur: 'offset', offset: 500 } });
+    applyBox('ORDER BY', 'ad');
+    await waitFor(() => expect(tableTab()).toHaveTextContent('ilk 500 satır'));
+    scrollToEnd(500);
+    await waitFor(() => expect(fake.tablePageRequests.at(-1)).toMatchObject({ orderBy: 'ad', sonraki: { tur: 'offset', offset: 500 } }));
+  });
+
+  it('hatalı filtrede Postgres hatası (SQLSTATE, mesaj, konum) kutunun yanında; grid önceki sonuçla kalır', async () => {
+    const { user, fake } = await setup();
+    await openUsers(user, fake);
+    fake.tablePage = () =>
+      Promise.reject(new ApiError(400, { hata: 'column "yok" does not exist', sqlstate: '42703', konum: 48, kutu: 'where', kutuKonumu: 6 }));
+    applyBox('WHERE', 'id = yok');
+    const alert = await within(tableTab()).findByRole('alert');
+    expect(alert).toHaveTextContent('column "yok" does not exist');
+    expect(alert).toHaveTextContent('42703');
+    expect(alert).toHaveTextContent('6. karakter');
+    expect(alert.closest('.filtre-kutusu')).toContainElement(filterBox('WHERE'));
+    expect(filterBox('WHERE')).toHaveAttribute('aria-invalid', 'true');
+    expect(cells()).toEqual(['1', '2', '3']);
+
+    fake.tablePage = async () => page({ satirlar: ids(5, 1) });
+    applyBox('WHERE', 'id = 5');
+    await waitFor(() => expect(cells()).toEqual(['5']));
+    expect(within(tableTab()).queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('yeni filtrenin ilk sayfası yoldayken eski sonucun sonraki sayfası istenmez', async () => {
+    const { user, fake } = await setup();
+    fake.tablePage = async () => page({ satirlar: ids(1, 500), sonraki: { tur: 'keyset', degerler: ['500'] } });
+    const list = await openTableList(user);
+    await user.click(await list.findByRole('button', { name: 'users' }));
+    await waitFor(() => expect(tableTab()).toHaveTextContent('ilk 500 satır'));
+    const waiting: (() => void)[] = [];
+    fake.tablePage = () => new Promise((resolve) => waiting.push(() => resolve(page({ satirlar: ids(2, 1) }))));
+    applyBox('WHERE', 'id = 2');
+    scrollToEnd(500);
+    expect(fake.tablePageRequests.map((r) => r.sonraki)).toEqual([null, null]);
+    act(() => waiting.shift()!());
+    await waitFor(() => expect(cells()).toEqual(['2']));
+  });
+
+  it('reddedilen filtre sekmeye yazılmaz; ↻ son başarılı filtreyle çeker', async () => {
+    const { user, fake } = await setup();
+    await openUsers(user, fake);
+    fake.tablePage = () => Promise.reject(new ApiError(400, { hata: 'syntax error', sqlstate: '42601', kutu: 'where', kutuKonumu: 5 }));
+    applyBox('WHERE', 'id =');
+    await within(tableTab()).findByRole('alert');
+    fake.tablePage = async () => page();
+    await user.click(within(tableTab()).getByRole('button', { name: 'Tabloyu yeniden yükle' }));
+    await waitFor(() => expect(fake.tablePageRequests).toHaveLength(3));
+    expect(fake.tablePageRequests.at(-1)).toMatchObject({ where: '', orderBy: '' });
+    await waitFor(() => expect(fake.savedTabs.sekmeler.find((t) => t.tur === 'tablo')).toMatchObject({ where: '' }), { timeout: 3000 });
+  });
+
+  it('başlık tıklaması uygulanmamış WHERE taslağını uygulamaz, taslak kutuda kalır', async () => {
+    const { user, fake } = await setup();
+    await openUsers(user, fake);
+    const view = EditorView.findFromDOM(filterBox('WHERE'))!;
+    act(() => view.dispatch({ changes: { from: 0, insert: 'id > 9' }, userEvent: 'input' }));
+    await user.click(within(grid()).getByRole('button', { name: 'id' }));
+    await waitFor(() => expect(fake.tablePageRequests.at(-1)).toMatchObject({ where: '', orderBy: '"id"' }));
+    expect(boxText('WHERE')).toBe('id > 9');
+  });
+
+  it('çok ifadeli filtrenin reddi de ORDER BY kutusunun yanında görünür', async () => {
+    const { user, fake } = await setup();
+    await openUsers(user, fake);
+    fake.tablePage = () => Promise.reject(new ApiError(400, { hata: 'ORDER BY kutusu tek ifade olmalı', kutu: 'orderBy' }));
+    applyBox('ORDER BY', 'id; DELETE FROM users');
+    const alert = await within(tableTab()).findByRole('alert');
+    expect(alert).toHaveTextContent('tek ifade');
+    expect(alert.closest('.filtre-kutusu')).toContainElement(filterBox('ORDER BY'));
+    expect(cells()).toEqual(['1', '2', '3']);
+  });
+
+  it('kolon başlığına tık ORDER BY’ı doldurur: artan → azalan → temiz', async () => {
+    const { user, fake } = await setup();
+    await openUsers(user, fake);
+    const header = () => within(grid()).getByRole('columnheader', { name: /id/ });
+    await user.click(within(header()).getByRole('button', { name: 'id' }));
+    await waitFor(() => expect(fake.tablePageRequests.at(-1)).toMatchObject({ orderBy: '"id"', sonraki: null }));
+    expect(boxText('ORDER BY')).toBe('"id"');
+    await waitFor(() => expect(header()).toHaveAttribute('aria-sort', 'ascending'));
+    await user.click(within(header()).getByRole('button', { name: 'id' }));
+    await waitFor(() => expect(fake.tablePageRequests.at(-1)).toMatchObject({ orderBy: '"id" DESC' }));
+    await waitFor(() => expect(header()).toHaveAttribute('aria-sort', 'descending'));
+    await user.click(within(header()).getByRole('button', { name: 'id' }));
+    await waitFor(() => expect(fake.tablePageRequests.at(-1)).toMatchObject({ orderBy: '' }));
+    expect(boxText('ORDER BY')).toBe('');
+    expect(fake.tablePageRequests).toHaveLength(4);
+  });
+
+  it('kutularda katalog tamamlaması: tablonun kolonları öneksiz', async () => {
+    const { user, fake } = await setup();
+    await openUsers(user, fake);
+    const config = EditorView.findFromDOM(filterBox('WHERE'))!.state.facet(completionConfig);
+    expect(config).toMatchObject({ defaultSchema: 'public', defaultTable: 'users' });
+  });
+
+  it('geri gelen sekmenin filtresi kutularda durur; "Yükle" onunla çeker', async () => {
+    const { user, fake } = await setup({
+      version: TABS_VERSION,
+      aktif: 't1',
+      sekmeler: [
+        {
+          id: 't1',
+          tur: 'tablo',
+          hedef: { connectionId: 'd1', database: 'postgres', schema: 'public' },
+          sema: 'public',
+          tablo: 'users',
+          where: 'id > 1',
+          orderBy: '"id" DESC',
+        },
+      ],
+    });
+    expect(boxText('WHERE')).toBe('id > 1');
+    expect(boxText('ORDER BY')).toBe('"id" DESC');
+    await user.click(within(tableTab()).getByRole('button', { name: 'Yükle' }));
+    await waitFor(() =>
+      expect(fake.tablePageRequests).toEqual([{ hedef: 'd1/postgres', sema: 'public', tablo: 'users', where: 'id > 1', orderBy: '"id" DESC', sonraki: null }]),
+    );
+  });
+});
+
+describe('Cmd/Ctrl+K: Tablolar', () => {
+  it('yalnızca katalog önbelleği dolu hedeflerden; Enter Tablo sekmesi açar', async () => {
+    const { user, fake } = await setup();
+    await user.keyboard('{Control>}k{/Control}');
+    await user.keyboard('user_l');
+    expect(screen.queryByRole('group', { name: 'Tablolar' })).not.toBeInTheDocument();
+    await user.keyboard('{Escape}');
+
+    await openTableList(user);
+    await waitFor(() => expect(fake.catalogRequests).toEqual(['getir d1/postgres']));
+    await user.keyboard('{Control>}k{/Control}');
+    await user.keyboard('user_l');
+    const group = within(await screen.findByRole('group', { name: 'Tablolar' }));
+    expect(group.getAllByRole('option')).toHaveLength(1);
+    expect(group.getByRole('option')).toHaveTextContent('public.user_log');
+    expect(group.getByRole('option')).toHaveTextContent('Yerel / postgres');
+    await user.keyboard('{Enter}');
+    expect(screen.queryByRole('dialog', { name: 'Hızlı geçiş' })).not.toBeInTheDocument();
+    expect(screen.getByRole('tab', { selected: true })).toHaveTextContent('user_log');
+    await waitFor(() =>
+      expect(fake.tablePageRequests).toEqual([{ hedef: 'd1/postgres', sema: 'public', tablo: 'user_log', where: '', orderBy: '', sonraki: null }]),
+    );
   });
 });

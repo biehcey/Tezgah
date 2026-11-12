@@ -3,6 +3,7 @@ import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, u
 import { NULL_LABEL, cellDisplay, initialColumnWidths, type TextWidth } from '../../core/grid/gosterim';
 import { MIN_COLUMN_WIDTH, PAGE_ROWS } from '../../core/grid/sabitler';
 import { PLACEHOLDER_TABLE, insertStatements } from '../../core/grid/insert';
+import type { ColumnSort } from '../../core/tablo-sayfasi';
 import { extendTo, isSelected, navigate, selectCell, selectedValues, selectionRange, type Cell, type Selection } from '../../core/grid/secim';
 import { toTsv } from '../../core/grid/tsv';
 import { Menu, menuBelow, type MenuPosition } from '../ortak/Menu';
@@ -36,7 +37,14 @@ interface Props {
    * çift isteği önlemek çağıranın işidir.
    */
   onSonaYaklasti?: () => void;
+  /** Verilirse kolon adı tıklanabilir (Tablo sekmesi: `ORDER BY`'ı doldurur). */
+  onKolonTikla?: (kolon: number) => void;
+  /** Başlıktan konan sıralama; `aria-sort` ve ok olarak görünür. */
+  siralama?: { kolon: number; yon: ColumnSort } | null;
 }
+
+const SORT_ARIA = { artan: 'ascending', azalan: 'descending' } as const;
+const SORT_ARROW = { artan: ' ▲', azalan: ' ▼' } as const;
 
 /** Sona bu kadar satır kala "daha fazla" bildirilir: sayfa, kaydırma bitmeden gelsin. */
 const NEAR_END_ROWS = 100;
@@ -47,7 +55,7 @@ const NEAR_END_ROWS = 100;
  * Odak roving tabindex ile aktif hücrededir; aktif satır görünümden çıksa da çizilmeye devam eder
  * ki odak kaybolmasın ve klavye gezinmesi sürsün.
  */
-export function SonucGridi({ etiket, kolonlar, tipler, tipAdlari, satirlar, toplamSatir, onSonaYaklasti }: Props) {
+export function SonucGridi({ etiket, kolonlar, tipler, tipAdlari, satirlar, toplamSatir, onSonaYaklasti, onKolonTikla, siralama = null }: Props) {
   const olcum = useContext(GridOlcumu);
   const scrollRef = useRef<HTMLDivElement>(null);
   const firstPage = satirlar.slice(0, PAGE_ROWS);
@@ -252,21 +260,40 @@ export function SonucGridi({ etiket, kolonlar, tipler, tipAdlari, satirlar, topl
         <div className="grid-icerik" style={{ height: virtualizer.getTotalSize(), width: offsets.at(-1) }}>
           <div role="rowgroup" className="grid-basligi">
             <div role="row" aria-rowindex={1} className="grid-satiri">
-              {kolonlar.map((ad, c) => (
-                <div key={c} role="columnheader" aria-colindex={c + 1} className="grid-kolon-basligi" style={{ width: widths[c] }} title={ad}>
-                  <span className="grid-kolon-adi">{ad}</span>
-                  <span
-                    role="separator"
-                    aria-orientation="vertical"
-                    aria-label={`${ad} genişliği`}
-                    className="grid-kolon-tutamaci"
-                    onPointerDown={(e) => onResizeStart(e, c)}
-                    onPointerMove={onResizeMove}
-                    onPointerUp={() => (resize.current = null)}
-                    onPointerCancel={() => (resize.current = null)}
-                  />
-                </div>
-              ))}
+              {kolonlar.map((ad, c) => {
+                const sort = siralama?.kolon === c ? siralama.yon : null;
+                return (
+                  <div
+                    key={c}
+                    role="columnheader"
+                    aria-colindex={c + 1}
+                    aria-sort={sort ? SORT_ARIA[sort] : undefined}
+                    className="grid-kolon-basligi"
+                    style={{ width: widths[c] }}
+                    title={ad}
+                  >
+                    {onKolonTikla ? (
+                      // Odak hücrelerde (roving tabindex) kalır; klavyeyle sıralama ORDER BY kutusundan.
+                      <button type="button" tabIndex={-1} className="grid-kolon-adi grid-siralama" aria-label={ad} onClick={() => onKolonTikla(c)}>
+                        {ad}
+                        {sort && <span aria-hidden="true">{SORT_ARROW[sort]}</span>}
+                      </button>
+                    ) : (
+                      <span className="grid-kolon-adi">{ad}</span>
+                    )}
+                    <span
+                      role="separator"
+                      aria-orientation="vertical"
+                      aria-label={`${ad} genişliği`}
+                      className="grid-kolon-tutamaci"
+                      onPointerDown={(e) => onResizeStart(e, c)}
+                      onPointerMove={onResizeMove}
+                      onPointerUp={() => (resize.current = null)}
+                      onPointerCancel={() => (resize.current = null)}
+                    />
+                  </div>
+                );
+              })}
             </div>
           </div>
           <div role="rowgroup">

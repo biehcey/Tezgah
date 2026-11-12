@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Folder } from '../core/ayarlar';
 import {
   isProd,
@@ -22,6 +22,7 @@ import {
   savedTabs,
   setTabScript,
   setTabTarget,
+  setTableFilter,
   toggleWriteMode,
   type ConsoleState,
   type SavedTabs,
@@ -40,8 +41,9 @@ import { SilmeOnayi } from './baglantilar/SilmeOnayi';
 import { Menu, type MenuItem, type MenuPosition } from './ortak/Menu';
 import { Onay } from './ortak/Onay';
 import { Konsol } from './konsol/Konsol';
-import { useCatalogs } from './katalog/kataloglar';
+import { targetOfKey, useCatalogs } from './katalog/kataloglar';
 import type { HistoryEntry } from '../core/gecmis-filtresi';
+import type { TableFilter } from '../core/tablo-sayfasi';
 import {
   changesServerSession,
   defaultTargetDatabase,
@@ -234,6 +236,7 @@ export function App() {
     });
   }, []);
   const changeTabScript = useCallback((id: string, script: string) => setKonsol((k) => setTabScript(k, id, script)), []);
+  const changeTableFilter = useCallback((id: string, filter: TableFilter) => setKonsol((k) => setTableFilter(k, id, filter)), []);
   const toggleTabWriteMode = useCallback((id: string) => setKonsol((k) => toggleWriteMode(k, id)), []);
   const openPalette = useCallback(() => setPaletteOpen(true), []);
   const closeHistory = useCallback(() => setHistoryOpen(false), []);
@@ -433,6 +436,13 @@ export function App() {
     setSelectedId(shown.connectionId);
     setReveal(shown);
   }
+
+  /** Paletin "Tablolar" grubu: yalnızca katalog önbelleği dolu hedefler. */
+  const cachedCatalogs = useMemo(
+    () =>
+      Object.entries(catalogs.entries).flatMap(([key, entry]) => (entry.katalog ? [{ ...targetOfKey(key), katalog: entry.katalog }] : [])),
+    [catalogs.entries],
+  );
 
   const closePalette = useCallback(() => setPaletteOpen(false), []);
   const revealed = useCallback(() => setReveal(null), []);
@@ -767,6 +777,7 @@ export function App() {
           onNew={() => setKonsol((k) => openConsoleTab(k, newTabId(), activeTab?.hedef ?? null))}
           onClose={(id) => setKonsol((k) => closeTab(k, id))}
           onScriptChange={changeTabScript}
+          onTableFilterChange={changeTableFilter}
           onToggleWriteMode={toggleTabWriteMode}
           onTargetLockChange={changeTargetLock}
           targetLocks={targetLocks}
@@ -787,6 +798,11 @@ export function App() {
           target={target}
           targetLock={targetLock}
           commands={paletteCommands}
+          catalogs={cachedCatalogs}
+          onOpenTable={(t) => {
+            const connection = connections?.find((c) => c.id === t.connectionId);
+            if (connection) openTable(connection, t.database, t.sema, t.tablo);
+          }}
           onSelectTarget={chooseTarget}
           onSelectAndShow={chooseAndShow}
           onReveal={revealInList}

@@ -3,8 +3,11 @@ import type { Connection } from '../../core/baglanti';
 import {
   fuzzyScore,
   matchUrl,
+  searchCatalogTables,
   searchHiddenDatabases,
   searchTargets,
+  type CachedCatalog,
+  type TableItem,
   type TargetItem,
 } from '../../core/hizli-gecis';
 import type { Target } from '../../core/veritabani-secimi';
@@ -29,6 +32,10 @@ interface Props {
    */
   targetLock?: string | null;
   commands: readonly PaletteCommand[];
+  /** Katalog önbelleği dolu hedefler: "Tablolar" grubu yalnızca bunlardan aranır (bağlanılmaz). */
+  catalogs: readonly CachedCatalog[];
+  /** Enter, tablo satırında: tablo Tablo sekmesinde açılır; aktif sekmenin hedefi değişmez. */
+  onOpenTable: (table: TableItem) => void;
   /** Enter: mevcut editörün hedefi olur. */
   onSelectTarget: (target: Target) => void;
   /**
@@ -51,6 +58,7 @@ interface Entry {
   locked?: boolean;
   hint?: string;
   item?: TargetItem;
+  prod?: boolean;
   run: () => void;
   reveal?: () => void;
 }
@@ -70,6 +78,8 @@ export function HizliGecis({
   target,
   targetLock = null,
   commands,
+  catalogs,
+  onOpenTable,
   onSelectTarget,
   onSelectAndShow,
   onReveal,
@@ -98,6 +108,7 @@ export function HizliGecis({
       key: `${item.connectionId}/${item.database}`,
       label: item.label,
       item,
+      prod: item.prod,
       hint,
       locked: targetLock !== null,
       run: () => select(chosen),
@@ -116,6 +127,17 @@ export function HizliGecis({
   } else if (!url) {
     groups.push(
       { title: 'Hedefler', entries: searchTargets(connections, query, target).map((t) => targetEntry(t, onSelectTarget)) },
+      {
+        title: 'Tablolar',
+        entries: searchCatalogTables(connections, catalogs, query).map((t) => ({
+          key: `tablo/${t.connectionId}/${t.database}/${t.label}`,
+          label: t.label,
+          hint: t.targetLabel,
+          prod: t.prod,
+          run: () => onOpenTable(t),
+          reveal: () => onReveal({ connectionId: t.connectionId, database: t.database }),
+        })),
+      },
       {
         title: 'Gizli veritabanları',
         entries: searchHiddenDatabases(connections, serverDatabases, query).map((t) => targetEntry(t, onSelectAndShow)),
@@ -202,13 +224,13 @@ export function HizliGecis({
                   role="option"
                   aria-selected={entry === current}
                   aria-disabled={entry.disabled || entry.locked ? true : undefined}
-                  className={`palet-secenegi${entry.item?.prod ? ' prod' : ''}`}
+                  className={`palet-secenegi${entry.prod ? ' prod' : ''}`}
                   onMouseMove={() => !entry.disabled && entry !== current && setActive(enabled.indexOf(entry))}
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={(e) => choose(entry, e.altKey)}
                 >
                   <span className="palet-etiketi">{entry.label}</span>
-                  {entry.item?.prod && <span className="ortam-rozeti palet-rozeti">prod</span>}
+                  {entry.prod && <span className="ortam-rozeti palet-rozeti">prod</span>}
                   {entry.item?.current && <span className="hedef-isareti">● hedef</span>}
                   {entry.hint && <span className="soluk kucuk">{entry.hint}</span>}
                 </div>

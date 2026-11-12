@@ -12,6 +12,7 @@ import {
   savedTabs,
   sessionTabs,
   setTabScript,
+  setTableFilter,
   setTabTarget,
   toggleWriteMode,
   type ConsoleState,
@@ -138,6 +139,13 @@ describe('Sekme durumu', () => {
 
   it('konsol metni sekmeye yazılır', () => {
     expect(tab(setTabScript(restored(), 's1', 'SELECT 3'), 's1')).toMatchObject({ metin: 'SELECT 3' });
+  });
+
+  it('Tablo sekmesinin uygulanan WHERE ve ORDER BY’ı sekmeye ve diske yazılır; konsol sekmesine dokunmaz', () => {
+    const state = setTableFilter(restored(), 's3', { where: "ad = 'x'", orderBy: '"ad" DESC' });
+    expect(tab(state, 's3')).toMatchObject({ where: "ad = 'x'", orderBy: '"ad" DESC' });
+    expect(savedTabs(state).sekmeler[2]).toMatchObject({ where: "ad = 'x'", orderBy: '"ad" DESC' });
+    expect(setTableFilter(restored(), 's1', { where: 'x', orderBy: '' }).tabs[0]).toEqual(restored().tabs[0]);
   });
 
   it('bağlantı silinince ona işaret eden sekmeler hedefsiz kalır', () => {

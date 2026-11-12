@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
 import type { Connection } from '../../core/baglanti';
 import { catalogCompletion, typeMap, type Catalog, type CompletionConfig } from '../../core/katalog';
-import { selectionEntry, visibleSchemas, type Target } from '../../core/veritabani-secimi';
+import { targetSchemas, type Target } from '../../core/veritabani-secimi';
 import type { ApiClient } from '../api/client';
 
 /**
@@ -21,6 +21,12 @@ export type CatalogEntry =
 export type CatalogReason = 'hedef' | 'calistir' | 'yenile' | 'tazelendi';
 
 export const catalogKey = ({ connectionId, database }: Target) => `${connectionId}\u0000${database}`;
+
+/** `catalogKey`'in tersi. */
+export function targetOfKey(key: string): Target {
+  const at = key.indexOf('\u0000');
+  return { connectionId: key.slice(0, at), database: key.slice(at + 1) };
+}
 
 /**
  * Hedef başına katalog; aynı hedefe bağlı sekmeler aynı kaydı paylaşır. Yalnızca `request` ile
@@ -114,5 +120,5 @@ export interface CatalogUse {
 export function catalogUse(entry: CatalogEntry | undefined, connection: Connection, database: string): CatalogUse {
   const katalog = entry?.katalog;
   if (!katalog) return { completion: null, tipAdlari: undefined };
-  return { completion: catalogCompletion(katalog, visibleSchemas(selectionEntry(connection, database), katalog.semalar)), tipAdlari: typeMap(katalog) };
+  return { completion: catalogCompletion(katalog, targetSchemas(connection, database, katalog.semalar)), tipAdlari: typeMap(katalog) };
 }

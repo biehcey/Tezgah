@@ -2130,3 +2130,81 @@ button.kucuk {
   align-items: center;
   gap: 10px;
 }
+
+/* WHERE / ORDER BY: yan yana tek satırlık kutular; hata kutunun altında. */
+.filtre-cubugu {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--cizgi);
+}
+
+.filtre-kutusu {
+  display: flex;
+  flex: 1 1 260px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  min-width: 0;
+}
+
+.filtre-etiketi {
+  color: var(--soluk);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+
+.filtre-editoru {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--cizgi);
+  border-radius: 4px;
+  background: var(--zemin);
+}
+
+.filtre-editoru:focus-within {
+  border-color: var(--vurgu);
+}
+
+.filtre-editoru:has([aria-invalid='true']) {
+  border-color: var(--uyari);
+}
+
+.filtre-editoru .cm-editor {
+  color: var(--metin);
+  font-size: 13px;
+}
+
+.filtre-editoru .cm-editor.cm-focused {
+  outline: none;
+}
+
+.filtre-editoru .cm-scroller {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  overflow: hidden;
+}
+
+.filtre-editoru .cm-content {
+  padding: 3px 0;
+}
+
+.filtre-editoru .cm-cursor {
+  border-left-color: var(--metin);
+}
+
+.filtre-hatasi {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.grid-siralama {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}

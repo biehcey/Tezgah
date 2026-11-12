@@ -1,12 +1,26 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Connection } from '../../core/baglanti';
-import { typeMap } from '../../core/katalog';
+import { filterCompletion, typeMap } from '../../core/katalog';
 import type { TableTab } from '../../core/konsol-sekmeleri';
 import { ROW_LIMIT_MESSAGE } from '../../core/script-calistirma';
-import { OFFSET_NOTE, appendPage, rowEstimate, type LoadedRows, type TablePageResponse } from '../../core/tablo-sayfasi';
+import {
+  BOX_LABELS,
+  OFFSET_NOTE,
+  appendPage,
+  cycleOrderBy,
+  headerSort,
+  pageErrorText,
+  rowEstimate,
+  type FilterBox,
+  type LoadedRows,
+  type TableFilter,
+  type TablePageResponse,
+} from '../../core/tablo-sayfasi';
+import { targetSchemas } from '../../core/veritabani-secimi';
 import { ApiError, useApi } from '../api/client';
 import { SonucGridi } from '../grid/SonucGridi';
 import type { CatalogEntry } from '../katalog/kataloglar';
+import { FiltreKutusu } from './FiltreKutusu';
 
 interface Props {
   tab: TableTab;
@@ -14,16 +28,20 @@ interface Props {
   target: { connection: Connection; database: string } | null;
   /** Bu oturumda listeden açıldı: ilk sayfa hemen çekilir. Geri gelen sekme "Yükle"yi bekler. */
   autoLoad: boolean;
-  /** Hedefin katalogu (varsa); "INSERT olarak kopyala" tip adlarını bundan çözer. */
+  /** Hedefin katalogu (varsa); filtre kutularının tamamlaması ve INSERT tip adları bundan. */
   catalog?: CatalogEntry;
   /** ↻: hedefin katalogunu yeniler; sunucu kolonları ve PK'yı oradan okur. */
   onRefreshCatalog: () => Promise<unknown>;
+  /** Uygulanan `WHERE` / `ORDER BY` sekmeye (ve diske) yazılır. */
+  onFilterChange: (filter: TableFilter) => void;
   hidden: boolean;
 }
 
 /** Yüklü sayfalar: ilk sayfanın kolonları ve notu, eklenen satırlar, sonraki sayfanın durumu. */
 type Loaded = Pick<TablePageResponse, 'kolonlar' | 'tipler' | 'tutarlilikNotu'> &
   LoadedRows & {
+    /** Bu sayfaları üreten filtre; sonraki sayfalar onunla istenir. */
+    filtre: TableFilter;
     /** Sonraki sayfa yolda. */
     yukleniyor: boolean;
     /** Sonraki sayfa okunamadı; yeniden ↻ ile. */
@@ -32,9 +50,16 @@ type Loaded = Pick<TablePageResponse, 'kolonlar' | 'tipler' | 'tutarlilikNotu'> 
 
 type View =
   | { durum: 'bekliyor' }
-  | { durum: 'yukleniyor' }
+  /** Denendi ama sorgu reddedildi; hata filtre çubuğunda. */
+  | { durum: 'sonucsuz' }
   | { durum: 'hata'; hata: string }
   | { durum: 'hazir'; sayfa: Loaded };
+
+/** Filtre çubuğunda gösterilen sorgu hatası; `kutu` varsa o kutunun yanında. */
+interface QueryError {
+  metin: string;
+  kutu: FilterBox | null;
+}
 
 /** Tablonun tüm satırları yüklendi: satır sayısı bilinir. */
 const complete = (s: Loaded) => s.sonraki === null && !s.sinir;
@@ -44,69 +69,121 @@ function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/** Sayfa sorgusu reddedildi (Postgres hatası ya da çok ifadeli filtre): grid önceki sonuçla kalır. */
+function queryError(err: unknown): QueryError | null {
+  if (!(err instanceof ApiError) || err.status !== 400 || !err.body?.hata) return null;
+  const { hata, sqlstate, kutu, kutuKonumu } = err.body;
+  return { metin: pageErrorText({ hata, sqlstate, kutu, kutuKonumu }), kutu: kutu ?? null };
+}
+
+const BOXES: readonly FilterBox[] = ['where', 'orderBy'];
+
 /**
- * Tablo sekmesi: editörsüz, başlıkta `≈ N satır`, altında grid. Her sayfa sunucuda kısa, ayrı,
- * salt okunur bir sorgudur; sekme açık transaction tutmaz. Sona yaklaşınca sonraki sayfa istenir.
- * Geri gelen sekme bağlanmaz: veri "Yükle" ile çekilir.
+ * Tablo sekmesi: editörsüz, başlıkta `≈ N satır`, serbest `WHERE` / `ORDER BY` kutuları, altında
+ * grid. Her sayfa sunucuda kısa, ayrı, salt okunur, tek ifadelik bir sorgudur; sekme açık
+ * transaction tutmaz. Sona yaklaşınca sonraki sayfa istenir. Geri gelen sekme bağlanmaz: veri
+ * "Yükle" ile çekilir.
  */
-export function TabloSekmesi({ tab, target, autoLoad, catalog, onRefreshCatalog, hidden }: Props) {
+export function TabloSekmesi({ tab, target, autoLoad, catalog, onRefreshCatalog, onFilterChange, hidden }: Props) {
   const api = useApi();
   const [view, setView] = useState<View>({ durum: 'bekliyor' });
+  /** İlk sayfa yolda; varsa önceki sonuç görünmeye devam eder. */
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<QueryError | null>(null);
   const [estimate, setEstimate] = useState<number | null>(null);
-  /** Her yükleme (ilk açılış, Yükle, ↻) yeni bir nesil: eski yanıtlar yazılmaz, grid yeniden kurulur. */
-  const [generation, setGeneration] = useState(0);
+  /** Kutulardaki (henüz uygulanmamış olabilir) metin. */
+  const [draft, setDraftState] = useState<TableFilter>({ where: tab.where, orderBy: tab.orderBy });
+  /** Taslağın eşzamanlı kopyası: CodeMirror'ın Enter'ı son tuşun render'ından önce gelebilir. */
+  const draftRef = useRef(draft);
+  const setDraft = (next: TableFilter) => {
+    draftRef.current = next;
+    setDraftState(next);
+  };
+  /** Her başarılı yükleme grid'i yeniden kurar (seçim, kaydırma, kolon genişlikleri). */
+  const [gridKey, setGridKey] = useState(0);
+  /** Her yükleme yeni bir nesil: eski yanıtlar yazılmaz. */
   const current = useRef(0);
   const name = `${tab.sema}.${tab.tablo}`;
   const connectionId = target?.connection.id;
   const database = target?.database;
 
-  const load = useCallback(() => {
-    if (connectionId === undefined || database === undefined) return;
-    const gen = ++current.current;
-    setGeneration(gen);
-    setView({ durum: 'yukleniyor' });
-    api.readTablePage(connectionId, database, { sema: tab.sema, tablo: tab.tablo, sonraki: null }).then(
-      (page) => {
-        if (current.current !== gen) return;
-        if (page.satirTahmini !== undefined) setEstimate(page.satirTahmini);
-        const { kolonlar, tipler, tutarlilikNotu } = page;
-        setView({
-          durum: 'hazir',
-          sayfa: { kolonlar, tipler, tutarlilikNotu, ...appendPage([], page), yukleniyor: false, hata: null },
-        });
-      },
-      (err: unknown) => current.current === gen && setView({ durum: 'hata', hata: errorText(err) }),
-    );
-  }, [api, connectionId, database, tab.sema, tab.tablo]);
+  const onFilterChangeRef = useRef(onFilterChange);
+  onFilterChangeRef.current = onFilterChange;
+
+  /** İlk sayfa; `persist`: yeni uygulanan filtre, sayfa gelince sekmeye yazılır (reddedilen yazılmaz). */
+  const load = useCallback(
+    (filtre: TableFilter, persist = false) => {
+      if (connectionId === undefined || database === undefined) return;
+      const gen = ++current.current;
+      setLoading(true);
+      api.readTablePage(connectionId, database, { sema: tab.sema, tablo: tab.tablo, ...filtre, sonraki: null }).then(
+        (page) => {
+          if (current.current !== gen) return;
+          if (persist) onFilterChangeRef.current(filtre);
+          if (page.satirTahmini !== undefined) setEstimate(page.satirTahmini);
+          const { kolonlar, tipler, tutarlilikNotu } = page;
+          setLoading(false);
+          setError(null);
+          setGridKey(gen);
+          setView({
+            durum: 'hazir',
+            sayfa: { kolonlar, tipler, tutarlilikNotu, filtre, ...appendPage([], page), yukleniyor: false, hata: null },
+          });
+        },
+        (err: unknown) => {
+          if (current.current !== gen) return;
+          setLoading(false);
+          const rejected = queryError(err);
+          if (rejected) {
+            setError(rejected);
+            setView((v) => (v.durum === 'hazir' ? v : { durum: 'sonucsuz' }));
+          } else {
+            setError(null);
+            setView({ durum: 'hata', hata: errorText(err) });
+          }
+        },
+      );
+    },
+    [api, connectionId, database, tab.sema, tab.tablo],
+  );
+
+  const applied = useMemo(() => ({ where: tab.where, orderBy: tab.orderBy }), [tab.where, tab.orderBy]);
+
+  /** Kutular (Enter) ya da kolon başlığı: ilk sayfa filtreyle çekilir; gelirse filtre sekmeye yazılır. */
+  const apply = (filtre: TableFilter) => load(filtre, true);
 
   /**
    * ↻: önce katalog yenilenir (başka araçla yapılan DDL sonrası kolonlar ve PK güncel olsun), sonra
-   * ilk sayfa yeniden çekilir.
+   * ilk sayfa uygulanan filtreyle yeniden çekilir.
    */
   const reload = useCallback(() => {
     const gen = ++current.current;
-    setGeneration(gen);
-    setView({ durum: 'yukleniyor' });
+    setLoading(true);
     onRefreshCatalog().then(
-      () => current.current === gen && load(),
-      (err: unknown) => current.current === gen && setView({ durum: 'hata', hata: `Katalog okunamadı: ${errorText(err)}` }),
+      () => current.current === gen && load(applied),
+      (err: unknown) => {
+        if (current.current !== gen) return;
+        setLoading(false);
+        setView({ durum: 'hata', hata: `Katalog okunamadı: ${errorText(err)}` });
+      },
     );
-  }, [onRefreshCatalog, load]);
+  }, [onRefreshCatalog, load, applied]);
 
   // Listeden açılan sekme ilk çizimde yükler; geri gelen sekme hiçbir istek göndermez.
   const started = useRef(false);
   useEffect(() => {
     if (!autoLoad || started.current || connectionId === undefined) return;
     started.current = true;
-    load();
-  }, [autoLoad, connectionId, load]);
+    load(applied);
+  }, [autoLoad, connectionId, load, applied]);
 
   /** Yoldaki sonraki sayfa isteğinin nesli; aynı sayfa iki kez istenmez. */
   const moreInFlight = useRef<number | null>(null);
 
   const loadMore = useCallback(() => {
-    if (view.durum !== 'hazir' || connectionId === undefined || database === undefined) return;
-    const { sonraki, yukleniyor, hata } = view.sayfa;
+    // Yeni ilk sayfa yoldayken eski sonucun devamı istenmez: yanıtı yeni sonuca eklenirdi.
+    if (loading || view.durum !== 'hazir' || connectionId === undefined || database === undefined) return;
+    const { sonraki, yukleniyor, hata, filtre } = view.sayfa;
     const gen = current.current;
     if (sonraki === null || yukleniyor || hata !== null || moreInFlight.current === gen) return;
     moreInFlight.current = gen;
@@ -116,7 +193,7 @@ export function TabloSekmesi({ tab, target, autoLoad, catalog, onRefreshCatalog,
     const settle = () => {
       if (moreInFlight.current === gen) moreInFlight.current = null;
     };
-    api.readTablePage(connectionId, database, { sema: tab.sema, tablo: tab.tablo, sonraki }).then(
+    api.readTablePage(connectionId, database, { sema: tab.sema, tablo: tab.tablo, ...filtre, sonraki }).then(
       (page) => {
         settle();
         update((s) => ({ ...s, ...appendPage(s.satirlar, page), yukleniyor: false }));
@@ -126,9 +203,34 @@ export function TabloSekmesi({ tab, target, autoLoad, catalog, onRefreshCatalog,
         update((s) => ({ ...s, yukleniyor: false, hata: `Satırlar çekilemedi: ${errorText(err)}` }));
       },
     );
-  }, [api, view, connectionId, database, tab.sema, tab.tablo]);
+  }, [api, view, loading, connectionId, database, tab.sema, tab.tablo]);
 
   const tipAdlari = useMemo(() => (catalog?.katalog ? typeMap(catalog.katalog) : undefined), [catalog]);
+  const katalog = catalog?.katalog;
+  const completion = useMemo(() => {
+    if (!katalog || !target) return null;
+    return filterCompletion(katalog, targetSchemas(target.connection, target.database, katalog.semalar), tab.sema, tab.tablo);
+  }, [katalog, target, tab.sema, tab.tablo]);
+
+  const sayfa = view.durum === 'hazir' ? view.sayfa : null;
+  const siralama = useMemo(() => (sayfa ? headerSort(sayfa.kolonlar, sayfa.filtre.orderBy) : null), [sayfa]);
+
+  /**
+   * Kolon başlığı: gösterilen sonucun filtresiyle (uygulanmamış `WHERE` taslağı uygulanmaz) sıralama
+   * döngüsü; `ORDER BY` kutusu yeni sıralamayı gösterir.
+   */
+  const sortBy = (shown: Loaded, kolon: string) => {
+    const orderBy = cycleOrderBy(shown.filtre.orderBy, kolon);
+    setDraft({ ...draftRef.current, orderBy });
+    apply({ ...shown.filtre, orderBy });
+  };
+
+  const errorLine = (kutu: FilterBox | null) =>
+    error && error.kutu === kutu ? (
+      <p role="alert" className="uyari-metni kucuk filtre-hatasi">
+        {error.metin}
+      </p>
+    ) : null;
 
   return (
     <section aria-label={`${name} tablosu`} className="tablo-sekmesi" hidden={hidden}>
@@ -142,47 +244,67 @@ export function TabloSekmesi({ tab, target, autoLoad, catalog, onRefreshCatalog,
           className="ikon-dugme"
           aria-label="Tabloyu yeniden yükle"
           title="Yeniden yükle"
-          disabled={!target || view.durum === 'yukleniyor'}
+          disabled={!target || loading}
           onClick={reload}
         >
           ↻
         </button>
       </header>
+      <div className="filtre-cubugu">
+        {BOXES.map((kutu) => (
+          <div key={kutu} className="filtre-kutusu">
+            <span className="filtre-etiketi" aria-hidden="true">
+              {BOX_LABELS[kutu]}
+            </span>
+            <FiltreKutusu
+              etiket={BOX_LABELS[kutu]}
+              value={draft[kutu]}
+              onChange={(text) => setDraft({ ...draftRef.current, [kutu]: text })}
+              onApply={() => target && apply(draftRef.current)}
+              completion={completion}
+              invalid={error?.kutu === kutu}
+            />
+            {errorLine(kutu)}
+          </div>
+        ))}
+        {errorLine(null)}
+      </div>
       {!target && <p className="soluk kucuk">Bu Tablo sekmesinin hedefi yok: bağlantısı silinmiş.</p>}
-      {target && view.durum === 'bekliyor' && (
+      {target && view.durum === 'bekliyor' && !loading && (
         <div className="tablo-yukle">
           <p className="soluk kucuk">Tablo henüz yüklenmedi; yüklemek hedefe bağlanır.</p>
-          <button type="button" onClick={load}>
+          <button type="button" onClick={() => load(applied)}>
             Yükle
           </button>
         </div>
       )}
-      {view.durum === 'yukleniyor' && <p className="soluk kucuk">Yükleniyor…</p>}
-      {view.durum === 'hata' && (
+      {loading && !sayfa && <p className="soluk kucuk">Yükleniyor…</p>}
+      {view.durum === 'hata' && !loading && (
         <p role="alert" className="uyari-metni kucuk">
           {view.hata}
         </p>
       )}
-      {view.durum === 'hazir' && (
+      {sayfa && (
         <>
           <p className="soluk kucuk tablo-durumu">
-            {complete(view.sayfa)
-              ? `${view.sayfa.satirlar.length} satır`
-              : `ilk ${view.sayfa.satirlar.length} satır gösteriliyor`}
-            {view.sayfa.yukleniyor && ' · Satırlar yükleniyor…'}
-            {view.sayfa.sinir && ` · ${ROW_LIMIT_MESSAGE}`}
-            {view.sayfa.hata && ` · ${view.sayfa.hata}`}
-            {view.sayfa.tutarlilikNotu && ` · ${OFFSET_NOTE}`}
+            {complete(sayfa) ? `${sayfa.satirlar.length} satır` : `ilk ${sayfa.satirlar.length} satır gösteriliyor`}
+            {loading && ' · Yükleniyor…'}
+            {sayfa.yukleniyor && ' · Satırlar yükleniyor…'}
+            {sayfa.sinir && ` · ${ROW_LIMIT_MESSAGE}`}
+            {sayfa.hata && ` · ${sayfa.hata}`}
+            {sayfa.tutarlilikNotu && ` · ${OFFSET_NOTE}`}
           </p>
           <SonucGridi
-            key={generation}
+            key={gridKey}
             etiket={`${name} satırları`}
-            kolonlar={view.sayfa.kolonlar}
-            tipler={view.sayfa.tipler}
+            kolonlar={sayfa.kolonlar}
+            tipler={sayfa.tipler}
             tipAdlari={tipAdlari}
-            satirlar={view.sayfa.satirlar}
-            toplamSatir={complete(view.sayfa) ? view.sayfa.satirlar.length : null}
+            satirlar={sayfa.satirlar}
+            toplamSatir={complete(sayfa) ? sayfa.satirlar.length : null}
             onSonaYaklasti={loadMore}
+            onKolonTikla={(c) => sortBy(sayfa, sayfa.kolonlar[c]!)}
+            siralama={siralama}
           />
         </>
       )}
