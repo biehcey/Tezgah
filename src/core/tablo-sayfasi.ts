@@ -237,6 +237,8 @@ export interface TablePageResponse {
   tipler: number[];
   /** Katalogdaki PK kolonları; boşsa tablo düzenlenemez. */
   pk: string[];
+  /** Katalogdaki üretilmiş (generated) kolonlar; düzenlenemez. */
+  uretilmis: string[];
   /** Ham metin değerler; NULL `null`. */
   satirlar: (string | null)[][];
   /** Sonraki sayfanın imleci; son sayfadaysa `null`. */

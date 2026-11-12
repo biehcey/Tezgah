@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import pg from 'pg';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { parseRecords } from '../core/calistirma-kaydi';
-import { NO_CHANGES, editCell, pendingScript, type EditableTable } from '../core/grid/bekleyen';
+import { NO_CHANGES, addRow, deleteRows, editCell, pendingScript, type EditableTable } from '../core/grid/bekleyen';
 import { startFakePostgres, type FakePostgres } from './test/sahte-postgres';
 import { createFakeClock } from './test/sahte-saat';
 import { describePg, pgUrl, startTestServer, type TestServer, type TestSocket } from './test/sunucu';
@@ -105,6 +105,7 @@ describePg('Bekleyen değişiklik script’i, gerçek Postgres', () => {
     kolonlar: ['bolge', 'no', 'ad', 'tutar', 'etiketler', 'veri'],
     tipler: ['text', 'integer', 'text', 'numeric', 'text[]', 'jsonb'],
     pk: ['bolge', 'no'],
+    uretilmis: [],
   };
   const ROW_1 = ['tr', '1', 'Ali', '10.50', '{a,b}', '{"x": 1}'];
   const ROW_2 = ['tr', '2', 'Ayşe', '3', '{}', null];
@@ -132,11 +133,11 @@ describePg('Bekleyen değişiklik script’i, gerçek Postgres', () => {
     ws.send({ type: 'run', target: { connectionId, database: real.database }, script, beklenenSatir: 1 });
 
   it('literal değerler (tırnak, dizi, json, NULL) kolon tiplerine dönüşür ve commit edilir', async () => {
-    let changes = editCell(table, NO_CHANGES, ROW_1, 2, "O'Brien; -- yorum değil");
-    changes = editCell(table, changes, ROW_1, 3, '12.75');
-    changes = editCell(table, changes, ROW_2, 4, '{x,"y z"}');
-    changes = editCell(table, changes, ROW_2, 5, '{"a": [1, 2]}');
-    changes = editCell(table, changes, ROW_1, 5, null);
+    let changes = editCell(table, NO_CHANGES, { yuklu: ROW_1 }, 2, "O'Brien; -- yorum değil");
+    changes = editCell(table, changes, { yuklu: ROW_1 }, 3, '12.75');
+    changes = editCell(table, changes, { yuklu: ROW_2 }, 4, '{x,"y z"}');
+    changes = editCell(table, changes, { yuklu: ROW_2 }, 5, '{"a": [1, 2]}');
+    changes = editCell(table, changes, { yuklu: ROW_1 }, 5, null);
     apply(pendingScript(table, changes).metin);
     expect(await ws.waitFor('kararBekleniyor')).toMatchObject({ commitEdilebilir: true });
     ws.send({ type: 'commit' });
@@ -150,8 +151,8 @@ describePg('Bekleyen değişiklik script’i, gerçek Postgres', () => {
   });
 
   it('başkası satırı silmişse ifade 0 satır etkiler: satirSayisi hatası, rollback ile hiçbir şey yazılmaz', async () => {
-    let changes = editCell(table, NO_CHANGES, ROW_1, 2, 'Veli');
-    changes = editCell(table, changes, ROW_2, 2, 'Zeynep');
+    let changes = editCell(table, NO_CHANGES, { yuklu: ROW_1 }, 2, 'Veli');
+    changes = editCell(table, changes, { yuklu: ROW_2 }, 2, 'Zeynep');
     await admin.query(`DELETE FROM ${TABLE} WHERE no = 2`);
     apply(pendingScript(table, changes).metin);
     expect(await ws.waitFor('error')).toMatchObject({ i: 1, tur: 'satirSayisi', mesaj: 'Satır değişmiş ya da silinmiş (0 satır etkilendi)' });
@@ -160,5 +161,22 @@ describePg('Bekleyen değişiklik script’i, gerçek Postgres', () => {
     expect(await ws.waitFor('bitti')).toMatchObject({ sonuc: 'rollback' });
     const { rows } = await admin.query(`SELECT ad FROM ${TABLE}`);
     expect(rows).toEqual([{ ad: 'Ali' }]);
+  });
+
+  it('DELETE → UPDATE → INSERT gerçek tabloda çalışır; dokunulmayan kolonlar DEFAULT (NULL) kalır', async () => {
+    let changes = deleteRows(table, NO_CHANGES, [{ yuklu: ROW_2 }]);
+    changes = editCell(table, changes, { yuklu: ROW_1 }, 2, 'Veli');
+    changes = addRow(changes);
+    const yeni = { yeni: changes.eklenen[0]!.anahtar };
+    for (const [c, v] of [[0, 'tr'], [1, '2'], [2, 'Can']] as const) changes = editCell(table, changes, yeni, c, v);
+    apply(pendingScript(table, changes).metin);
+    expect(await ws.waitFor('kararBekleniyor')).toMatchObject({ commitEdilebilir: true });
+    ws.send({ type: 'commit' });
+    expect(await ws.waitFor('bitti')).toMatchObject({ sonuc: 'commit' });
+    const { rows } = await admin.query(`SELECT no, ad, tutar::text FROM ${TABLE} ORDER BY no`);
+    expect(rows).toEqual([
+      { no: 1, ad: 'Veli', tutar: '10.50' },
+      { no: 2, ad: 'Can', tutar: null },
+    ]);
   });
 });

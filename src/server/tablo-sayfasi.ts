@@ -55,7 +55,7 @@ type PageOutcome = { ok: true; page: TablePageResponse } | { ok: false; error: T
  * Bir sayfa: kısa süreli client (oturum sayılmaz), ortamdan bağımsız `BEGIN READ ONLY`, tek ifade,
  * `COMMIT`. Açık imleç ya da transaction tutulmaz; Çalıştırma kaydına yazılmaz.
  */
-function readPage(pools: PoolManager, connection: Connection, database: string, meta: TableMeta, request: TablePageRequest, query: PageQuery) {
+function readPage(pools: PoolManager, connection: Connection, database: string, meta: TableMeta & { uretilmis: string[] }, request: TablePageRequest, query: PageQuery) {
   return pools.withClient(connection, database, async (client, discard): Promise<PageOutcome> => {
     /** Hata sayfa sorgusundan mı geldi (konum kullanıcı kutusuna eşlenebilir). */
     let running: PageQuery | null = null;
@@ -74,6 +74,7 @@ function readPage(pools: PoolManager, connection: Connection, database: string, 
           kolonlar: result.fields.map((f) => f.name),
           tipler: result.fields.map((f) => f.dataTypeID),
           pk: [...meta.pk],
+          uretilmis: meta.uretilmis,
           satirlar,
           sonraki: nextCursor(meta, request.sonraki, satirlar, request),
           tutarlilikNotu: query.mod === 'offset',
@@ -129,7 +130,13 @@ export function createTablePageRoutes({ store, pools, catalogs }: { store: Setti
         notFound(res, `${request.sema}.${request.tablo} katalogda yok: tablo silinmiş ya da şeması Veritabanı seçiminde görünür değil.`);
         return true;
       }
-      const meta: TableMeta = { sema: relation.sema, tablo: relation.ad, kolonlar: relation.kolonlar.map((k) => k.ad), pk: relation.pk };
+      const meta = {
+        sema: relation.sema,
+        tablo: relation.ad,
+        kolonlar: relation.kolonlar.map((k) => k.ad),
+        pk: relation.pk,
+        uretilmis: relation.kolonlar.filter((k) => k.uretilmis).map((k) => k.ad),
+      };
       let query: PageQuery;
       try {
         query = tablePageQuery(meta, request.sonraki, request);

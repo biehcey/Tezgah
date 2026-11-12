@@ -2,17 +2,21 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Connection } from '../../core/baglanti';
 import {
   NO_CHANGES,
+  addRow,
+  deleteRows,
   editCell,
   editableTable,
   failedRowKey,
-  isCellChanged,
+  gridRows,
+  pasteTsv,
+  pendingCount,
+  pendingItems,
   pendingScript,
-  rowKey,
-  shownRow,
-  type EditableTable,
+  readOnlyReason,
+  restoreRows,
   type PendingChanges,
-  type PendingRow,
 } from '../../core/grid/bekleyen';
+import type { Cell } from '../../core/grid/secim';
 import { typeName } from '../../core/grid/tipler';
 import { startDecision, type DecisionTimer } from '../../core/karar-suresi';
 import { filterCompletion, typeMap } from '../../core/katalog';
@@ -64,7 +68,7 @@ interface Props {
 }
 
 /** Yüklü sayfalar: ilk sayfanın kolonları ve notu, eklenen satırlar, sonraki sayfanın durumu. */
-type Loaded = Pick<TablePageResponse, 'kolonlar' | 'tipler' | 'pk' | 'tutarlilikNotu'> &
+type Loaded = Pick<TablePageResponse, 'kolonlar' | 'tipler' | 'pk' | 'uretilmis' | 'tutarlilikNotu'> &
   LoadedRows & {
     /** Bu sayfaları üreten filtre; sonraki sayfalar onunla istenir. */
     filtre: TableFilter;
@@ -106,20 +110,14 @@ const BOXES: readonly FilterBox[] = ['where', 'orderBy'];
 
 const APPLYING_REASON = 'Bekleyen değişiklikler uygulanıyor; bitene kadar düzenlenemez.';
 
-/** Bekleyen değişiklikler listesinde satır: `pk = değer`, değişen kolonlar. */
-function pendingLabel(table: EditableTable, row: PendingRow): string {
-  const key = table.pk.map((k) => `${k} = ${row.orijinal[table.kolonlar.indexOf(k)] ?? 'NULL'}`).join(', ');
-  const cols = [...row.degerler.keys()].sort((a, b) => a - b).map((c) => table.kolonlar[c]);
-  return `${key} · ${cols.join(', ')}`;
-}
-
 /**
  * Tablo sekmesi: editörsüz, başlıkta `≈ N satır`, serbest `WHERE` / `ORDER BY` kutuları, altında
  * grid. Her sayfa sunucuda kısa, ayrı, salt okunur, tek ifadelik bir sorgudur; sekme açık
  * transaction tutmaz. Sona yaklaşınca sonraki sayfa istenir. Geri gelen sekme bağlanmaz: veri
  * "Yükle" ile çekilir.
  *
- * PK'lı tabloda hücreler düzenlenir; düzenlemeler Bekleyen değişiklik olarak birikir, sağ sütunda
+ * PK'lı tabloda hücreler düzenlenir, NULL yapılır, satır eklenir/silinir ve TSV yapıştırılır;
+ * hepsi Bekleyen değişiklik olarak birikir, sağ sütunda
  * liste ve üretilen SQL sürekli görünür. "Uygula" o SQL'i bu sekmede mevcut Script çalıştırıcıyla
  * Transaction modunda, her ifade tam 1 satır etkileyecek şekilde çalıştırır (karar kartı).
  */
@@ -172,13 +170,13 @@ export function TabloSekmesi({
           if (current.current !== gen) return;
           if (persist) onFilterChangeRef.current(filtre);
           if (page.satirTahmini !== undefined) setEstimate(page.satirTahmini);
-          const { kolonlar, tipler, pk, tutarlilikNotu } = page;
+          const { kolonlar, tipler, pk, uretilmis, tutarlilikNotu } = page;
           setLoading(false);
           setError(null);
           setGridKey(gen);
           setView({
             durum: 'hazir',
-            sayfa: { kolonlar, tipler, pk, tutarlilikNotu, filtre, ...appendPage([], page), yukleniyor: false, hata: null },
+            sayfa: { kolonlar, tipler, pk, uretilmis, tutarlilikNotu, filtre, ...appendPage([], page), yukleniyor: false, hata: null },
           });
         },
         (err: unknown) => {
@@ -272,19 +270,27 @@ export function TabloSekmesi({
   const editable = useMemo(() => {
     if (!sayfa) return null;
     const tipler = sayfa.tipler.map((oid) => typeName(oid, tipAdlari));
-    return editableTable({ sema: tab.sema, tablo: tab.tablo, kolonlar: sayfa.kolonlar, tipler, pk: sayfa.pk });
+    return editableTable({ sema: tab.sema, tablo: tab.tablo, kolonlar: sayfa.kolonlar, tipler, pk: sayfa.pk, uretilmis: sayfa.uretilmis });
     // Sayfa eklendikçe `sayfa` değişir; tablo yalnızca kolonlar/PK/tiplerle değişir.
-  }, [sayfa?.kolonlar, sayfa?.tipler, sayfa?.pk, tipAdlari, tab.sema, tab.tablo]);
+  }, [sayfa?.kolonlar, sayfa?.tipler, sayfa?.pk, sayfa?.uretilmis, tipAdlari, tab.sema, tab.tablo]);
   const table = editable && !('kapali' in editable) ? editable : null;
   /** Diske yazılmaz; sekme kapanınca kaybolur (kapatırken uyarılır). */
-  const [changes, setChanges] = useState<PendingChanges>(NO_CHANGES);
+  const [changes, setChangesState] = useState<PendingChanges>(NO_CHANGES);
+  /** Son reddedilen yapıştırmanın nedeni; sonraki değişiklikte kalkar. */
+  const [pasteError, setPasteError] = useState<string | null>(null);
+  const setChanges = (next: PendingChanges | ((current: PendingChanges) => PendingChanges)) => {
+    setPasteError(null);
+    setChangesState(next);
+  };
+  /** Her artışta grid eklenen (son) satıra gider. */
+  const [goLast, setGoLast] = useState(0);
   const script = useMemo(() => (table ? pendingScript(table, changes) : { metin: '', ifadeler: [] }), [table, changes]);
   const [run, setRun] = useState<RunView | null>(null);
   const [deadline, setDeadline] = useState<DecisionTimer | null>(null);
   const handle = useRef<ScriptRunHandle | null>(null);
   const busy = run?.evre === 'calisiyor' || run?.evre === 'karar';
   const lock = target ? writeLockState(target.connection.envTag, writeMode) : null;
-  const count = changes.satirlar.length;
+  const count = pendingCount(changes);
 
   // Sekme kapanırsa açık transaction sunucuda geri alınır (ADR-0002).
   useEffect(() => () => handle.current?.close(), []);
@@ -347,24 +353,34 @@ export function TabloSekmesi({
     return s?.hata && satir ? { satir, mesaj: s.hata.mesaj } : null;
   }, [run, script]);
 
-  const shownRows = useMemo(() => {
-    if (!sayfa || !table || count === 0) return sayfa?.satirlar ?? [];
-    return sayfa.satirlar.map((row) => shownRow(table, changes, row) as (string | null)[]);
-  }, [sayfa, table, changes, count]);
+  /** Grid'in satırları: yüklüler bekleyen değerleriyle, ardından eklenenler. PK'sız tabloda yüklüler. */
+  const rows = useMemo(() => (sayfa && table ? gridRows(table, changes, sayfa.satirlar) : null), [sayfa, table, changes]);
+  const shownRows = useMemo(() => (rows ? rows.map((r) => r.degerler) : (sayfa?.satirlar ?? [])), [rows, sayfa]);
 
   const failedRows = useMemo(() => {
-    if (!failed || !sayfa || !table) return undefined;
-    const rows = new Set<number>();
-    sayfa.satirlar.forEach((row, r) => rowKey(table, row) === failed.satir && rows.add(r));
-    return rows;
-  }, [failed, sayfa, table]);
+    if (!failed || !rows) return undefined;
+    return new Set(rows.flatMap((r, i) => (r.anahtar === failed.satir ? [i] : [])));
+  }, [failed, rows]);
 
-  const loadedRows = sayfa?.satirlar;
-  const editCellAt = (r: number, c: number, deger: string) => {
-    const row = loadedRows?.[r];
-    if (table && row) setChanges((current) => editCell(table, current, row, c, deger));
+  const editCellAt = (r: number, c: number, deger: string | null) => {
+    const ref = rows?.[r]?.ref;
+    if (table && ref) setChanges((current) => editCell(table, current, ref, c, deger));
   };
-  const changedAt = (r: number, c: number) => (table && loadedRows?.[r] ? isCellChanged(table, changes, loadedRows[r], c) : false);
+  const refsAt = (indexes: number[]) => indexes.flatMap((i) => (rows?.[i] ? [rows[i].ref] : []));
+  const addRowAction = () => {
+    if (!table) return;
+    setChanges((current) => addRow(current));
+    setGoLast((n) => n + 1);
+  };
+  const deleteAt = (indexes: number[]) => table && setChanges((current) => deleteRows(table, current, refsAt(indexes)));
+  const restoreAt = (indexes: number[]) => table && setChanges((current) => restoreRows(table, current, refsAt(indexes)));
+  const pasteAt = (start: Cell, metin: string) => {
+    if (!table || !rows) return;
+    const result = pasteTsv(table, changes, rows, start, metin);
+    if ('hata' in result) setPasteError(result.hata);
+    else setChanges(result);
+  };
+  const editing = table !== null && !busy;
 
   /**
    * Kolon başlığı: gösterilen sonucun filtresiyle (uygulanmamış `WHERE` taslağı uygulanmaz) sıralama
@@ -449,6 +465,19 @@ export function TabloSekmesi({
               </p>
               {editable && 'kapali' in editable && <p className="soluk kucuk">{editable.kapali}</p>}
               {busy && table && <p className="soluk kucuk">{APPLYING_REASON}</p>}
+              {table && (
+                <div className="grid-araclari">
+                  <button type="button" onClick={addRowAction} disabled={!editing} title="Sona yeni satır ekler; dokunulmayan kolonlar DEFAULT kalır">
+                    Satır ekle
+                  </button>
+                  <span className="soluk kucuk">Sağ tık: NULL yap, satır sil · Ctrl/Cmd+Shift+N: NULL · Ctrl/Cmd+V: TSV yapıştır</span>
+                </div>
+              )}
+              {pasteError && (
+                <p role="alert" className="uyari-metni kucuk">
+                  {pasteError}
+                </p>
+              )}
               <SonucGridi
                 key={gridKey}
                 etiket={`${name} satırları`}
@@ -456,14 +485,20 @@ export function TabloSekmesi({
                 tipler={sayfa.tipler}
                 tipAdlari={tipAdlari}
                 satirlar={shownRows}
-                toplamSatir={complete(sayfa) ? sayfa.satirlar.length : null}
+                toplamSatir={complete(sayfa) ? shownRows.length : null}
                 onSonaYaklasti={loadMore}
                 onKolonTikla={(c) => sortBy(sayfa, sayfa.kolonlar[c]!)}
                 siralama={siralama}
-                onDuzenle={table && !busy ? editCellAt : undefined}
+                onDuzenle={editing ? editCellAt : undefined}
                 saltOkunurNedeni={editable && 'kapali' in editable ? editable.kapali : APPLYING_REASON}
-                degisti={changedAt}
+                kolonSaltOkunur={table ? (c) => readOnlyReason(table, c) : undefined}
+                satirIsareti={rows ? (r) => rows[r] : undefined}
                 hataliSatirlar={failedRows}
+                onSatirEkle={editing ? addRowAction : undefined}
+                onSatirSil={editing ? deleteAt : undefined}
+                onSilmeyiGeriAl={editing ? restoreAt : undefined}
+                onYapistir={editing ? pasteAt : undefined}
+                sonSatiraGit={goLast}
               />
             </>
           )}
@@ -476,10 +511,10 @@ export function TabloSekmesi({
               ) : (
                 <>
                   <ul aria-label="Bekleyen değişiklikler" className="bekleyen-listesi kucuk">
-                    {changes.satirlar.map((row) => (
-                      <li key={row.anahtar} className={failed?.satir === row.anahtar ? 'hatali' : undefined}>
-                        {pendingLabel(table, row)}
-                        {failed?.satir === row.anahtar && <span className="ifade-hatasi"> — {failed.mesaj}</span>}
+                    {pendingItems(table, changes).map((item) => (
+                      <li key={item.anahtar} className={failed?.satir === item.anahtar ? 'hatali' : undefined}>
+                        {item.metin}
+                        {failed?.satir === item.anahtar && <span className="ifade-hatasi"> — {failed.mesaj}</span>}
                       </li>
                     ))}
                   </ul>

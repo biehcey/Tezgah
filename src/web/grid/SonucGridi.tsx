@@ -1,12 +1,27 @@
 import { defaultRangeExtractor, useVirtualizer } from '@tanstack/react-virtual';
-import { useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent, type PointerEvent } from 'react';
+import {
+  useCallback,
+  useContext,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ClipboardEvent,
+  type CSSProperties,
+  type KeyboardEvent,
+  type MouseEvent,
+  type PointerEvent,
+} from 'react';
 import { NULL_LABEL, cellDisplay, initialColumnWidths, type TextWidth } from '../../core/grid/gosterim';
+import { isDefaultCell, type GridRow } from '../../core/grid/bekleyen';
 import { MIN_COLUMN_WIDTH, PAGE_ROWS } from '../../core/grid/sabitler';
 import { PLACEHOLDER_TABLE, insertStatements } from '../../core/grid/insert';
 import type { ColumnSort } from '../../core/tablo-sayfasi';
 import { extendTo, isSelected, navigate, selectCell, selectedValues, selectionRange, type Cell, type Selection } from '../../core/grid/secim';
 import { toTsv } from '../../core/grid/tsv';
-import { Menu, menuBelow, type MenuPosition } from '../ortak/Menu';
+import { Menu, menuBelow, type MenuItem, type MenuPosition } from '../ortak/Menu';
 import { GridOlcumu, canvasTextWidth } from './olcum';
 
 /** Sabit satır ve başlık yüksekliği (px); satırlar ölçülmez. CSS bunları `--grid-*` olarak alır. */
@@ -44,15 +59,31 @@ interface Props {
   /** Başlıktan konan sıralama; `aria-sort` ve ok olarak görünür. */
   siralama?: { kolon: number; yon: ColumnSort } | null;
   /**
-   * Verilirse hücreler düzenlenir (Tablo sekmesi): düzenleyici kapanırken kaydedilen ham metin.
-   * Yoksa tam değer salt okunur açılır ve `saltOkunurNedeni` söylenir.
+   * Verilirse hücreler düzenlenir (Tablo sekmesi): düzenleyici kapanırken kaydedilen ham metin ya
+   * da NULL (Ctrl/Cmd+Shift+N, sağ tık). Yoksa tam değer salt okunur açılır ve `saltOkunurNedeni`
+   * söylenir.
    */
-  onDuzenle?: (satir: number, kolon: number, deger: string) => void;
+  onDuzenle?: (satir: number, kolon: number, deger: string | null) => void;
   saltOkunurNedeni?: string;
-  /** Bekleyen değişikliğin işaretleri: değişen hücre ve uygulanırken hata alan satırlar. */
-  degisti?: (satir: number, kolon: number) => boolean;
+  /** Düzenlenebilir grid'de yazılamayan kolonun nedeni (`bytea`, generated); yazılabiliyorsa `null`. */
+  kolonSaltOkunur?: (kolon: number) => string | null;
+  /** Bekleyen değişikliğin satır işaretleri: eklendi / silinecek ve değişen (eklenende dokunulan) kolonlar. */
+  satirIsareti?: (satir: number) => Pick<GridRow, 'durum' | 'degisen'> | undefined;
+  /** Uygulanırken hata alan satırlar. */
   hataliSatirlar?: ReadonlySet<number>;
+  /** Satır ekleme ve silme (sağ tık); verilmezse menüde yoklar. */
+  onSatirEkle?: () => void;
+  onSatirSil?: (satirlar: number[]) => void;
+  onSilmeyiGeriAl?: (satirlar: number[]) => void;
+  /** Çok hücreli yapıştırma: seçimin sol üst köşesi ve panodaki düz metin. */
+  onYapistir?: (baslangic: Cell, metin: string) => void;
+  /** Her artışında seçim son satırın ilk hücresine gider (eklenen satır). */
+  sonSatiraGit?: number;
 }
+
+const DELETED_REASON = 'Silinecek satır düzenlenemez; önce silmeyi geri alın.';
+const DEFAULT_LABEL = 'DEFAULT';
+const DURUM_ETIKETI = { eklendi: 'eklendi', silinecek: 'silinecek' } as const;
 
 const READ_ONLY_REASON = 'Konsol sonuçları salt okunur; düzenleme PK’lı tablonun Tablo sekmesinde.';
 
@@ -60,9 +91,11 @@ const READ_ONLY_REASON = 'Konsol sonuçları salt okunur; düzenleme PK’lı ta
 interface ValueBox {
   cell: Cell;
   metin: string;
-  /** Değer NULL ve henüz dokunulmadı. */
-  null: boolean;
+  /** Boşken gösterilen: değer NULL ya da (eklenen satırda) DEFAULT ve henüz dokunulmadı. */
+  yerTutucu?: string;
   duzenle: boolean;
+  /** Salt okunur açıldıysa nedeni. */
+  neden?: string;
   /** Kullanıcı metne dokundu (yazmaya başlayarak açmak da sayılır); dokunulmayan kutu kaydedilmez. */
   kirli: boolean;
 }
@@ -97,8 +130,14 @@ export function SonucGridi({
   siralama = null,
   onDuzenle,
   saltOkunurNedeni = READ_ONLY_REASON,
-  degisti,
+  kolonSaltOkunur,
+  satirIsareti,
   hataliSatirlar,
+  onSatirEkle,
+  onSatirSil,
+  onSilmeyiGeriAl,
+  onYapistir,
+  sonSatiraGit,
 }: Props) {
   const olcum = useContext(GridOlcumu);
   const noteId = useId();
@@ -212,8 +251,43 @@ export function SonucGridi({
     virtualizer.scrollToIndex(next.aktif.satir);
   }
 
+  // Satır eklenince seçim yeni (son) satıra gider; ilk çizimde değil.
+  const lastGoTo = useRef(sonSatiraGit);
+  useEffect(() => {
+    if (sonSatiraGit === lastGoTo.current) return;
+    lastGoTo.current = sonSatiraGit;
+    if (satirlar.length > 0) moveTo(selectCell({ satir: satirlar.length - 1, kolon: 0 }));
+  });
+
+  /** Hücre neden yazılamıyor; yazılabiliyorsa `null`. */
+  function cellReadOnlyReason({ satir, kolon }: Cell): string | null {
+    if (!onDuzenle) return saltOkunurNedeni;
+    if (satirIsareti?.(satir)?.durum === 'silinecek') return DELETED_REASON;
+    return kolonSaltOkunur?.(kolon) ?? null;
+  }
+
+  /** Seçili, yazılabilir hücreleri NULL yapar. */
+  function setNull(s: Selection) {
+    const r = selectionRange(s);
+    for (let satir = r.ust; satir <= r.alt; satir++)
+      for (let kolon = r.sol; kolon <= r.sag; kolon++) if (cellReadOnlyReason({ satir, kolon }) === null) onDuzenle?.(satir, kolon, null);
+  }
+
+  /** Aralığın satırları. */
+  const selectedRows = (s: Selection) => {
+    const r = selectionRange(s);
+    return Array.from({ length: r.alt - r.ust + 1 }, (_, i) => r.ust + i).filter((i) => i < satirlar.length);
+  };
+
+  const isNullKey = (e: KeyboardEvent) => (e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'n';
+
   function onKeyDown(e: KeyboardEvent<HTMLDivElement>) {
     const ctrl = e.ctrlKey || e.metaKey;
+    if (isNullKey(e)) {
+      e.preventDefault();
+      if (onDuzenle && satirlar.length > 0) setNull(sel);
+      return;
+    }
     if (ctrl && e.key.toLowerCase() === 'c') {
       e.preventDefault();
       copyText(toTsv(selectedValues(satirlar, sel)));
@@ -224,10 +298,11 @@ export function SonucGridi({
       openBox(sel.aktif);
       return;
     }
-    // Seçili hücrede yazmaya başlamak düzenleyiciyi açar ve değeri o harfle değiştirir.
+    // Seçili hücrede yazmaya başlamak düzenleyiciyi açar ve değeri o harfle değiştirir;
+    // hücre yazılamıyorsa tam değer nedeniyle salt okunur açılır.
     if (onDuzenle && e.key.length === 1 && !ctrl && !e.altKey && satirlar.length > 0) {
       e.preventDefault();
-      openBox(sel.aktif, e.key);
+      openBox(sel.aktif, cellReadOnlyReason(sel.aktif) === null ? e.key : undefined);
       return;
     }
     const next = navigate(sel, { tus: e.key, shift: e.shiftKey, ctrl }, gridSize());
@@ -245,11 +320,13 @@ export function SonucGridi({
   function openBox(cell: Cell, yazilan?: string) {
     const value = satirlar[cell.satir]?.[cell.kolon] ?? null;
     boxOpen.current = true;
-    setBox(
-      yazilan === undefined
-        ? { cell, metin: value ?? '', null: value === null, duzenle: onDuzenle !== undefined, kirli: false }
-        : { cell, metin: yazilan, null: false, duzenle: true, kirli: true },
-    );
+    if (yazilan !== undefined) {
+      setBox({ cell, metin: yazilan, duzenle: true, kirli: true });
+      return;
+    }
+    const neden = cellReadOnlyReason(cell);
+    const yerTutucu = isDefaultCell(satirIsareti?.(cell.satir), cell.kolon) ? DEFAULT_LABEL : value === null ? NULL_LABEL : undefined;
+    setBox({ cell, metin: value ?? '', yerTutucu, duzenle: neden === null, ...(neden !== null && { neden }), kirli: false });
   }
 
   /** Kutuyu kapatır; `save`: dokunulan düzenleme kaydedilir. `move`: ardından seçimin gideceği tuş. */
@@ -274,6 +351,14 @@ export function SonucGridi({
       return;
     }
     if (!box?.duzenle) return;
+    if (isNullKey(e)) {
+      e.preventDefault();
+      boxOpen.current = false;
+      setBox(null);
+      onDuzenle?.(box.cell.satir, box.cell.kolon, null);
+      focusPending.current = true;
+      return;
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       closeBox(true, { tus: 'ArrowDown', shift: false });
@@ -321,6 +406,29 @@ export function SonucGridi({
     copyText(sql);
   }
 
+  /** Sağ tık menüsü: düzenlenebilir grid'de NULL ve satır eylemleri, her zaman INSERT olarak kopyala. */
+  function menuItems(s: Selection): MenuItem[] {
+    const items: MenuItem[] = [];
+    if (onDuzenle) {
+      const rows = selectedRows(s);
+      const deleted = rows.filter((r) => satirIsareti?.(r)?.durum === 'silinecek');
+      items.push({ label: 'NULL yap', onSelect: () => setNull(s) });
+      if (onSatirEkle) items.push({ label: 'Satır ekle', onSelect: onSatirEkle });
+      if (onSatirSil && deleted.length < rows.length) items.push({ label: 'Satırları sil', danger: true, onSelect: () => onSatirSil(rows.filter((r) => !deleted.includes(r))) });
+      if (onSilmeyiGeriAl && deleted.length > 0) items.push({ label: 'Silmeyi geri al', onSelect: () => onSilmeyiGeriAl(deleted) });
+    }
+    items.push({ label: 'INSERT olarak kopyala', onSelect: () => copyAsInsert(s) });
+    return items;
+  }
+
+  /** Düzenleyici açıkken yapıştırma kutunun kendi işidir; grid'de TSV seçimin sol üst köşesinden yazılır. */
+  function onPaste(e: ClipboardEvent<HTMLDivElement>) {
+    if (!onYapistir || e.target instanceof HTMLTextAreaElement) return;
+    e.preventDefault();
+    const r = selectionRange(sel);
+    onYapistir({ satir: r.ust, kolon: r.sol }, e.clipboardData.getData('text/plain'));
+  }
+
   function onResizeStart(e: PointerEvent<HTMLElement>, kolon: number) {
     e.preventDefault();
     e.stopPropagation();
@@ -348,6 +456,7 @@ export function SonucGridi({
         className="sonuc-gridi"
         style={{ '--grid-satir': `${ROW_HEIGHT}px`, '--grid-baslik': `${HEADER_HEIGHT}px` } as CSSProperties}
         onKeyDown={onKeyDown}
+        onPaste={onPaste}
       >
         <div className="grid-icerik" style={{ height: virtualizer.getTotalSize(), width: offsets.at(-1) }}>
           <div role="rowgroup" className="grid-basligi">
@@ -393,21 +502,25 @@ export function SonucGridi({
               const r = item.index;
               const row = satirlar[r]!;
               const failed = hataliSatirlar?.has(r) ?? false;
+              const mark = satirIsareti?.(r);
+              const durum = mark?.durum ?? null;
               return (
                 <div
                   key={r}
                   role="row"
                   aria-rowindex={r + 2}
                   aria-invalid={failed || undefined}
-                  className={`grid-satiri grid-veri-satiri${failed ? ' hatali' : ''}`}
+                  aria-description={durum ? DURUM_ETIKETI[durum] : undefined}
+                  className={`grid-satiri grid-veri-satiri${failed ? ' hatali' : ''}${durum ? ` ${durum}` : ''}`}
                   style={{ transform: `translateY(${item.start}px)` }}
                 >
                   {kolonlar.map((_, c) => {
                     const cell = { satir: r, kolon: c };
+                    const changed = mark?.degisen.includes(c) ?? false;
+                    const varsayilan = isDefaultCell(mark, c);
                     const shown = cellDisplay(row[c] ?? null);
                     const selected = isSelected(sel, cell);
                     const active = sel.aktif.satir === r && sel.aktif.kolon === c;
-                    const changed = degisti?.(r, c) ?? false;
                     return (
                       <div
                         key={c}
@@ -416,14 +529,14 @@ export function SonucGridi({
                         aria-selected={selected}
                         tabIndex={active ? 0 : -1}
                         data-hucre={`${r}:${c}`}
-                        className={`grid-hucresi${shown.null ? ' null' : ''}${selected ? ' secili' : ''}${active ? ' aktif' : ''}${changed ? ' degisti' : ''}`}
+                        className={`grid-hucresi${varsayilan ? ' varsayilan' : shown.null ? ' null' : ''}${selected ? ' secili' : ''}${active ? ' aktif' : ''}${changed ? ' degisti' : ''}`}
                         style={{ width: widths[c] }}
                         onMouseDown={(e) => onCellMouseDown(e, cell)}
                         onMouseEnter={() => onCellMouseEnter(cell)}
                         onDoubleClick={() => openBox(cell)}
                         onContextMenu={(e) => onCellContextMenu(e, cell)}
                       >
-                        {shown.null ? NULL_LABEL : shown.metin}
+                        {varsayilan ? DEFAULT_LABEL : shown.null ? NULL_LABEL : shown.metin}
                       </div>
                     );
                   })}
@@ -439,7 +552,7 @@ export function SonucGridi({
               autoFocus
               aria-label={`${kolonlar[box.cell.kolon]} değeri`}
               value={box.metin}
-              placeholder={box.null ? NULL_LABEL : undefined}
+              placeholder={box.yerTutucu}
               // Düzenleyici içerikle büyür; salt okunur kutu sabit yükseklikte kaydırılır.
               rows={box.duzenle ? Math.min(Math.max(box.metin.split('\n').length, 1), EDITOR_MAX_LINES) : undefined}
               style={{
@@ -448,7 +561,7 @@ export function SonucGridi({
                 width: Math.max(widths[box.cell.kolon]!, VALUE_BOX_MIN_WIDTH),
               }}
               onFocus={(e) => e.currentTarget.setSelectionRange(e.currentTarget.value.length, e.currentTarget.value.length)}
-              onChange={(e) => setBox({ ...box, metin: e.target.value, null: false, kirli: true })}
+              onChange={(e) => setBox({ ...box, metin: e.target.value, yerTutucu: undefined, kirli: true })}
               onKeyDown={onBoxKeyDown}
               // Başka yere tıklamak düzenlemeyi kaydeder (IntelliJ gibi); Esc vazgeçer.
               onBlur={() => closeBox(true, 'odaksiz')}
@@ -466,7 +579,7 @@ export function SonucGridi({
                 width: Math.max(widths[box.cell.kolon]!, VALUE_BOX_MIN_WIDTH),
               }}
             >
-              {saltOkunurNedeni}
+              {box.neden ?? saltOkunurNedeni}
             </p>
           )}
         </div>
@@ -477,7 +590,7 @@ export function SonucGridi({
           x={menu.x}
           y={menu.y}
           label={`${etiket} menüsü`}
-          items={[{ label: 'INSERT olarak kopyala', onSelect: () => copyAsInsert(menu.sel) }]}
+          items={menuItems(menu.sel)}
           onClose={closeMenu}
         />
       )}

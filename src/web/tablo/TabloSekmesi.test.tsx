@@ -25,6 +25,7 @@ const page = (overrides: Partial<TablePageResponse> = {}): TablePageResponse => 
   kolonlar: ['id'],
   tipler: [23],
   pk: ['id'],
+  uretilmis: [],
   satirlar: ids(1, 3),
   sonraki: null,
   tutarlilikNotu: false,

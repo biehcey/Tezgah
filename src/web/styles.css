@@ -2197,6 +2197,38 @@ button.kucuk {
   box-shadow: inset 0 -2px 0 var(--uyari);
 }
 
+/* Bekleyen değişiklik satır işaretleri: eklendi (yeşil), silinecek (kırmızı, üstü çizili). */
+.grid-satiri.eklendi .grid-hucresi:first-child {
+  box-shadow: inset 3px 0 0 var(--basarili);
+}
+
+.grid-satiri.eklendi .grid-hucresi {
+  background: color-mix(in srgb, var(--basarili) 10%, transparent);
+}
+
+.grid-satiri.silinecek .grid-hucresi {
+  background: color-mix(in srgb, var(--uyari) 10%, transparent);
+  color: var(--soluk);
+  text-decoration: line-through;
+}
+
+.grid-satiri.silinecek .grid-hucresi:first-child {
+  box-shadow: inset 3px 0 0 var(--uyari);
+}
+
+.grid-hucresi.varsayilan {
+  color: var(--soluk);
+  font-style: italic;
+}
+
+.grid-araclari {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin-bottom: 6px;
+}
+
 .tablo-yukle {
   display: flex;
   align-items: center;

@@ -23,7 +23,7 @@ beforeEach(async () => {
         ['public', 'users', 'r', '1234', 'id', 'integer', '23', 't', 't', '', '1'],
         ['public', 'users', 'r', '1234', 'ad', 'text', '25', 'f', 'f', '', null],
         ['public', 'log', 'r', '-1', 'ts', 'timestamptz', '1184', 'f', 'f', '', null],
-        ['public', 'log', 'r', '-1', 'mesaj', 'text', '25', 'f', 'f', '', null],
+        ['public', 'log', 'r', '-1', 'mesaj', 'text', '25', 'f', 'f', 's', null],
       ]);
     }
     if (sql.includes('pg_catalog.pg_type')) return result(['oid', 'ad', 'kullanici'], []);
@@ -71,6 +71,7 @@ describe('Tablo sayfası: PK’lı tabloda keyset', () => {
     expect(res.body).toMatchObject({
       kolonlar: ['id', 'ad'],
       pk: ['id'],
+      uretilmis: [],
       tutarlilikNotu: false,
       satirTahmini: 1300,
       sonraki: { tur: 'keyset', degerler: ['500'] },
@@ -94,11 +95,11 @@ describe('Tablo sayfası: PK’lı tabloda keyset', () => {
 });
 
 describe('Tablo sayfası: PK’sız tabloda OFFSET', () => {
-  it('OFFSET ile sayfalanır ve tutarlılık notu gelir; hiç analiz edilmemiş tablonun tahmini -1', async () => {
+  it('OFFSET ile sayfalanır ve tutarlılık notu gelir; hiç analiz edilmemiş tablonun tahmini -1; üretilmiş kolonlar yanıtta', async () => {
     const id = await createConnection();
     pageRows = range(0, 500).map((i) => [`t${i}`, 'm']);
     const first = await t.api('POST', pageUrl(id), { sema: 'public', tablo: 'log', sonraki: null });
-    expect(first.body).toMatchObject({ pk: [], tutarlilikNotu: true, satirTahmini: -1, sonraki: { tur: 'offset', offset: 500 } });
+    expect(first.body).toMatchObject({ pk: [], uretilmis: ['mesaj'], tutarlilikNotu: true, satirTahmini: -1, sonraki: { tur: 'offset', offset: 500 } });
     const second = await t.api('POST', pageUrl(id), { sema: 'public', tablo: 'log', sonraki: first.body.sonraki });
     expect(second.body.sonraki).toEqual({ tur: 'offset', offset: 1000 });
     expect(pageQueries()).toEqual([

@@ -18,6 +18,7 @@ const page = (overrides: Partial<TablePageResponse> = {}): TablePageResponse => 
   kolonlar: ['id', 'ad'],
   tipler: [23, 25],
   pk: ['id'],
+  uretilmis: [],
   satirlar: [
     ['1', 'Ali'],
     ['2', 'Ayşe'],
@@ -87,6 +88,128 @@ describe('Tablo sekmesi: hücre düzenleme', () => {
     await user.keyboard('x');
     expect(t().queryByRole('textbox', { name: /değeri$/ })).not.toBeInTheDocument();
     expect(t().queryByRole('button', { name: 'Uygula' })).not.toBeInTheDocument();
+  });
+});
+
+const rowOf = (r: number) => t().getByRole('grid').querySelector(`[role="row"][aria-rowindex="${r + 2}"]`) as HTMLElement;
+const sqlLines = () => preview().querySelector('pre')?.textContent?.split('\n') ?? [];
+const menuItem = (name: string) => within(screen.getByRole('menu')).getByRole('menuitem', { name });
+
+describe('Tablo sekmesi: satır ekleme ve silme', () => {
+  it('“Satır ekle” grid’in sonuna DEFAULT’lu satır ekler ve ona gider; dokunulan kolonlar INSERT’e girer', async () => {
+    const { user } = await setup();
+    await user.click(t().getByRole('button', { name: 'Satır ekle' }));
+
+    expect(rowOf(2)).toHaveClass('eklendi');
+    expect(cell(2, 0)).toHaveTextContent('DEFAULT');
+    expect(sqlLines()).toEqual([`INSERT INTO "public"."users" DEFAULT VALUES;`]);
+    expect(t().getByRole('list', { name: 'Bekleyen değişiklikler' })).toHaveTextContent('+ yeni satır');
+
+    await user.keyboard('{Tab}Can{Enter}');
+    expect(cell(2, 1)).toHaveTextContent('Can');
+    expect(cell(2, 0)).toHaveTextContent('DEFAULT');
+    expect(sqlLines()).toEqual([`INSERT INTO "public"."users" ("ad") VALUES ('Can'::text);`]);
+  });
+
+  it('sağ tıkla satır silinir ve işaretlenir; silmeyi geri almak bekleyeni kaldırır; sıra DELETE → UPDATE → INSERT', async () => {
+    const { user } = await setup();
+    await user.click(t().getByRole('button', { name: 'Satır ekle' }));
+    await editName(user, 0, 'Veli');
+    await user.pointer({ keys: '[MouseRight]', target: cell(1, 0) });
+    await user.click(menuItem('Satırları sil'));
+
+    expect(rowOf(1)).toHaveClass('silinecek');
+    expect(sqlLines().map((s) => s.split(' ')[0])).toEqual(['DELETE', 'UPDATE', 'INSERT']);
+    expect(sqlLines()[0]).toBe(`DELETE FROM "public"."users" WHERE "id" = '2'::integer;`);
+
+    await user.pointer({ keys: '[MouseRight]', target: cell(1, 0) });
+    await user.click(menuItem('Silmeyi geri al'));
+    expect(rowOf(1)).not.toHaveClass('silinecek');
+    expect(sqlLines().map((s) => s.split(' ')[0])).toEqual(['UPDATE', 'INSERT']);
+  });
+
+  it('eklenip silinen satır SQL üretmez', async () => {
+    const { user } = await setup();
+    await user.click(t().getByRole('button', { name: 'Satır ekle' }));
+    await user.pointer({ keys: '[MouseRight]', target: cell(2, 1) });
+    await user.click(menuItem('Satırları sil'));
+    expect(t().getAllByRole('row')).toHaveLength(3);
+    expect(preview()).toHaveTextContent('Bekleyen değişiklik yok');
+  });
+});
+
+describe('Tablo sekmesi: NULL', () => {
+  it('Ctrl/Cmd+Shift+N seçili hücreyi NULL yapar; NULL boş metinden ayrıdır', async () => {
+    const { user } = await setup();
+    await user.click(cell(0, 1));
+    await user.keyboard('{Control>}{Shift>}N{/Shift}{/Control}');
+    expect(cell(0, 1)).toHaveTextContent('NULL');
+    expect(cell(0, 1)).toHaveClass('null');
+
+    await user.click(cell(1, 1));
+    await user.keyboard('{Meta>}{Shift>}N{/Shift}{/Meta}');
+    expect(sqlLines()).toEqual([
+      `UPDATE "public"."users" SET "ad" = NULL WHERE "id" = '1'::integer;`,
+      `UPDATE "public"."users" SET "ad" = NULL WHERE "id" = '2'::integer;`,
+    ]);
+  });
+
+  it('düzenleyicide Ctrl/Cmd+Shift+N değeri NULL yapar ve kutuyu kapatır', async () => {
+    const { user } = await setup();
+    await user.click(cell(0, 1));
+    await user.keyboard('{F2}xyz{Control>}{Shift>}N{/Shift}{/Control}');
+    expect(t().queryByRole('textbox', { name: /değeri$/ })).not.toBeInTheDocument();
+    expect(sqlLines()).toEqual([`UPDATE "public"."users" SET "ad" = NULL WHERE "id" = '1'::integer;`]);
+  });
+
+  it('sağ tık “NULL yap”', async () => {
+    const { user } = await setup();
+    await user.pointer({ keys: '[MouseRight]', target: cell(1, 1) });
+    await user.click(menuItem('NULL yap'));
+    expect(sqlLines()).toEqual([`UPDATE "public"."users" SET "ad" = NULL WHERE "id" = '2'::integer;`]);
+  });
+});
+
+describe('Tablo sekmesi: salt okunur kolonlar', () => {
+  it('generated ve bytea kolonları düzenleyici açmaz, nedeni kutunun altında; NULL kısayolu da etkisiz', async () => {
+    const { user } = await setup({
+      firstPage: page({ kolonlar: ['id', 'ad', 'dosya'], tipler: [23, 25, 17], uretilmis: ['ad'], satirlar: [['1', 'Ali', '\\x00']] }),
+    });
+    await user.click(cell(0, 1));
+    await user.keyboard('x');
+    expect(t().getByRole('textbox', { name: 'ad değeri' })).toHaveAttribute('readonly');
+    expect(t().getByRole('note')).toHaveTextContent('“ad” üretilmiş (generated) kolon: salt okunur');
+    await user.keyboard('{Escape}');
+
+    await user.dblClick(cell(0, 2));
+    expect(t().getByRole('note')).toHaveTextContent('“dosya” bytea kolonu: salt okunur');
+    await user.keyboard('{Escape}{Control>}{Shift>}N{/Shift}{/Control}');
+    expect(preview()).toHaveTextContent('Bekleyen değişiklik yok');
+  });
+});
+
+describe('Tablo sekmesi: TSV yapıştırma', () => {
+  it('seçimin sol üst köşesinden yapıştırır; taşan satır yeni satır, boş hücre NULL', async () => {
+    const { user } = await setup();
+    await user.click(cell(0, 1));
+    await user.paste('Veli\nNULL\n');
+    await user.click(cell(1, 1));
+    await user.paste('Zeynep\n\nCan');
+    expect(sqlLines()).toEqual([
+      `UPDATE "public"."users" SET "ad" = 'Veli'::text WHERE "id" = '1'::integer;`,
+      `UPDATE "public"."users" SET "ad" = 'Zeynep'::text WHERE "id" = '2'::integer;`,
+      `INSERT INTO "public"."users" ("ad") VALUES (NULL);`,
+      `INSERT INTO "public"."users" ("ad") VALUES ('Can'::text);`,
+    ]);
+    expect(rowOf(3)).toHaveClass('eklendi');
+  });
+
+  it('kolon taşan yapıştırma tümden reddedilir ve hata görünür', async () => {
+    const { user } = await setup();
+    await user.click(cell(0, 1));
+    await user.paste('a\tb\nc');
+    expect(t().getByRole('alert')).toHaveTextContent('Yapıştırma reddedildi: 2 kolon yapıştırılıyor, seçimden itibaren 1 kolon var.');
+    expect(preview()).toHaveTextContent('Bekleyen değişiklik yok');
   });
 });
 
