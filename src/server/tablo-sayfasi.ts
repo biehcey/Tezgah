@@ -73,6 +73,7 @@ function readPage(pools: PoolManager, connection: Connection, database: string, 
         page: {
           kolonlar: result.fields.map((f) => f.name),
           tipler: result.fields.map((f) => f.dataTypeID),
+          pk: [...meta.pk],
           satirlar,
           sonraki: nextCursor(meta, request.sonraki, satirlar, request),
           tutarlilikNotu: query.mod === 'offset',

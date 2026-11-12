@@ -69,6 +69,7 @@ export interface FakeRun {
   yazmaModu: boolean;
   deneme: boolean;
   zorlaTransaction?: boolean;
+  beklenenSatir?: number;
   /** İstemcinin gönderdiği istekler (`commit`, `rollback`, `iptal`). */
   sent: string[];
   /** İstemcinin gönderdiği isteklerin tamamı (ör. `dahaFazla{i}`). */
@@ -79,13 +80,14 @@ export interface FakeRun {
 
 export function createFakeScriptRuns() {
   const runs: FakeRun[] = [];
-  const runScript: ApiClient['runScript'] = ({ target, script, yazmaModu, deneme, zorlaTransaction }, onEvent) => {
+  const runScript: ApiClient['runScript'] = ({ target, script, yazmaModu, deneme, zorlaTransaction, beklenenSatir }, onEvent) => {
     const run: FakeRun = {
       target,
       script,
       yazmaModu,
       deneme,
       zorlaTransaction,
+      beklenenSatir,
       sent: [],
       istekler: [],
       closed: false,

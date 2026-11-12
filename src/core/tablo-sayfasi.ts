@@ -235,6 +235,8 @@ export interface TablePageResponse {
   kolonlar: string[];
   /** Kolon tip OID'leri. */
   tipler: number[];
+  /** Katalogdaki PK kolonları; boşsa tablo düzenlenemez. */
+  pk: string[];
   /** Ham metin değerler; NULL `null`. */
   satirlar: (string | null)[][];
   /** Sonraki sayfanın imleci; son sayfadaysa `null`. */

@@ -26,6 +26,10 @@ describe('parseClientMessage', () => {
     // Yalnızca açıkça `true` Transaction modunu zorlar; yoksa alan da yoktur.
     ['zorlaTransaction', { type: 'run', target: { connectionId: 'b1', database: 'app' }, script: 'SELECT 1', zorlaTransaction: true }, { type: 'run', target: { connectionId: 'b1', database: 'app' }, script: 'SELECT 1', yazmaModu: false, deneme: false, zorlaTransaction: true }],
     ['zorlaTransaction metin', { type: 'run', target: { connectionId: 'b1', database: 'app' }, script: 'SELECT 1', zorlaTransaction: 'true' }, { type: 'run', target: { connectionId: 'b1', database: 'app' }, script: 'SELECT 1', yazmaModu: false, deneme: false }],
+    // Yalnızca `1` tanınır (Bekleyen değişiklik script'leri); başka değerde denetim yoktur.
+    ['beklenenSatir', { type: 'run', target: { connectionId: 'b1', database: 'app' }, script: 'SELECT 1', beklenenSatir: 1 }, { type: 'run', target: { connectionId: 'b1', database: 'app' }, script: 'SELECT 1', yazmaModu: false, deneme: false, beklenenSatir: 1 }],
+    ['beklenenSatir 2', { type: 'run', target: { connectionId: 'b1', database: 'app' }, script: 'SELECT 1', beklenenSatir: 2 }, { type: 'run', target: { connectionId: 'b1', database: 'app' }, script: 'SELECT 1', yazmaModu: false, deneme: false }],
+    ['beklenenSatir metin', { type: 'run', target: { connectionId: 'b1', database: 'app' }, script: 'SELECT 1', beklenenSatir: '1' }, { type: 'run', target: { connectionId: 'b1', database: 'app' }, script: 'SELECT 1', yazmaModu: false, deneme: false }],
     ['commit', { type: 'commit' }, { type: 'commit' }],
     ['rollback', { type: 'rollback' }, { type: 'rollback' }],
     ['iptal', { type: 'iptal' }, { type: 'iptal' }],

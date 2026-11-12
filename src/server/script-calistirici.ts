@@ -40,8 +40,10 @@ import {
   MORE_CLOSED_FAILED,
   MORE_CLOSED_FINISHED,
   PREVIEW_ROWS,
+  ROW_COUNT_ERROR,
   autocommitSummary,
   parseClientMessage,
+  rowCountMessage,
   type ClientMessage,
   type DenemeOutput,
   type Preview,
@@ -133,6 +135,8 @@ interface Run {
   /** Karar beklenirken işleyen Karar süresi. */
   timer?: DecisionTimer;
   commitAllowed: boolean;
+  /** Her ifade tam bu kadar satır etkilemeli; etkilemezse ifade `satirSayisi` hatasıyla düşer. */
+  beklenenSatir?: 1;
   /** Çalışan ifadelerin kayıt özetleri; satır verisi içermez. */
   ifadeler: StatementSummary[];
   /** Devamı olan SELECT sonuçlarının açık imleçleri, ifade indeksiyle. */
@@ -273,7 +277,8 @@ export function createScriptRunner({ store, pools, catalogs, clock, history, log
      * yazma modunun açık olup olmadığı gelir. `zorlaTransaction` yalnızca Okuma'yı Transaction'a
      * çevirir; başka bir modu değiştirmez.
      */
-    async function start(current: Run, { target, script, yazmaModu, deneme, zorlaTransaction }: Extract<ClientMessage, { type: 'run' }>) {
+    async function start(current: Run, { target, script, yazmaModu, deneme, zorlaTransaction, beklenenSatir }: Extract<ClientMessage, { type: 'run' }>) {
+      current.beklenenSatir = beklenenSatir;
       const statements = splitStatements(script);
       const analysis = forceTransaction(analyzeScript(statements), zorlaTransaction);
       send({ type: 'analiz', ...analysis });
@@ -640,6 +645,20 @@ export function createScriptRunner({ store, pools, catalogs, clock, history, log
         const started = performance.now();
         const result = await runStatement(client, statement, deneme, i, current.imlecler);
         const ms = Math.round(performance.now() - started);
+        if (result.ok && current.beklenenSatir !== undefined && result.rowCount !== current.beklenenSatir) {
+          // Postgres'te hata yok ama değişiklik amaçlanan satıra uygulanmadı: transaction hatalı sayılır.
+          const mesaj = rowCountMessage(result.rowCount);
+          const location = errorLocation(script, statement);
+          send({ type: 'error', i, ms, sqlstate: null, mesaj, ...location, tur: ROW_COUNT_ERROR });
+          current.ifadeler.push({
+            offset: statement.start,
+            ms,
+            komut: result.komut,
+            satirSayisi: result.rowCount,
+            hata: { kod: null, mesaj, satir: location.satir },
+          });
+          return { outcome: 'hata', applied };
+        }
         if (result.ok) {
           const { ok: _ok, ...output } = result;
           send({ type: 'done', i, ms, ...output });

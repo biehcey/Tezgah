@@ -280,3 +280,72 @@ describe('Sonuç grid’i: tam değer ve kolon genişliği', () => {
     expect(parseFloat(cell(0, 1).style.width)).toBe(before + 60);
   });
 });
+
+describe('Sonuç grid’i: düzenleyici', () => {
+  function editable(satirlar = rows(3)) {
+    const user = userEvent.setup();
+    const onDuzenle = vi.fn();
+    render(
+      <GridOlcumu.Provider value={JSDOM_OLCUMU}>
+        <SonucGridi etiket="Sonuç 1" kolonlar={KOLONLAR} satirlar={satirlar} toplamSatir={satirlar.length} onDuzenle={onDuzenle} />
+      </GridOlcumu.Provider>,
+    );
+    return { user, onDuzenle };
+  }
+  const editor = () => screen.getByRole('textbox', { name: /değeri$/ });
+
+  it('yazmaya başlamak düzenleyiciyi o harfle açar; Enter kaydeder ve aşağı iner', async () => {
+    const { user, onDuzenle } = editable();
+    await user.click(cell(0, 1));
+    await user.keyboard('Veli');
+    expect(editor()).toHaveValue('Veli');
+    expect(editor()).not.toHaveAttribute('readonly');
+    await user.keyboard('{Enter}');
+    expect(onDuzenle).toHaveBeenCalledWith(0, 1, 'Veli');
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+    expect(cell(1, 1)).toHaveFocus();
+  });
+
+  it('F2 değeri açar; Shift+Enter yeni satır ekler; Esc vazgeçer', async () => {
+    const { user, onDuzenle } = editable();
+    await user.click(cell(0, 1));
+    await user.keyboard('{F2}');
+    expect(editor()).toHaveValue('ad 1');
+    await user.keyboard('{Shift>}{Enter}{/Shift}x');
+    expect(editor()).toHaveValue('ad 1\nx');
+    await user.keyboard('{Escape}');
+    expect(onDuzenle).not.toHaveBeenCalled();
+    expect(cell(0, 1)).toHaveFocus();
+  });
+
+  it('çift tık açar; Tab kaydedip sağa, Shift+Tab kaydedip sola geçer', async () => {
+    const { user, onDuzenle } = editable();
+    await user.dblClick(cell(1, 1));
+    await user.keyboard('2{Tab}');
+    expect(onDuzenle).toHaveBeenLastCalledWith(1, 1, 'ad 22');
+    expect(cell(1, 2)).toHaveFocus();
+    await user.keyboard('{F2}z{Shift>}{Tab}{/Shift}');
+    expect(onDuzenle).toHaveBeenLastCalledWith(1, 2, 'z');
+    expect(cell(1, 1)).toHaveFocus();
+  });
+
+  it('dokunmadan kapatılan NULL hücre boş metne dönmez', async () => {
+    const { user, onDuzenle } = editable();
+    await user.click(cell(0, 2));
+    await user.keyboard('{F2}{Enter}');
+    expect(onDuzenle).not.toHaveBeenCalled();
+  });
+
+  it('düzenleme kapalıyken yazmak düzenleyici açmaz; F2 salt okunur açar ve nedenini söyler', async () => {
+    const { user } = setup();
+    await user.click(cell(0, 1));
+    await user.keyboard('x');
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+    await user.keyboard('{F2}');
+    expect(editor()).toHaveAttribute('readonly');
+    expect(screen.getByRole('note')).toHaveTextContent('Konsol sonuçları salt okunur');
+    expect(editor()).toHaveAccessibleDescription(expect.stringContaining('salt okunur'));
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('note')).not.toBeInTheDocument();
+  });
+});

@@ -1,8 +1,27 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Connection } from '../../core/baglanti';
+import {
+  NO_CHANGES,
+  editCell,
+  editableTable,
+  failedRowKey,
+  isCellChanged,
+  pendingScript,
+  rowKey,
+  shownRow,
+  type EditableTable,
+  type PendingChanges,
+  type PendingRow,
+} from '../../core/grid/bekleyen';
+import { typeName } from '../../core/grid/tipler';
+import { startDecision, type DecisionTimer } from '../../core/karar-suresi';
 import { filterCompletion, typeMap } from '../../core/katalog';
 import type { TableTab } from '../../core/konsol-sekmeleri';
-import { ROW_LIMIT_MESSAGE } from '../../core/script-calistirma';
+import { ROW_LIMIT_MESSAGE, applyEvent, startRunView, targetLock, type RunView } from '../../core/script-calistirma';
+import { writeLockState } from '../../core/yazma-kilidi';
+import { KararKarti } from '../script/KararKarti';
+import { WRITE_LOCK_LABELS } from '../script/durum';
+import type { ScriptRunHandle } from '../api/client';
 import {
   BOX_LABELS,
   OFFSET_NOTE,
@@ -34,11 +53,18 @@ interface Props {
   onRefreshCatalog: () => Promise<unknown>;
   /** Uygulanan `WHERE` / `ORDER BY` sekmeye (ve diske) yazılır. */
   onFilterChange: (filter: TableFilter) => void;
+  /** Bu sekmenin Yazma kilidi açık mı (sekme ve hedef başına; sahibi konsoldur). */
+  writeMode: boolean;
+  onToggleWriteMode: () => void;
+  /** Hedef kilidinin nedeni değişti: "Uygula" çalışırken ve karar beklenirken hedef değişmez. */
+  onTargetLockChange?: (reason: string | null) => void;
+  /** Bekleyen değişiklik sayısı değişti (kapatma uyarısı için); sekme kapanınca 0. */
+  onPendingChange?: (count: number) => void;
   hidden: boolean;
 }
 
 /** Yüklü sayfalar: ilk sayfanın kolonları ve notu, eklenen satırlar, sonraki sayfanın durumu. */
-type Loaded = Pick<TablePageResponse, 'kolonlar' | 'tipler' | 'tutarlilikNotu'> &
+type Loaded = Pick<TablePageResponse, 'kolonlar' | 'tipler' | 'pk' | 'tutarlilikNotu'> &
   LoadedRows & {
     /** Bu sayfaları üreten filtre; sonraki sayfalar onunla istenir. */
     filtre: TableFilter;
@@ -78,13 +104,38 @@ function queryError(err: unknown): QueryError | null {
 
 const BOXES: readonly FilterBox[] = ['where', 'orderBy'];
 
+const APPLYING_REASON = 'Bekleyen değişiklikler uygulanıyor; bitene kadar düzenlenemez.';
+
+/** Bekleyen değişiklikler listesinde satır: `pk = değer`, değişen kolonlar. */
+function pendingLabel(table: EditableTable, row: PendingRow): string {
+  const key = table.pk.map((k) => `${k} = ${row.orijinal[table.kolonlar.indexOf(k)] ?? 'NULL'}`).join(', ');
+  const cols = [...row.degerler.keys()].sort((a, b) => a - b).map((c) => table.kolonlar[c]);
+  return `${key} · ${cols.join(', ')}`;
+}
+
 /**
  * Tablo sekmesi: editörsüz, başlıkta `≈ N satır`, serbest `WHERE` / `ORDER BY` kutuları, altında
  * grid. Her sayfa sunucuda kısa, ayrı, salt okunur, tek ifadelik bir sorgudur; sekme açık
  * transaction tutmaz. Sona yaklaşınca sonraki sayfa istenir. Geri gelen sekme bağlanmaz: veri
  * "Yükle" ile çekilir.
+ *
+ * PK'lı tabloda hücreler düzenlenir; düzenlemeler Bekleyen değişiklik olarak birikir, sağ sütunda
+ * liste ve üretilen SQL sürekli görünür. "Uygula" o SQL'i bu sekmede mevcut Script çalıştırıcıyla
+ * Transaction modunda, her ifade tam 1 satır etkileyecek şekilde çalıştırır (karar kartı).
  */
-export function TabloSekmesi({ tab, target, autoLoad, catalog, onRefreshCatalog, onFilterChange, hidden }: Props) {
+export function TabloSekmesi({
+  tab,
+  target,
+  autoLoad,
+  catalog,
+  onRefreshCatalog,
+  onFilterChange,
+  writeMode,
+  onToggleWriteMode,
+  onTargetLockChange,
+  onPendingChange,
+  hidden,
+}: Props) {
   const api = useApi();
   const [view, setView] = useState<View>({ durum: 'bekliyor' });
   /** İlk sayfa yolda; varsa önceki sonuç görünmeye devam eder. */
@@ -121,13 +172,13 @@ export function TabloSekmesi({ tab, target, autoLoad, catalog, onRefreshCatalog,
           if (current.current !== gen) return;
           if (persist) onFilterChangeRef.current(filtre);
           if (page.satirTahmini !== undefined) setEstimate(page.satirTahmini);
-          const { kolonlar, tipler, tutarlilikNotu } = page;
+          const { kolonlar, tipler, pk, tutarlilikNotu } = page;
           setLoading(false);
           setError(null);
           setGridKey(gen);
           setView({
             durum: 'hazir',
-            sayfa: { kolonlar, tipler, tutarlilikNotu, filtre, ...appendPage([], page), yukleniyor: false, hata: null },
+            sayfa: { kolonlar, tipler, pk, tutarlilikNotu, filtre, ...appendPage([], page), yukleniyor: false, hata: null },
           });
         },
         (err: unknown) => {
@@ -215,6 +266,106 @@ export function TabloSekmesi({ tab, target, autoLoad, catalog, onRefreshCatalog,
   const sayfa = view.durum === 'hazir' ? view.sayfa : null;
   const siralama = useMemo(() => (sayfa ? headerSort(sayfa.kolonlar, sayfa.filtre.orderBy) : null), [sayfa]);
 
+  // ---------- Bekleyen değişiklikler ve Uygula ----------
+
+  /** PK'lı tabloda düzenlenebilir tablo; PK kolonlarından biri sonuçta yoksa da kapalı. */
+  const editable = useMemo(() => {
+    if (!sayfa) return null;
+    const tipler = sayfa.tipler.map((oid) => typeName(oid, tipAdlari));
+    return editableTable({ sema: tab.sema, tablo: tab.tablo, kolonlar: sayfa.kolonlar, tipler, pk: sayfa.pk });
+    // Sayfa eklendikçe `sayfa` değişir; tablo yalnızca kolonlar/PK/tiplerle değişir.
+  }, [sayfa?.kolonlar, sayfa?.tipler, sayfa?.pk, tipAdlari, tab.sema, tab.tablo]);
+  const table = editable && !('kapali' in editable) ? editable : null;
+  /** Diske yazılmaz; sekme kapanınca kaybolur (kapatırken uyarılır). */
+  const [changes, setChanges] = useState<PendingChanges>(NO_CHANGES);
+  const script = useMemo(() => (table ? pendingScript(table, changes) : { metin: '', ifadeler: [] }), [table, changes]);
+  const [run, setRun] = useState<RunView | null>(null);
+  const [deadline, setDeadline] = useState<DecisionTimer | null>(null);
+  const handle = useRef<ScriptRunHandle | null>(null);
+  const busy = run?.evre === 'calisiyor' || run?.evre === 'karar';
+  const lock = target ? writeLockState(target.connection.envTag, writeMode) : null;
+  const count = changes.satirlar.length;
+
+  // Sekme kapanırsa açık transaction sunucuda geri alınır (ADR-0002).
+  useEffect(() => () => handle.current?.close(), []);
+
+  const lockReason = targetLock(run);
+  useEffect(() => onTargetLockChange?.(lockReason), [lockReason, onTargetLockChange]);
+  useEffect(() => () => onTargetLockChange?.(null), [onTargetLockChange]);
+  const onPendingChangeRef = useRef(onPendingChange);
+  onPendingChangeRef.current = onPendingChange;
+  useEffect(() => onPendingChangeRef.current?.(count), [count]);
+  useEffect(
+    () => () => {
+      onPendingChangeRef.current?.(0);
+    },
+    [],
+  );
+  // Tarayıcı sekmesi kapanırken de uyarılır.
+  useEffect(() => {
+    if (count === 0) return;
+    const warn = (e: BeforeUnloadEvent) => e.preventDefault();
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [count]);
+
+  /** Commit sonrası sayfa uygulanan filtreyle yeniden çekilir; olay geri çağrısı güncel `load`'u buradan okur. */
+  const reloadAfterCommit = useRef(() => {});
+  reloadAfterCommit.current = () => load(applied);
+
+  /**
+   * "Uygula": önizlemedeki script bu sekmede Transaction modunda, her ifade tam 1 satır etkileyecek
+   * şekilde çalışır; ek onay yok. Commit → bekleyenler temizlenir, sayfa yeniden çekilir;
+   * rollback ya da hata → bekleyenler kalır.
+   */
+  function applyChanges() {
+    if (!target || busy || script.metin === '' || lock === 'salt-okunur') return;
+    const metin = script.metin;
+    setRun(startRunView(metin));
+    setDeadline(null);
+    const request = { target: { connectionId: target.connection.id, database: target.database }, script: metin, yazmaModu: writeMode, deneme: false, beklenenSatir: 1 as const };
+    handle.current = api.runScript(request, (event) => {
+      setRun((current) => (current ? applyEvent(current, event) : current));
+      if (event.type === 'kararBekleniyor' || event.type === 'uzatildi') setDeadline(startDecision(event.kalanMs, Date.now()));
+      if (event.type === 'bitti' && event.sonuc === 'commit') {
+        setChanges(NO_CHANGES);
+        reloadAfterCommit.current();
+      }
+    });
+  }
+
+  function requestDecision(type: 'commit' | 'rollback' | 'uzat') {
+    handle.current?.send({ type });
+    setRun((current) => (current ? { ...current, bekleyenIstek: type, uyari: undefined } : current));
+  }
+
+  /** Son uygulamada hata alan ifadenin satırı; bekleyenler o andan beri değişmediyse. */
+  const failed = useMemo(() => {
+    if (!run || run.script !== script.metin) return null;
+    const s = run.ifadeler.find((x) => x.hata);
+    const satir = s ? failedRowKey(script, s.i) : null;
+    return s?.hata && satir ? { satir, mesaj: s.hata.mesaj } : null;
+  }, [run, script]);
+
+  const shownRows = useMemo(() => {
+    if (!sayfa || !table || count === 0) return sayfa?.satirlar ?? [];
+    return sayfa.satirlar.map((row) => shownRow(table, changes, row) as (string | null)[]);
+  }, [sayfa, table, changes, count]);
+
+  const failedRows = useMemo(() => {
+    if (!failed || !sayfa || !table) return undefined;
+    const rows = new Set<number>();
+    sayfa.satirlar.forEach((row, r) => rowKey(table, row) === failed.satir && rows.add(r));
+    return rows;
+  }, [failed, sayfa, table]);
+
+  const loadedRows = sayfa?.satirlar;
+  const editCellAt = (r: number, c: number, deger: string) => {
+    const row = loadedRows?.[r];
+    if (table && row) setChanges((current) => editCell(table, current, row, c, deger));
+  };
+  const changedAt = (r: number, c: number) => (table && loadedRows?.[r] ? isCellChanged(table, changes, loadedRows[r], c) : false);
+
   /**
    * Kolon başlığı: gösterilen sonucun filtresiyle (uygulanmamış `WHERE` taslağı uygulanmaz) sıralama
    * döngüsü; `ORDER BY` kutusu yeni sıralamayı gösterir.
@@ -269,45 +420,101 @@ export function TabloSekmesi({ tab, target, autoLoad, catalog, onRefreshCatalog,
         ))}
         {errorLine(null)}
       </div>
-      {!target && <p className="soluk kucuk">Bu Tablo sekmesinin hedefi yok: bağlantısı silinmiş.</p>}
-      {target && view.durum === 'bekliyor' && !loading && (
-        <div className="tablo-yukle">
-          <p className="soluk kucuk">Tablo henüz yüklenmedi; yüklemek hedefe bağlanır.</p>
-          <button type="button" onClick={() => load(applied)}>
-            Yükle
-          </button>
+      <div className={`tablo-govde${table ? ' duzenlenebilir' : ''}`}>
+        <div className="tablo-sol">
+          {!target && <p className="soluk kucuk">Bu Tablo sekmesinin hedefi yok: bağlantısı silinmiş.</p>}
+          {target && view.durum === 'bekliyor' && !loading && (
+            <div className="tablo-yukle">
+              <p className="soluk kucuk">Tablo henüz yüklenmedi; yüklemek hedefe bağlanır.</p>
+              <button type="button" onClick={() => load(applied)}>
+                Yükle
+              </button>
+            </div>
+          )}
+          {loading && !sayfa && <p className="soluk kucuk">Yükleniyor…</p>}
+          {view.durum === 'hata' && !loading && (
+            <p role="alert" className="uyari-metni kucuk">
+              {view.hata}
+            </p>
+          )}
+          {sayfa && (
+            <>
+              <p className="soluk kucuk tablo-durumu">
+                {complete(sayfa) ? `${sayfa.satirlar.length} satır` : `ilk ${sayfa.satirlar.length} satır gösteriliyor`}
+                {loading && ' · Yükleniyor…'}
+                {sayfa.yukleniyor && ' · Satırlar yükleniyor…'}
+                {sayfa.sinir && ` · ${ROW_LIMIT_MESSAGE}`}
+                {sayfa.hata && ` · ${sayfa.hata}`}
+                {sayfa.tutarlilikNotu && ` · ${OFFSET_NOTE}`}
+              </p>
+              {editable && 'kapali' in editable && <p className="soluk kucuk">{editable.kapali}</p>}
+              {busy && table && <p className="soluk kucuk">{APPLYING_REASON}</p>}
+              <SonucGridi
+                key={gridKey}
+                etiket={`${name} satırları`}
+                kolonlar={sayfa.kolonlar}
+                tipler={sayfa.tipler}
+                tipAdlari={tipAdlari}
+                satirlar={shownRows}
+                toplamSatir={complete(sayfa) ? sayfa.satirlar.length : null}
+                onSonaYaklasti={loadMore}
+                onKolonTikla={(c) => sortBy(sayfa, sayfa.kolonlar[c]!)}
+                siralama={siralama}
+                onDuzenle={table && !busy ? editCellAt : undefined}
+                saltOkunurNedeni={editable && 'kapali' in editable ? editable.kapali : APPLYING_REASON}
+                degisti={changedAt}
+                hataliSatirlar={failedRows}
+              />
+            </>
+          )}
         </div>
-      )}
-      {loading && !sayfa && <p className="soluk kucuk">Yükleniyor…</p>}
-      {view.durum === 'hata' && !loading && (
-        <p role="alert" className="uyari-metni kucuk">
-          {view.hata}
-        </p>
-      )}
-      {sayfa && (
-        <>
-          <p className="soluk kucuk tablo-durumu">
-            {complete(sayfa) ? `${sayfa.satirlar.length} satır` : `ilk ${sayfa.satirlar.length} satır gösteriliyor`}
-            {loading && ' · Yükleniyor…'}
-            {sayfa.yukleniyor && ' · Satırlar yükleniyor…'}
-            {sayfa.sinir && ` · ${ROW_LIMIT_MESSAGE}`}
-            {sayfa.hata && ` · ${sayfa.hata}`}
-            {sayfa.tutarlilikNotu && ` · ${OFFSET_NOTE}`}
-          </p>
-          <SonucGridi
-            key={gridKey}
-            etiket={`${name} satırları`}
-            kolonlar={sayfa.kolonlar}
-            tipler={sayfa.tipler}
-            tipAdlari={tipAdlari}
-            satirlar={sayfa.satirlar}
-            toplamSatir={complete(sayfa) ? sayfa.satirlar.length : null}
-            onSonaYaklasti={loadMore}
-            onKolonTikla={(c) => sortBy(sayfa, sayfa.kolonlar[c]!)}
-            siralama={siralama}
-          />
-        </>
-      )}
+        {table && (
+          <aside aria-label="Bekleyen değişiklikler sütunu" className="calistirma-sutunu bekleyen-sutunu">
+            <section aria-label="SQL önizlemesi" className="sql-onizlemesi">
+              {count === 0 ? (
+                <p className="soluk kucuk">Bekleyen değişiklik yok. Hücreyi düzenlemek için yazmaya başlayın, F2 ya da çift tık.</p>
+              ) : (
+                <>
+                  <ul aria-label="Bekleyen değişiklikler" className="bekleyen-listesi kucuk">
+                    {changes.satirlar.map((row) => (
+                      <li key={row.anahtar} className={failed?.satir === row.anahtar ? 'hatali' : undefined}>
+                        {pendingLabel(table, row)}
+                        {failed?.satir === row.anahtar && <span className="ifade-hatasi"> — {failed.mesaj}</span>}
+                      </li>
+                    ))}
+                  </ul>
+                  <pre className="uretilen-sql kucuk">{script.metin}</pre>
+                </>
+              )}
+            </section>
+            <div className="script-cubugu">
+              {lock && (
+                // Tek tık; onay yok. Açık transaction'ın kilidi değişmez.
+                <button
+                  type="button"
+                  className={`kilit-dugmesi ${lock}`}
+                  aria-pressed={lock === 'yazma-acik'}
+                  title={WRITE_LOCK_LABELS[lock].eylem}
+                  onClick={onToggleWriteMode}
+                  disabled={busy}
+                >
+                  {WRITE_LOCK_LABELS[lock].rozet}
+                </button>
+              )}
+              <button
+                type="button"
+                className="birincil"
+                title={lock === 'salt-okunur' ? 'Salt okunur prod: yazma kilidini açın' : 'Bekleyen değişiklikleri Transaction modunda çalıştır'}
+                onClick={applyChanges}
+                disabled={busy || count === 0 || lock === 'salt-okunur'}
+              >
+                Uygula
+              </button>
+            </div>
+            <KararKarti run={run} deadline={run?.evre === 'karar' ? deadline : null} onRequest={requestDecision} />
+          </aside>
+        )}
+      </div>
     </section>
   );
 }

@@ -19,8 +19,10 @@ export type ClientMessage =
    * `yazmaModu`: prod hedefte yazma kilidi açık; prod olmayan hedefte etkisizdir. `deneme`: Deneme
    * modu; transaction sonunda karar beklenmeden her zaman geri alınır. `zorlaTransaction`: içerik
    * Okuma çıksa da Transaction modunda çalıştır (25006 sonrası); yalnızca bu yönde etkilidir.
+   * `beklenenSatir: 1`: her ifade tam 1 satır etkilemeli; etkilemezse ifade `satirSayisi` hatasıyla
+   * düşer (yalnızca Tablo sekmesinin Bekleyen değişiklik script'leri).
    */
-  | { type: 'run'; target: Target; script: string; yazmaModu: boolean; deneme: boolean; zorlaTransaction?: boolean }
+  | { type: 'run'; target: Target; script: string; yazmaModu: boolean; deneme: boolean; zorlaTransaction?: boolean; beklenenSatir?: 1 }
   | { type: 'commit' }
   | { type: 'rollback' }
   /** Karar süresini baştan başlatır. */
@@ -49,7 +51,16 @@ export function parseClientMessage(raw: unknown): ClientMessage | null {
     // Belirsiz değer Deneme sayılmaz; normal çalıştırma da karar bekler, kendiliğinden commit etmez.
     deneme: m.deneme === true,
     ...(m.zorlaTransaction === true && { zorlaTransaction: true }),
+    // Yalnızca `1` tanınır; başka değer denetimsiz çalıştırmadır.
+    ...(m.beklenenSatir === 1 && { beklenenSatir: 1 as const }),
   };
+}
+
+/** Bekleyen değişikliğin ifadesi beklenen satır sayısını etkilemedi (`error.tur: 'satirSayisi'`). */
+export const ROW_COUNT_ERROR = 'satirSayisi';
+
+export function rowCountMessage(etkilenen: number | null): string {
+  return `Satır değişmiş ya da silinmiş (${etkilenen ?? 'bilinmeyen sayıda'} satır etkilendi)`;
 }
 
 // ---------- Sunucu → istemci ----------
@@ -117,7 +128,22 @@ export type ServerEvent =
    * satırların tamamıdır.
    */
   | ({ type: 'done'; i: number; rowCount: number | null; ms: number; komut: string; onizleme?: Preview } & DenemeOutput)
-  | { type: 'error'; i: number; sqlstate: string | null; mesaj: string; satir: number; sutun: number; bas: number; bit: number; ms: number }
+  /**
+   * `tur: 'satirSayisi'`: Postgres hatası değil; ifade `beklenenSatir`'dan farklı sayıda satır
+   * etkiledi (SQLSTATE yok). Transaction hatalı sayılır, yalnızca geri alınabilir.
+   */
+  | {
+      type: 'error';
+      i: number;
+      sqlstate: string | null;
+      mesaj: string;
+      satir: number;
+      sutun: number;
+      bas: number;
+      bit: number;
+      ms: number;
+      tur?: typeof ROW_COUNT_ERROR;
+    }
   /** Script bitti, transaction açık; hatadan sonra commit edilemez. `kalanMs`: Karar süresi. */
   | { type: 'kararBekleniyor'; commitEdilebilir: boolean; kalanMs: number }
   /**
@@ -186,6 +212,8 @@ export interface StatementView extends DenemeOutput {
     sutun: number;
     bas: number;
     bit: number;
+    /** Satır sayısı hatası (bkz. `error.tur`). */
+    tur?: typeof ROW_COUNT_ERROR;
     /** Hatanın nasıl giderileceği; ör. desende olmayan transaction dışı komut (`25001`). */
     ipucu?: string;
     /** Okuma deseni yanıldı (`25006`): Transaction modunda yeniden çalıştırma önerilir. */

@@ -1566,6 +1566,27 @@ button.kucuk {
   user-select: text;
 }
 
+/* Salt okunur kutunun altında düzenlemenin neden kapalı olduğu. */
+.hucre-degeri-notu {
+  position: absolute;
+  z-index: 3;
+  margin: 0;
+  padding: 2px 8px;
+  border: 1px solid var(--vurgu);
+  border-top: 0;
+  background: var(--kenar-zemin);
+  color: var(--soluk);
+  font-family: system-ui, sans-serif;
+}
+
+/* Düzenleyici: satır sayısıyla büyür (`rows`), en az bir hücre yüksekliği. */
+.hucre-degeri.duzenleyici {
+  height: auto;
+  min-height: var(--grid-satir);
+  line-height: 16px;
+  white-space: pre;
+}
+
 /* Oturumluk şifre penceresi: başlıkta bağlantının renk noktası ve adı. */
 .sifre-basligi {
   display: flex;
@@ -2120,9 +2141,60 @@ button.kucuk {
 
 .tablo-durumu,
 .tablo-sekmesi > p,
+.tablo-sol > p,
 .tablo-yukle {
   margin: 0;
   padding: 6px 12px;
+}
+
+/* PK'lı tabloda sağda Bekleyen değişiklikler sütunu; grid solda kalan alanı doldurur. */
+.tablo-govde {
+  display: grid;
+  flex: 1;
+  grid-template-columns: minmax(0, 1fr);
+  min-height: 0;
+}
+
+.tablo-govde.duzenlenebilir {
+  grid-template-columns: minmax(0, 1fr) 360px;
+}
+
+.tablo-sol {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.sql-onizlemesi {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px 12px;
+}
+
+.bekleyen-listesi {
+  margin: 0 0 8px;
+  padding: 0;
+  list-style: none;
+}
+
+.bekleyen-listesi li.hatali {
+  color: var(--uyari);
+}
+
+.uretilen-sql {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.grid-hucresi.degisti {
+  background: color-mix(in srgb, var(--dikkat) 18%, transparent);
+}
+
+.grid-satiri.hatali .grid-hucresi {
+  box-shadow: inset 0 -2px 0 var(--uyari);
 }
 
 .tablo-yukle {

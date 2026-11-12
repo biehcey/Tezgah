@@ -24,6 +24,7 @@ const ids = (from: number, n: number) => Array.from({ length: n }, (_, k) => [St
 const page = (overrides: Partial<TablePageResponse> = {}): TablePageResponse => ({
   kolonlar: ['id'],
   tipler: [23],
+  pk: ['id'],
   satirlar: ids(1, 3),
   sonraki: null,
   tutarlilikNotu: false,

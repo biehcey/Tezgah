@@ -70,6 +70,7 @@ describe('Tablo sayfası: PK’lı tabloda keyset', () => {
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({
       kolonlar: ['id', 'ad'],
+      pk: ['id'],
       tutarlilikNotu: false,
       satirTahmini: 1300,
       sonraki: { tur: 'keyset', degerler: ['500'] },
@@ -97,7 +98,7 @@ describe('Tablo sayfası: PK’sız tabloda OFFSET', () => {
     const id = await createConnection();
     pageRows = range(0, 500).map((i) => [`t${i}`, 'm']);
     const first = await t.api('POST', pageUrl(id), { sema: 'public', tablo: 'log', sonraki: null });
-    expect(first.body).toMatchObject({ tutarlilikNotu: true, satirTahmini: -1, sonraki: { tur: 'offset', offset: 500 } });
+    expect(first.body).toMatchObject({ pk: [], tutarlilikNotu: true, satirTahmini: -1, sonraki: { tur: 'offset', offset: 500 } });
     const second = await t.api('POST', pageUrl(id), { sema: 'public', tablo: 'log', sonraki: first.body.sonraki });
     expect(second.body.sonraki).toEqual({ tur: 'offset', offset: 1000 });
     expect(pageQueries()).toEqual([

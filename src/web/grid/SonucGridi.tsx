@@ -1,5 +1,5 @@
 import { defaultRangeExtractor, useVirtualizer } from '@tanstack/react-virtual';
-import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent, type PointerEvent } from 'react';
+import { useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent, type PointerEvent } from 'react';
 import { NULL_LABEL, cellDisplay, initialColumnWidths, type TextWidth } from '../../core/grid/gosterim';
 import { MIN_COLUMN_WIDTH, PAGE_ROWS } from '../../core/grid/sabitler';
 import { PLACEHOLDER_TABLE, insertStatements } from '../../core/grid/insert';
@@ -19,6 +19,8 @@ const estimateWidth: TextWidth = (metin) => [...metin].length * CHAR_PX;
 export const AUTO_SCROLL_MS = 40;
 /** Tam değer kutusunun en az genişliği (px). */
 const VALUE_BOX_MIN_WIDTH = 320;
+/** Salt okunur tam değer kutusunun yüksekliği (px); CSS `.hucre-degeri` ile aynı. */
+const VALUE_BOX_HEIGHT = 144;
 
 interface Props {
   /** Grid'in erişilebilir adı. */
@@ -41,7 +43,32 @@ interface Props {
   onKolonTikla?: (kolon: number) => void;
   /** Başlıktan konan sıralama; `aria-sort` ve ok olarak görünür. */
   siralama?: { kolon: number; yon: ColumnSort } | null;
+  /**
+   * Verilirse hücreler düzenlenir (Tablo sekmesi): düzenleyici kapanırken kaydedilen ham metin.
+   * Yoksa tam değer salt okunur açılır ve `saltOkunurNedeni` söylenir.
+   */
+  onDuzenle?: (satir: number, kolon: number, deger: string) => void;
+  saltOkunurNedeni?: string;
+  /** Bekleyen değişikliğin işaretleri: değişen hücre ve uygulanırken hata alan satırlar. */
+  degisti?: (satir: number, kolon: number) => boolean;
+  hataliSatirlar?: ReadonlySet<number>;
 }
+
+const READ_ONLY_REASON = 'Konsol sonuçları salt okunur; düzenleme PK’lı tablonun Tablo sekmesinde.';
+
+/** Açık değer kutusu: düzenleyici ya da salt okunur tam değer. */
+interface ValueBox {
+  cell: Cell;
+  metin: string;
+  /** Değer NULL ve henüz dokunulmadı. */
+  null: boolean;
+  duzenle: boolean;
+  /** Kullanıcı metne dokundu (yazmaya başlayarak açmak da sayılır); dokunulmayan kutu kaydedilmez. */
+  kirli: boolean;
+}
+
+/** Düzenleyicinin en fazla satır yüksekliği; sonrası kaydırılır. */
+const EDITOR_MAX_LINES = 10;
 
 const SORT_ARIA = { artan: 'ascending', azalan: 'descending' } as const;
 const SORT_ARROW = { artan: ' ▲', azalan: ' ▼' } as const;
@@ -50,21 +77,41 @@ const SORT_ARROW = { artan: ' ▲', azalan: ' ▼' } as const;
 const NEAR_END_ROWS = 100;
 
 /**
- * Salt okunur sonuç grid'i: yalnızca satırlar sanallaştırılır, satır yüksekliği sabittir. Seçim,
+ * Sonuç grid'i: yalnızca satırlar sanallaştırılır, satır yüksekliği sabittir. Konsol sonuçlarında
+ * salt okunurdur; `onDuzenle` verilince (Tablo sekmesi) hücrenin üstünde büyüyen bir `<textarea>`
+ * düzenleyici açılır: F2, çift tık ya da yazmaya başlama; Enter kaydet + aşağı, Shift+Enter yeni
+ * satır, Esc vazgeç, Tab/Shift+Tab kaydet + yana. Tüm tipler ham metindir. Seçim,
  * gezinme, gösterim ve TSV `core/grid`'dedir; bileşen olayları oraya iletir ve sonucu çizer.
  * Odak roving tabindex ile aktif hücrededir; aktif satır görünümden çıksa da çizilmeye devam eder
  * ki odak kaybolmasın ve klavye gezinmesi sürsün.
  */
-export function SonucGridi({ etiket, kolonlar, tipler, tipAdlari, satirlar, toplamSatir, onSonaYaklasti, onKolonTikla, siralama = null }: Props) {
+export function SonucGridi({
+  etiket,
+  kolonlar,
+  tipler,
+  tipAdlari,
+  satirlar,
+  toplamSatir,
+  onSonaYaklasti,
+  onKolonTikla,
+  siralama = null,
+  onDuzenle,
+  saltOkunurNedeni = READ_ONLY_REASON,
+  degisti,
+  hataliSatirlar,
+}: Props) {
   const olcum = useContext(GridOlcumu);
+  const noteId = useId();
   const scrollRef = useRef<HTMLDivElement>(null);
   const firstPage = satirlar.slice(0, PAGE_ROWS);
   // Ölçü verilmediyse (tarayıcı) genişlik, yazı tipi okunabilsin diye ilk çizimden hemen sonra ölçülür.
   const [measured, setWidths] = useState(() => (olcum.metinGenisligi ? initialColumnWidths(kolonlar, firstPage, olcum.metinGenisligi) : null));
   const widths = measured ?? kolonlar.map(() => MIN_COLUMN_WIDTH);
   const [sel, setSel] = useState<Selection>(() => selectCell({ satir: 0, kolon: 0 }));
-  /** Tam değeri gösterilen hücre (F2 / çift tık). */
-  const [valueCell, setValueCell] = useState<Cell | null>(null);
+  /** F2 / çift tık / yazmaya başlama ile açılan değer kutusu. */
+  const [box, setBox] = useState<ValueBox | null>(null);
+  /** Kutu kapanırken (kaydet ya da vazgeç) gelen blur ikinci kez kaydetmesin. */
+  const boxOpen = useRef(false);
   /** Açık sağ tık menüsü ve açıldığı andaki seçim. */
   const [menu, setMenu] = useState<(MenuPosition & { sel: Selection; key: number }) | null>(null);
   /** Son `contextmenu` sağ fare tuşundan mı geldi (yoksa menü tuşu / Shift+F10). */
@@ -174,15 +221,66 @@ export function SonucGridi({ etiket, kolonlar, tipler, tipAdlari, satirlar, topl
     }
     if (e.key === 'F2') {
       e.preventDefault();
-      setValueCell(sel.aktif);
+      openBox(sel.aktif);
       return;
     }
-    const visible = (virtualizer.scrollRect?.height ?? 0) - HEADER_HEIGHT;
-    const size = { satirlar: satirlar.length, kolonlar: kolonlar.length, sayfa: Math.max(1, Math.floor(visible / ROW_HEIGHT)) };
-    const next = navigate(sel, { tus: e.key, shift: e.shiftKey, ctrl }, size);
+    // Seçili hücrede yazmaya başlamak düzenleyiciyi açar ve değeri o harfle değiştirir.
+    if (onDuzenle && e.key.length === 1 && !ctrl && !e.altKey && satirlar.length > 0) {
+      e.preventDefault();
+      openBox(sel.aktif, e.key);
+      return;
+    }
+    const next = navigate(sel, { tus: e.key, shift: e.shiftKey, ctrl }, gridSize());
     if (!next) return;
     e.preventDefault();
     moveTo(next);
+  }
+
+  function gridSize() {
+    const visible = (virtualizer.scrollRect?.height ?? 0) - HEADER_HEIGHT;
+    return { satirlar: satirlar.length, kolonlar: kolonlar.length, sayfa: Math.max(1, Math.floor(visible / ROW_HEIGHT)) };
+  }
+
+  /** Değer kutusu: düzenlenebilir grid'de düzenleyici, değilse salt okunur tam değer. `yazilan`: yazmaya başlayarak açıldı. */
+  function openBox(cell: Cell, yazilan?: string) {
+    const value = satirlar[cell.satir]?.[cell.kolon] ?? null;
+    boxOpen.current = true;
+    setBox(
+      yazilan === undefined
+        ? { cell, metin: value ?? '', null: value === null, duzenle: onDuzenle !== undefined, kirli: false }
+        : { cell, metin: yazilan, null: false, duzenle: true, kirli: true },
+    );
+  }
+
+  /** Kutuyu kapatır; `save`: dokunulan düzenleme kaydedilir. `move`: ardından seçimin gideceği tuş. */
+  function closeBox(save: boolean, move?: { tus: string; shift: boolean } | 'odaksiz') {
+    if (!box || !boxOpen.current) return;
+    boxOpen.current = false;
+    setBox(null);
+    if (save && box.duzenle && box.kirli) onDuzenle?.(box.cell.satir, box.cell.kolon, box.metin);
+    // Odak grid dışına gittiyse (blur) geri çekilmez.
+    if (move === 'odaksiz') return;
+    const next = move && navigate(selectCell(box.cell), { ...move, ctrl: false }, gridSize());
+    if (next) moveTo(next);
+    else focusPending.current = true;
+  }
+
+  function onBoxKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
+    // Kutudaki tuşlar (oklar, Ctrl+C) grid'de gezinmez.
+    e.stopPropagation();
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      closeBox(false);
+      return;
+    }
+    if (!box?.duzenle) return;
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      closeBox(true, { tus: 'ArrowDown', shift: false });
+    } else if (e.key === 'Tab') {
+      e.preventDefault();
+      closeBox(true, { tus: 'Tab', shift: e.shiftKey });
+    }
   }
 
   function onCellMouseDown(e: MouseEvent, cell: Cell) {
@@ -190,7 +288,8 @@ export function SonucGridi({ etiket, kolonlar, tipler, tipAdlari, satirlar, topl
     if (e.button !== 0) return;
     // Metin seçimi yerine hücre seçimi; odak çizimden sonra aktif hücreye verilir.
     e.preventDefault();
-    setValueCell(null);
+    // Açık düzenleme kaydedilir (blur gelmeden önce; odak hücreye gidecek).
+    closeBox(true);
     setSel((s) => (e.shiftKey ? extendTo(s, cell) : selectCell(cell)));
     focusPending.current = true;
     dragging.current = true;
@@ -222,11 +321,6 @@ export function SonucGridi({ etiket, kolonlar, tipler, tipAdlari, satirlar, topl
     copyText(sql);
   }
 
-  function closeValue() {
-    setValueCell(null);
-    focusPending.current = true;
-  }
-
   function onResizeStart(e: PointerEvent<HTMLElement>, kolon: number) {
     e.preventDefault();
     e.stopPropagation();
@@ -241,8 +335,6 @@ export function SonucGridi({ etiket, kolonlar, tipler, tipAdlari, satirlar, topl
     setWidths(widths.map((w, i) => (i === r.kolon ? genislik : w)));
   }
 
-  const value = valueCell ? (satirlar[valueCell.satir]?.[valueCell.kolon] ?? null) : null;
-
   return (
     <>
       <div
@@ -252,7 +344,7 @@ export function SonucGridi({ etiket, kolonlar, tipler, tipAdlari, satirlar, topl
         aria-rowcount={toplamSatir === null ? -1 : toplamSatir + 1}
         aria-colcount={kolonlar.length}
         aria-multiselectable="true"
-        aria-readonly="true"
+        aria-readonly={onDuzenle ? undefined : 'true'}
         className="sonuc-gridi"
         style={{ '--grid-satir': `${ROW_HEIGHT}px`, '--grid-baslik': `${HEADER_HEIGHT}px` } as CSSProperties}
         onKeyDown={onKeyDown}
@@ -300,13 +392,22 @@ export function SonucGridi({ etiket, kolonlar, tipler, tipAdlari, satirlar, topl
             {items.map((item) => {
               const r = item.index;
               const row = satirlar[r]!;
+              const failed = hataliSatirlar?.has(r) ?? false;
               return (
-                <div key={r} role="row" aria-rowindex={r + 2} className="grid-satiri grid-veri-satiri" style={{ transform: `translateY(${item.start}px)` }}>
+                <div
+                  key={r}
+                  role="row"
+                  aria-rowindex={r + 2}
+                  aria-invalid={failed || undefined}
+                  className={`grid-satiri grid-veri-satiri${failed ? ' hatali' : ''}`}
+                  style={{ transform: `translateY(${item.start}px)` }}
+                >
                   {kolonlar.map((_, c) => {
                     const cell = { satir: r, kolon: c };
                     const shown = cellDisplay(row[c] ?? null);
                     const selected = isSelected(sel, cell);
                     const active = sel.aktif.satir === r && sel.aktif.kolon === c;
+                    const changed = degisti?.(r, c) ?? false;
                     return (
                       <div
                         key={c}
@@ -315,11 +416,11 @@ export function SonucGridi({ etiket, kolonlar, tipler, tipAdlari, satirlar, topl
                         aria-selected={selected}
                         tabIndex={active ? 0 : -1}
                         data-hucre={`${r}:${c}`}
-                        className={`grid-hucresi${shown.null ? ' null' : ''}${selected ? ' secili' : ''}${active ? ' aktif' : ''}`}
+                        className={`grid-hucresi${shown.null ? ' null' : ''}${selected ? ' secili' : ''}${active ? ' aktif' : ''}${changed ? ' degisti' : ''}`}
                         style={{ width: widths[c] }}
                         onMouseDown={(e) => onCellMouseDown(e, cell)}
                         onMouseEnter={() => onCellMouseEnter(cell)}
-                        onDoubleClick={() => setValueCell(cell)}
+                        onDoubleClick={() => openBox(cell)}
                         onContextMenu={(e) => onCellContextMenu(e, cell)}
                       >
                         {shown.null ? NULL_LABEL : shown.metin}
@@ -330,29 +431,43 @@ export function SonucGridi({ etiket, kolonlar, tipler, tipAdlari, satirlar, topl
               );
             })}
           </div>
-          {valueCell && (
+          {box && (
             <textarea
-              className="hucre-degeri"
-              readOnly
+              className={`hucre-degeri${box.duzenle ? ' duzenleyici' : ''}`}
+              readOnly={!box.duzenle}
+              aria-describedby={box.duzenle ? undefined : noteId}
               autoFocus
-              aria-label={`${kolonlar[valueCell.kolon]} değeri`}
-              value={value ?? ''}
-              placeholder={value === null ? NULL_LABEL : undefined}
+              aria-label={`${kolonlar[box.cell.kolon]} değeri`}
+              value={box.metin}
+              placeholder={box.null ? NULL_LABEL : undefined}
+              // Düzenleyici içerikle büyür; salt okunur kutu sabit yükseklikte kaydırılır.
+              rows={box.duzenle ? Math.min(Math.max(box.metin.split('\n').length, 1), EDITOR_MAX_LINES) : undefined}
               style={{
-                top: HEADER_HEIGHT + valueCell.satir * ROW_HEIGHT,
-                left: offsets[valueCell.kolon],
-                width: Math.max(widths[valueCell.kolon]!, VALUE_BOX_MIN_WIDTH),
+                top: HEADER_HEIGHT + box.cell.satir * ROW_HEIGHT,
+                left: offsets[box.cell.kolon],
+                width: Math.max(widths[box.cell.kolon]!, VALUE_BOX_MIN_WIDTH),
               }}
-              onKeyDown={(e) => {
-                // Kutudaki tuşlar (oklar, Ctrl+C) grid'de gezinmez.
-                e.stopPropagation();
-                if (e.key === 'Escape') {
-                  e.preventDefault();
-                  closeValue();
-                }
-              }}
-              onBlur={() => setValueCell(null)}
+              onFocus={(e) => e.currentTarget.setSelectionRange(e.currentTarget.value.length, e.currentTarget.value.length)}
+              onChange={(e) => setBox({ ...box, metin: e.target.value, null: false, kirli: true })}
+              onKeyDown={onBoxKeyDown}
+              // Başka yere tıklamak düzenlemeyi kaydeder (IntelliJ gibi); Esc vazgeçer.
+              onBlur={() => closeBox(true, 'odaksiz')}
             />
+          )}
+          {box && !box.duzenle && (
+            // Düzenlemenin neden kapalı olduğu kutunun hemen altında.
+            <p
+              id={noteId}
+              role="note"
+              className="hucre-degeri-notu kucuk"
+              style={{
+                top: HEADER_HEIGHT + box.cell.satir * ROW_HEIGHT + VALUE_BOX_HEIGHT,
+                left: offsets[box.cell.kolon],
+                width: Math.max(widths[box.cell.kolon]!, VALUE_BOX_MIN_WIDTH),
+              }}
+            >
+              {saltOkunurNedeni}
+            </p>
           )}
         </div>
       </div>

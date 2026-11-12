@@ -1,4 +1,5 @@
-import { useCallback } from 'react';
+import { useCallback, useRef, useState } from 'react';
+import { Onay } from '../ortak/Onay';
 import type { Connection } from '../../core/baglanti';
 import { sessionTabs, type ConsoleState, type OpenTab, type SessionTab, type TabTarget } from '../../core/konsol-sekmeleri';
 import type { HistoryEntry } from '../../core/gecmis-filtresi';
@@ -84,6 +85,21 @@ export function Konsol({
 }: Props) {
   const openSessions = new Set(Object.keys(targetLocks));
   const activeTarget = resolveTarget(state.tabs.find((t) => t.id === state.active)?.hedef ?? null, connections);
+  /** Tablo sekmesi başına bekleyen değişiklik sayısı; diske yazılmaz. */
+  const [pending, setPending] = useState<Readonly<Record<string, number>>>({});
+  /** Bekleyen değişikliği olduğu için kapatılmadan önce sorulan sekme. */
+  const [closing, setClosing] = useState<string | null>(null);
+  // Sekme başına sabit geri çağrılar: sekmenin efektleri her çizimde yeniden çalışmasın.
+  const lockChangers = useCallbacksById((id: string, reason: string | null) => onTargetLockChange(id, reason));
+  const pendingChangers = useCallbacksById((id: string, count: number) =>
+    setPending((p) => {
+      if ((p[id] ?? 0) === count) return p;
+      const { [id]: _old, ...rest } = p;
+      return count === 0 ? rest : { ...rest, [id]: count };
+    }),
+  );
+  const requestClose = (id: string) => ((pending[id] ?? 0) > 0 ? setClosing(id) : onClose(id));
+  const closingTab = closing ? state.tabs.find((t) => t.id === closing) : undefined;
   return (
     <div className="konsol" hidden={hidden}>
       <div className="konsol-seridi">
@@ -115,7 +131,7 @@ export function Konsol({
                   className="ikon-dugme sekme-kapat"
                   aria-label={`${title} sekmesini kapat`}
                   title="Sekmeyi kapat"
-                  onClick={() => onClose(tab.id)}
+                  onClick={() => requestClose(tab.id)}
                 >
                   ×
                 </button>
@@ -145,6 +161,10 @@ export function Konsol({
                     target ? onCatalog({ connectionId: target.connection.id, database: target.database }, 'yenile') : Promise.resolve()
                   }
                   onFilterChange={(filter) => onTableFilterChange(tab.id, filter)}
+                  writeMode={tab.yazmaModu}
+                  onToggleWriteMode={() => onToggleWriteMode(tab.id)}
+                  onTargetLockChange={lockChangers(tab.id)}
+                  onPendingChange={pendingChangers(tab.id)}
                   hidden={tab.id !== state.active}
                 />
               );
@@ -176,8 +196,35 @@ export function Konsol({
           />
         )}
       </div>
+      {closingTab?.tur === 'tablo' && (
+        <Onay
+          title={`“${closingTab.tablo}” sekmesi kapatılsın mı?`}
+          description={`${pending[closingTab.id] ?? 0} bekleyen değişiklik uygulanmadı; sekme kapanınca kaybolur.`}
+          confirmLabel="Kapat"
+          onConfirm={async () => {
+            setClosing(null);
+            onClose(closingTab.id);
+          }}
+          onCancel={() => setClosing(null)}
+        />
+      )}
     </div>
   );
+}
+
+/** Kimlik başına bir kez kurulan, hep güncel `fn`'i çağıran geri çağrılar. */
+function useCallbacksById<A extends unknown[]>(fn: (id: string, ...args: A) => void): (id: string) => (...args: A) => void {
+  const latest = useRef(fn);
+  latest.current = fn;
+  const cache = useRef(new Map<string, (...args: A) => void>());
+  return useCallback((id: string) => {
+    let cb = cache.current.get(id);
+    if (!cb) {
+      cb = (...args: A) => latest.current(id, ...args);
+      cache.current.set(id, cb);
+    }
+    return cb;
+  }, []);
 }
 
 function KonsolSekmesi({
