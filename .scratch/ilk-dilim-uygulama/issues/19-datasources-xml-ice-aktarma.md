@@ -6,7 +6,7 @@ Spec: [İlk dilim spec'i](../../ilk-dilim/spec.md) · Kararlar: dataSources.xml 
 
 **Blocked by:** 05, 17, 18
 
-**Status:** ready-for-agent
+**Status:** done (e9f52d6)
 
 - [ ] core dataSources ayrıştırıcısı (`fast-xml-parser`, IO yok) `dataSources.xml`, `dataSources.local.xml` ve `sshConfigs.xml` metinlerini alıyor ve `uuid` ile birleştiriyor. Okuduğu alanlar: ad, `group`/`group-name`, `read-only`, `jdbc-url` (pgjdbc kuralları; çoklu host'ta yalnızca ilki, `[IPv6]`), `user-name`, `introspection-scope` (`@` = varsayılan, `negative="1"` = tümü), `ssh-properties` (yeni referans ve eski satır içi biçim), `ssl-config`. `$PROJECT_DIR$` ve `$USER_HOME$` makrolarını genişletiyor. Toleranslı; bozuk XML yalnızca o kaynakta hata veriyor.
 - [ ] Eşleme:

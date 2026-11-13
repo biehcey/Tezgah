@@ -6,7 +6,7 @@ Spec: [İlk dilim spec'i](../../ilk-dilim/spec.md) · Kararlar: prod hedefinde d
 
 **Blocked by:** 13, 14
 
-**Status:** ready-for-agent
+**Status:** done (87dc06b)
 
 - [x] Deneme transaction'ı yazma kilidinden bağımsız olarak `BEGIN READ WRITE` ile açılıyor; pool ayarına dokunulmuyor. Sonu her zaman rollback; kullanıcının `COMMIT`'i zaten reddediliyor.
 - [x] prod'da transaction başında `SET LOCAL lock_timeout = '3s'` uygulanıyor. `55P03`'te hatalı satır işaretleniyor ve "kilit alınamadı, prod trafiği bu satırları tutuyor" mesajı gösteriliyor. prod dışında uygulanmıyor. `statement_timeout` yok.

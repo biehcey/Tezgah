@@ -6,7 +6,7 @@ Spec: [İlk dilim spec'i](../../ilk-dilim/spec.md) · Kararlar: Ayar saklama (wa
 
 **Blocked by:** 01
 
-**Status:** ready-for-agent
+**Status:** done (81af7c8)
 
 - [x] Ayar deposu macOS `~/Library/Application Support/Tezgah`, Windows `%APPDATA%\Tezgah` altında sürümlü tek bir dosya kullanıyor (`version`, `folders[]`, `connections[]`). Yazma geçici dosya + rename ile; `version` migration kancası var. Yapılandırma dizini testte enjekte edilebiliyor.
 - [x] Bağlantı modelinde `id` (uuid), ad, klasör, host, port, kullanıcı, başlangıç veritabanı (varsayılan `postgres`), ortam etiketi (`local|dev|test|staging|prod` ya da yok) ve renk, sırların keychain'e kaydedilip kaydedilmeyeceği ve Veritabanı seçimi var. SSL ve SSH alanları sonraki ticket'larda eklenecek.

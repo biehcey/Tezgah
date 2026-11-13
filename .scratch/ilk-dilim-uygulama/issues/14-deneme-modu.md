@@ -6,7 +6,7 @@ Spec: [İlk dilim spec'i](../../ilk-dilim/spec.md) · Kararlar: Deneme modu (way
 
 **Blocked by:** 11
 
-**Status:** ready-for-agent
+**Status:** done (4d8b51b)
 
 - [x] `run{deneme: true}`: son ifadeden ya da hatadan hemen sonra beklemeden rollback yapılıyor; karar kartı yerine "deneme geri alındı" özeti gösteriliyor.
 - [x] core DML yeniden yazımı INSERT/UPDATE/DELETE'e `RETURNING *` ekliyor; kullanıcı zaten `RETURNING` yazmışsa ifadeye dokunulmuyor ve kendi sonucu gösteriliyor. Birim testli.

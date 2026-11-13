@@ -6,7 +6,7 @@ Spec: [İlk dilim spec'i](../../ilk-dilim/spec.md) · Kararlar: Bağlantı ağac
 
 **Blocked by:** 02
 
-**Status:** ready-for-agent
+**Status:** done (96ea2d8)
 
 - [x] Klasörler tek düzey (iç içe değil). Kenar çubuğu başlığındaki düğmeyle oluşturuluyor; başlıkta sağ tıkla yeniden adlandırılıp siliniyor. Silinen klasördeki bağlantılar "Klasörsüz" bölümüne taşınıyor. Klasör başlıkları katlanır ve bağlantı sayısını gösteriyor.
 - [x] Bağlantı sürükle-bırakla ya da menüdeki "Klasöre taşı" ile klasör değiştiriyor.

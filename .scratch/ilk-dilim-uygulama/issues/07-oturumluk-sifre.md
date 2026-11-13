@@ -6,7 +6,7 @@ Spec: [İlk dilim spec'i](../../ilk-dilim/spec.md) · Kararlar: Ayar saklama eki
 
 **Blocked by:** 06
 
-**Status:** ready-for-agent
+**Status:** done (bf7e6ac)
 
 - [x] Formdaki şifre alanının altında "Keychain'e kaydet" var (varsayılan açık). Kapalıyken "her açılışta ilk bağlanmada sorulur, yalnızca bellekte" uyarısı görünüyor ve kapatınca kayıtlı sır siliniyor.
 - [x] Şifre penceresi: bağlantının adı ve rengi, `kullanıcı@host`, şifre alanı, "Tezgah kapanana kadar bellekte tutulur, diske yazılmaz" notu, varsayılan kapalı "Keychain'e kaydet (bağlantı ayarını değiştirir)" seçeneği, `İptal` / `Bağlan`.

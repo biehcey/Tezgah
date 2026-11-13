@@ -6,7 +6,7 @@ Spec: [İlk dilim spec'i](../../ilk-dilim/spec.md) · Kararlar: ADR-0002, İfade
 
 **Blocked by:** 06
 
-**Status:** ready-for-agent
+**Status:** done (afeb7fd)
 
 - [x] core lexer `--` yorumlarını, iç içe `/* */` yorumlarını, `'…'`, `E'…'`, `$tag$…$tag$`, `"ident"` ve `U&'…'` tanıyor; psql `\` meta komutlarını tanıyıp işaretliyor. İfade başına offset, metin ve ilk anahtar kelimeler çıkıyor. Yazımı bozuk ifade bölmeyi engellemiyor. Tablo tabanlı testler var.
 - [x] core hata konumu: `position` + ifade offset'i → satır/sütun; `position` yoksa ifadenin tamamı işaretleniyor. Birim testli.

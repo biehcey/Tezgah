@@ -6,7 +6,7 @@ Spec: [İlk dilim spec'i](../../ilk-dilim/spec.md) · Kararlar: Transaction dı�
 
 **Blocked by:** 09
 
-**Status:** ready-for-agent
+**Status:** done (9c71c3b)
 
 - [x] core script analizi mod, transaction dışı ifadeler ve reddedilen ifadeleri döndürüyor. Desen tablosu spec'teki listenin tamamı; tek başına `ANALYZE` gibi negatif örnekler dahil. Tablo tabanlı testler var.
 - [x] Analiz istemcide debounce ile, sunucuda da her çalıştırmada yapılıyor (istemciye güvenilmiyor); `analiz` olayı gönderiliyor.

@@ -6,7 +6,7 @@ Spec: [İlk dilim spec'i](../../ilk-dilim/spec.md) · Kararlar: SSL alanları (w
 
 **Blocked by:** 04
 
-**Status:** ready-for-agent
+**Status:** done (19584a9)
 
 - [x] Bağlantı modeline `sslmode` (varsayılan `prefer`) ile CA, sertifika ve anahtar yolları ekleniyor.
 - [x] core SSL kurucusu `sslmode`, dosya içerikleri ve gerçek host'tan `pg` `ssl` nesnesini kuruyor: `disable` → `false`; `require` → doğrulamasız (CA varsa `verify-ca` gibi); `verify-ca` → CA zorunlu, host adı kontrolü yok; `verify-full` → `rejectUnauthorized`, `servername` ve `checkServerIdentity(realHost)`. `prefer` yeniden deneme kararı da saf bir fonksiyon. Connection string kullanılmıyor. Her mod için birim testleri var.

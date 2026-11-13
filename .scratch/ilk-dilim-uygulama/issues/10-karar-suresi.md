@@ -6,7 +6,7 @@ Spec: [İlk dilim spec'i](../../ilk-dilim/spec.md) · Kararlar: Commit bekleme z
 
 **Blocked by:** 08, 09
 
-**Status:** ready-for-agent
+**Status:** done (5e13a08)
 
 - [x] core Karar süresi durum makinesi (enjekte zaman) `başlat`, `uzat`, `tik` ve `commit isteği` olaylarına göre kalan süreyi, geri sayım evresini ve "süre doldu" kararını üretiyor. Birim testli.
 - [x] Sunucu zamanlayıcısı yetkili. `BEGIN`'den hemen sonra `SET LOCAL idle_in_transaction_session_timeout` = süre + 1 dk. "Uzat" `SELECT 1` gönderiyor ve süreyi sıfırlıyor. Süre dolunca rollback yapılıyor ve "Süre doldu; transaction geri alındı" mesajı gösteriliyor, log korunuyor. Sonradan gelen commit reddediliyor.

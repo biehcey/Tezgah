@@ -6,7 +6,7 @@ Spec: [İlk dilim spec'i](../../ilk-dilim/spec.md) · Kararlar: Deneme modu (way
 
 **Blocked by:** 14
 
-**Status:** ready-for-agent
+**Status:** done (33d3210)
 
 - [x] Sunucu sürümü ve tablo PK'sı katalogdan tespit ediliyor. PG18+ ve PK varsa `RETURNING old.*, new.*`, yoksa `RETURNING *` kullanılıyor.
 - [x] core fark birleştirme: önce/sonra satırları PK anahtarıyla tablo başına birleştiriliyor. Aynı satıra birden fazla ifade dokunursa ilk "önce" ve son "sonra" alınıyor. Tablo başına sayılar, ilk 100 satır ve değişen kolonlar çıkıyor. Birim testli.

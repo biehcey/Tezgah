@@ -6,7 +6,7 @@ Spec: [İlk dilim spec'i](../../ilk-dilim/spec.md) · Kararlar: SSH kütüphanes
 
 **Blocked by:** 04, 06
 
-**Status:** ready-for-agent
+**Status:** done (4616ba5)
 
 - [x] `ssh2@~1.17.0` devDependency ve tsup ile gömülü; kurulumda install script'i çalışmıyor. Lisans metinleri dağıtımda.
 - [x] Model: `ssh: { host, port=22, user, auth: password|key|agent, keyPath?, agentPath? }`. SSH sırrı keychain'de `<connectionId>:ssh` altında; "Keychain'e kaydet" seçeneği ve oturumluk istem burada da var.

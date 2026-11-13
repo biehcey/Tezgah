@@ -6,7 +6,7 @@ Spec: [İlk dilim spec'i](../../ilk-dilim/spec.md) · Kararlar: Bağlantı ağac
 
 **Blocked by:** 03, 06
 
-**Status:** ready-for-agent
+**Status:** done (fd05b26)
 
 - [x] Gruplar: *Hedefler* (kayıtlı Veritabanı seçiminden, bağlanmadan; prod rozeti; mevcut hedef işaretli), *Gizli veritabanları* (yalnızca bağlı bağlantılarda ve sorgu varken; seçilince görünür yapılıyor), *Komutlar* (yeni bağlantı, yeni klasör, içe aktar, çalıştırma kayıtları klasörünü aç). Henüz olmayan komutlar gizli ya da pasif.
 - [x] Enter hedefi değiştiriyor, Alt+Enter seçimi listede gösteriyor, klavyeyle gezinme çalışıyor.

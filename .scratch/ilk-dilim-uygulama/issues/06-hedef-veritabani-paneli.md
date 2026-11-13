@@ -6,7 +6,7 @@ Spec: [İlk dilim spec'i](../../ilk-dilim/spec.md) · Kararlar: Sunucu modeli (w
 
 **Blocked by:** 02
 
-**Status:** ready-for-agent
+**Status:** done (aaa9a32)
 
 - [x] Hedef başına tembel bir `pg.Pool` açılıyor (en fazla 3 client, 10 dk boşta kalınca kapanıyor). Açılışta bağlantı yok. Bağlantı, panelden bağlanılınca ya da hedef ilk kullanılınca açılıyor.
 - [x] REST: veritabanı listesi (`pg_database`, şablonlar hariç), veritabanı başına şema listesi, Veritabanı seçimini güncelleme, bağlantıyı kesme.

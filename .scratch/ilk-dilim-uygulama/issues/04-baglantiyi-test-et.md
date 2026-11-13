@@ -6,7 +6,7 @@ Spec: [İlk dilim spec'i](../../ilk-dilim/spec.md) · Kararlar: Bağlantı formu
 
 **Blocked by:** 02
 
-**Status:** ready-for-agent
+**Status:** done (5e96d8b)
 
 - [x] Test servisi kaydedilmemiş değerleri alıyor ve adım listesi döndürüyor (`sirlar, ssh, ulasma, tls, kimlik, listeleme`). Her adım `basarili | uyari | hata | calistirilmadi` sonucunu, kodunu (SQLSTATE ya da yapısal), mesajını ve düzeltme önerisi kimliklerini taşıyor. `ssh` adımı tünel yokken atlanıyor.
 - [x] Sırlar adımı yalnızca keychain'den okunacak bir sır varsa koşuyor; "Deny" ile "sır yok" ayrı.

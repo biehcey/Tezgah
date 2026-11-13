@@ -6,7 +6,7 @@ Spec: [İlk dilim spec'i](../../ilk-dilim/spec.md) · Kararlar: prod salt okunur
 
 **Blocked by:** 11
 
-**Status:** ready-for-agent
+**Status:** done (19f5a29)
 
 - [x] prod hedefinin pool'u `options: -c default_transaction_read_only=on` ile açılıyor. Salt okunurken script `BEGIN READ ONLY`, yazma modunda `BEGIN READ WRITE` ile başlıyor.
 - [x] Yazma kilidi editör ve hedef başına, oturum boyunca geçerli ve `run` mesajında gönderiliyor. Rozet 🔒 Salt okunur / 🔓 Yazma açık; ek onay, şerit ya da tema değişimi yok.

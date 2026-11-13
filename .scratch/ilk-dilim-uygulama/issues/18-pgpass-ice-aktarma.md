@@ -6,7 +6,7 @@ Spec: [İlk dilim spec'i](../../ilk-dilim/spec.md) · Kararlar: İçe aktarma ak
 
 **Blocked by:** 03, 04
 
-**Status:** ready-for-agent
+**Status:** done (a697670)
 
 - [ ] core pgpass modülü ayrıştırıyor ve libpq eşlemesini yapıyor (ilk eşleşen satır, `*` joker). Host, port ve kullanıcısı somut satırlar aday oluyor (`db` somutsa başlangıç veritabanı, değilse `postgres`); joker satırlar yalnızca şifre kaynağı. Birim testli.
 - [ ] core gruplama: kimlik anahtarı `(host, port, kullanıcı, SSH host/port/kullanıcı)`; aynı anahtarlı kaynaklar birleşiyor ve Veritabanı seçimi birleşim oluyor. Mevcut bağlantıyla eşleşen aday "zaten var" olarak işaretleniyor. Birim testli. Ticket 19'da IntelliJ kaynaklarıyla da kullanılacak.

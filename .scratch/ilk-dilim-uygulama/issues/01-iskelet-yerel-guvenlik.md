@@ -6,7 +6,7 @@ Spec: [İlk dilim spec'i](../../ilk-dilim/spec.md) · Kararlar: ADR-0001, Paket 
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** done (7470ba4)
 
 - [x] Workspace'siz tek npm paketi; core, server ve web katmanları ayrı. core'un server'ı ya da web'i import etmesi lint hatası veriyor.
 - [x] Vite web'i, tsup server'ı derliyor; `bin` CLI'a işaret ediyor ve server derlenmiş web'i statik servis ediyor. Dev modunda Vite `/api` ve `/ws`'i `tsx watch` ile çalışan sunucuya proxy'liyor. `engines` Node ≥ 22.

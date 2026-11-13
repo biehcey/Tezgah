@@ -6,7 +6,7 @@ Spec: [İlk dilim spec'i](../../ilk-dilim/spec.md) · Kararlar: Çalıştırma g
 
 **Blocked by:** 09
 
-**Status:** ready-for-agent
+**Status:** done (15997e2)
 
 - [x] core kayıt satırları: aynı `runId` ile `başladı` (script, hedef anlık kopyası (bağlantı `id`, ad, veritabanı, ortam etiketi), mod, deneme mi, yazma kilidi) ve `bitti` (sonuç, zamanlar, ifade özetleri: offset, süre, komut etiketi, satır sayısı, hata kodu/mesajı/satırı). Her satırda `v` sürümü var. `bitti` satırı olmayan kayıt "bilinmiyor" olarak çıkıyor. Birim testli.
 - [x] Sonuç değerleri `commit, rollback, deneme-rollback, karar-suresi-doldu, kopma-rollback, hata, iptal`; o an var olan akışlar kullanıyor.
