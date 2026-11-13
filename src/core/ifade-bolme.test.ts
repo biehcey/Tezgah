@@ -102,3 +102,16 @@ describe('positionOf', () => {
     expect(positionOf(script, offset)).toEqual(expected);
   });
 });
+
+describe('splitStatements: çağrı adları (calls)', () => {
+  it.each([
+    ['çıplak ad küçük harfe katlanır', 'SELECT NOW(), Lower(a)', ['now', 'lower']],
+    ['tırnaklı ad olduğu gibi, "" kaçışı çözülür', 'SELECT "Ab""c"(1)', ['Ab"c']],
+    ['şema öneki: son parça', 'SELECT pg_catalog.now()', ['now']],
+    ['anahtar kelime de girer', 'SELECT 1 WHERE a IN (1)', ['in']],
+    ['ad ile ( arasında başka simge varsa çağrı değil', "SELECT a + (1), 'x'(1)", []],
+    ['ifade başına ayrı', 'SELECT f(); SELECT g()', ['f']],
+  ])('%s', (_, script, expected) => {
+    expect(splitStatements(script)[0]!.calls).toEqual(expected);
+  });
+});

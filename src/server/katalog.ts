@@ -1,11 +1,10 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import pg from 'pg';
 import type { Connection } from '../core/baglanti';
-import { classifyListError, toDriverError } from '../core/baglanti-testi';
 import { RELATION_KINDS, buildCatalog, pgBool, type Catalog } from '../core/katalog';
 import { selectionEntry, visibleSchemas } from '../core/veritabani-secimi';
 import type { SettingsStore } from './ayar-deposu';
-import { RAW_TYPES, TargetError, type PoolManager } from './havuzlar';
+import { RAW_TYPES, TargetError, targetQueryError, type PoolManager } from './havuzlar';
 import { json, methodNotAllowed, notFound } from './http';
 
 /** Büyük veritabanlarında katalog okuması panelin kısa sorgularından uzun sürebilir. */
@@ -85,7 +84,7 @@ export function createCatalogCache({ pools }: CatalogCacheDeps) {
       } catch (err) {
         // Transaction açık kalmış olabilir: client pool'a dönmez.
         discard();
-        throw new TargetError({ ...classifyListError(toDriverError(err)), mesaj: `Katalog okunamadı: ${toDriverError(err).message}` });
+        throw targetQueryError(err, 'Katalog');
       }
     });
   }

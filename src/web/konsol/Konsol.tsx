@@ -169,6 +169,7 @@ export function Konsol({
                   onTargetLockChange={lockChangers(tab.id)}
                   onPendingChange={pendingChangers(tab.id)}
                   onExportToConsole={(metin) => onOpenConsole(tab.hedef, metin)}
+                  onCatalog={(reason) => target && void onCatalog({ connectionId: target.connection.id, database: target.database }, reason)}
                   hidden={tab.id !== state.active}
                 />
               );

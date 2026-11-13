@@ -2312,3 +2312,42 @@ button.kucuk {
   text-align: left;
   cursor: pointer;
 }
+
+/* Tablo sekmesinin "+ Kolon" formu: sağ sütunda, bekleyen değişikliklerin yerinde. */
+.kolon-formu {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 8px 12px;
+  overflow: auto;
+}
+
+.kolon-formu h3 {
+  margin: 0 0 8px;
+}
+
+.kolon-formu .alan {
+  margin-bottom: 8px;
+}
+
+.kolon-formu .sql-onizlemesi {
+  flex: none;
+  padding: 8px 0;
+}
+
+.kolon-uyarilari {
+  margin: 0 0 4px;
+  padding: 0;
+  list-style: none;
+  color: var(--dikkat);
+}
+
+.kolon-uyarilari li + li {
+  margin-top: 4px;
+}
+
+.kolon-formu-alt {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 8px;
+}

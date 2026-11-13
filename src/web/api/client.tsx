@@ -14,6 +14,7 @@ import type {
 } from '../../core/baglanti';
 import type { ConnectionTestRequest, ConnectionTestResponse } from '../../core/baglanti-testi';
 import type { Catalog } from '../../core/katalog';
+import type { VolatilityResponse } from '../../core/kolon-ekle';
 import { historySearchParams, type HistoryPage, type HistoryQuery } from '../../core/gecmis-filtresi';
 import type { SavedTabs } from '../../core/konsol-sekmeleri';
 import type { TablePageError, TablePageRequest, TablePageResponse } from '../../core/tablo-sayfasi';
@@ -68,6 +69,8 @@ export interface ApiClient {
    * katalogundan (yoksa okunur). Postgres hatası 400 (`sqlstate`, `konum`) olarak gelir.
    */
   readTablePage(id: string, database: string, request: TablePageRequest): Promise<TablePageResponse>;
+  /** "+ Kolon" lint'i: fonksiyon adı başına oynaklık (`pg_proc`); kısa süreli client, hedefe bağlanır. */
+  functionVolatility(id: string, database: string, fonksiyonlar: readonly string[]): Promise<VolatilityResponse>;
   /**
    * Script'i hedefte çalıştırır; olaylar `onEvent`'e sırayla gelir. Transaction bu çalıştırmaya
    * bağlıdır: `close` ya da sekmenin kapanması açık transaction'ı geri aldırır (ADR-0002).
@@ -184,6 +187,8 @@ export function createHttpApiClient(): ApiClient {
     getCatalog: (id, database) => request(catalogUrl(id, database)),
     refreshCatalog: (id, database) => send('POST', `${catalogUrl(id, database)}/yenile`),
     readTablePage: (id, database, body) => send('POST', `${connectionUrl(id)}/veritabanlari/${encodeURIComponent(database)}/tablo-sayfasi`, body),
+    functionVolatility: (id, database, fonksiyonlar) =>
+      send('POST', `${connectionUrl(id)}/veritabanlari/${encodeURIComponent(database)}/fonksiyon-oynakligi`, { fonksiyonlar }),
     disconnect: async (id) => {
       await send('POST', `${connectionUrl(id)}/baglantiyi-kes`);
     },

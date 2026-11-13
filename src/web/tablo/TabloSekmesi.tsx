@@ -45,6 +45,9 @@ import { ApiError, useApi } from '../api/client';
 import { SonucGridi } from '../grid/SonucGridi';
 import type { CatalogEntry } from '../katalog/kataloglar';
 import { FiltreKutusu } from './FiltreKutusu';
+import { KolonFormu } from './KolonFormu';
+import { tableHasRows } from '../../core/kolon-ekle';
+import type { CatalogReason } from '../katalog/kataloglar';
 
 interface Props {
   tab: TableTab;
@@ -67,6 +70,11 @@ interface Props {
   onPendingChange?: (count: number) => void;
   /** "Konsola aktar": üretilen SQL aynı hedefte yeni konsol sekmesinde açılır. */
   onExportToConsole: (metin: string) => void;
+  /**
+   * Hedefin katalogunu ister: `hedef` "+ Kolon" açılınca (yoksa; kullanıcı tipleri için),
+   * `tazelendi` sunucu DDL commit'inden sonra katalogu tazeleyince (`bitti.katalogYenilendi`).
+   */
+  onCatalog?: (reason: Extract<CatalogReason, 'hedef' | 'tazelendi'>) => void;
   hidden: boolean;
 }
 
@@ -111,8 +119,33 @@ function queryError(err: unknown): QueryError | null {
 
 const BOXES: readonly FilterBox[] = ['where', 'orderBy'];
 
-const APPLYING_REASON = 'Bekleyen değişiklikler uygulanıyor; bitene kadar düzenlenemez.';
-const TRYING_REASON = 'Bekleyen değişiklikler deneniyor; bitene kadar düzenlenemez.';
+/** Sağ sütundan çalıştırılan script: bekleyen değişiklikler ya da "+ Kolon"un ALTER'ı. */
+type RunKind = 'bekleyen' | 'kolon';
+
+const BUSY_REASONS: Record<RunKind, Record<'uygula' | 'dene', string>> = {
+  bekleyen: {
+    uygula: 'Bekleyen değişiklikler uygulanıyor; bitene kadar düzenlenemez.',
+    dene: 'Bekleyen değişiklikler deneniyor; bitene kadar düzenlenemez.',
+  },
+  kolon: {
+    uygula: 'Kolon ekleniyor; bitene kadar düzenlenemez.',
+    dene: 'Kolon ekleme deneniyor; bitene kadar düzenlenemez.',
+  },
+};
+
+/** Eylem çubuğunun düğme ipuçları. */
+const ACTION_TITLES: Record<RunKind, { aktar: string; dene: string; uygula: string }> = {
+  bekleyen: {
+    aktar: 'Bekleyen değişiklikleri yeni konsol sekmesine SQL olarak taşı; burada kalırlar',
+    dene: 'Bekleyen değişiklikleri Deneme modunda çalıştır ve her zaman geri al',
+    uygula: 'Bekleyen değişiklikleri Transaction modunda çalıştır',
+  },
+  kolon: {
+    aktar: "ALTER'ı yeni konsol sekmesine taşı; form açık kalır",
+    dene: "ALTER'ı Deneme modunda çalıştır, şema farkını gör ve geri al",
+    uygula: "ALTER'ı Transaction modunda çalıştır",
+  },
+};
 
 /**
  * Tablo sekmesi: editörsüz, başlıkta `≈ N satır`, serbest `WHERE` / `ORDER BY` kutuları, altında
@@ -138,6 +171,7 @@ export function TabloSekmesi({
   onTargetLockChange,
   onPendingChange,
   onExportToConsole,
+  onCatalog,
   hidden,
 }: Props) {
   const api = useApi();
@@ -292,6 +326,11 @@ export function TabloSekmesi({
   const [goLast, setGoLast] = useState(0);
   const script = useMemo(() => (table ? pendingScript(table, changes) : { metin: '', ifadeler: [] }), [table, changes]);
   const [run, setRun] = useState<RunView | null>(null);
+  const [runKind, setRunKind] = useState<RunKind>('bekleyen');
+  /** "+ Kolon" formu sağ sütunda açık. */
+  const [columnForm, setColumnForm] = useState(false);
+  const onCatalogRef = useRef(onCatalog);
+  onCatalogRef.current = onCatalog;
   const [deadline, setDeadline] = useState<DecisionTimer | null>(null);
   const handle = useRef<ScriptRunHandle | null>(null);
   const busy = run?.evre === 'calisiyor' || run?.evre === 'karar';
@@ -332,20 +371,31 @@ export function TabloSekmesi({
    *
    * "Dene" (`deneme`): aynı script Deneme modunda, yine 1 satır beklenerek; karar sorulmaz, her şey
    * geri alınır ve sonuç Değişiklikler'de görünür. Bekleyenler kalır. Salt okunur prod'da da açıktır.
+   *
+   * "+ Kolon"un ALTER'ı (`kolon`) aynı yoldan, satır beklentisi olmadan çalışır; commit sonrası form
+   * kapanır, katalog (sunucu tazelediyse) ve sayfa yeniden çekilir, bekleyenler kalır.
    */
-  function runChanges(deneme: boolean) {
-    if (!target || busy || script.metin === '' || (!deneme && lock === 'salt-okunur')) return;
-    const metin = script.metin;
+  function runScript(metin: string, deneme: boolean, tur: RunKind) {
+    if (!target || busy || metin === '' || (!deneme && lock === 'salt-okunur')) return;
     // Önceki çalıştırmanın soketi (bittiyse zaten kapalı) yenisinden önce kapanır.
     handle.current?.close();
     setRun(startRunView(metin, { deneme }));
+    setRunKind(tur);
     setDeadline(null);
-    const request = { target: { connectionId: target.connection.id, database: target.database }, script: metin, yazmaModu: writeMode, deneme, beklenenSatir: 1 as const };
+    const request = {
+      target: { connectionId: target.connection.id, database: target.database },
+      script: metin,
+      yazmaModu: writeMode,
+      deneme,
+      ...(tur === 'bekleyen' && { beklenenSatir: 1 as const }),
+    };
     handle.current = api.runScript(request, (event) => {
       setRun((current) => (current ? applyEvent(current, event) : current));
       if (event.type === 'kararBekleniyor' || event.type === 'uzatildi') setDeadline(startDecision(event.kalanMs, Date.now()));
       if (event.type === 'bitti' && event.sonuc === 'commit') {
-        setChanges(NO_CHANGES);
+        if (tur === 'bekleyen') setChanges(NO_CHANGES);
+        else setColumnForm(false);
+        if (event.katalogYenilendi) onCatalogRef.current?.('tazelendi');
         reloadAfterCommit.current();
       }
     });
@@ -392,7 +442,49 @@ export function TabloSekmesi({
     else setChanges(result);
   };
   const editing = table !== null && !busy;
-  const busyReason = run?.deneme ? TRYING_REASON : APPLYING_REASON;
+  const busyReason = BUSY_REASONS[runKind][run?.deneme ? 'dene' : 'uygula'];
+
+  /** Sağ sütunun Uygula/Dene/Konsola aktar çubuğu; `metin` `null` ya da boşsa düğmeler kapalı. */
+  const actionBar = (metin: string | null, tur: RunKind) => {
+    const none = busy || !metin;
+    const titles = ACTION_TITLES[tur];
+    return (
+      <div className="script-cubugu">
+        {lock && (
+          // Tek tık; onay yok. Açık transaction'ın kilidi değişmez.
+          <button
+            type="button"
+            className={`kilit-dugmesi ${lock}`}
+            aria-pressed={lock === 'yazma-acik'}
+            title={WRITE_LOCK_LABELS[lock].eylem}
+            onClick={onToggleWriteMode}
+            disabled={busy}
+          >
+            {WRITE_LOCK_LABELS[lock].rozet}
+          </button>
+        )}
+        <button type="button" title={titles.aktar} onClick={() => metin && onExportToConsole(metin)} disabled={none}>
+          Konsola aktar
+        </button>
+        <button type="button" title={titles.dene} onClick={() => metin && runScript(metin, true, tur)} disabled={none}>
+          ⟲ Dene
+        </button>
+        <button
+          type="button"
+          className="birincil"
+          title={lock === 'salt-okunur' ? 'Salt okunur prod: yazma kilidini açın' : titles.uygula}
+          onClick={() => metin && runScript(metin, false, tur)}
+          disabled={none || lock === 'salt-okunur'}
+        >
+          Uygula
+        </button>
+      </div>
+    );
+  };
+
+  /** "+ Kolon"un doğrulaması için tablonun kolonları: yüklü sayfadan, yoksa katalogdan. */
+  const relation = katalog?.iliskiler.find((r) => r.sema === tab.sema && r.ad === tab.tablo);
+  const existingColumns = sayfa?.kolonlar ?? relation?.kolonlar.map((k) => k.ad) ?? [];
 
   /**
    * Kolon başlığı: gösterilen sonucun filtresiyle (uygulanmamış `WHERE` taslağı uygulanmaz) sıralama
@@ -418,6 +510,18 @@ export function TabloSekmesi({
         {estimate !== null && <span className="soluk kucuk">{rowEstimate(estimate)}</span>}
         {target && <span className="soluk kucuk">{`${target.connection.name} / ${target.database}`}</span>}
         <span className="bosluk" />
+        <button
+          type="button"
+          title="ALTER TABLE … ADD COLUMN önizlemeli kolon ekleme formunu aç"
+          aria-pressed={columnForm}
+          disabled={!target || busy}
+          onClick={() => {
+            if (!columnForm) onCatalog?.('hedef');
+            setColumnForm(!columnForm);
+          }}
+        >
+          + Kolon
+        </button>
         <button
           type="button"
           className="ikon-dugme"
@@ -515,65 +619,43 @@ export function TabloSekmesi({
             </>
           )}
         </div>
-        {table && (
+        {(table || columnForm || run) && (
           <aside aria-label="Bekleyen değişiklikler sütunu" className="calistirma-sutunu bekleyen-sutunu">
-            <section aria-label="SQL önizlemesi" className="sql-onizlemesi">
-              {count === 0 ? (
-                <p className="soluk kucuk">Bekleyen değişiklik yok. Hücreyi düzenlemek için yazmaya başlayın, F2 ya da çift tık.</p>
-              ) : (
-                <>
-                  <ul aria-label="Bekleyen değişiklikler" className="bekleyen-listesi kucuk">
-                    {pendingItems(table, changes).map((item) => (
-                      <li key={item.anahtar} className={failed?.satir === item.anahtar ? 'hatali' : undefined}>
-                        {item.metin}
-                        {failed?.satir === item.anahtar && <span className="ifade-hatasi"> — {failed.mesaj}</span>}
-                      </li>
-                    ))}
-                  </ul>
-                  <pre className="uretilen-sql kucuk">{script.metin}</pre>
-                </>
-              )}
-            </section>
-            <div className="script-cubugu">
-              {lock && (
-                // Tek tık; onay yok. Açık transaction'ın kilidi değişmez.
-                <button
-                  type="button"
-                  className={`kilit-dugmesi ${lock}`}
-                  aria-pressed={lock === 'yazma-acik'}
-                  title={WRITE_LOCK_LABELS[lock].eylem}
-                  onClick={onToggleWriteMode}
-                  disabled={busy}
-                >
-                  {WRITE_LOCK_LABELS[lock].rozet}
-                </button>
-              )}
-              <button
-                type="button"
-                title="Bekleyen değişiklikleri yeni konsol sekmesine SQL olarak taşı; burada kalırlar"
-                onClick={() => onExportToConsole(script.metin)}
-                disabled={busy || count === 0}
-              >
-                Konsola aktar
-              </button>
-              <button
-                type="button"
-                title="Bekleyen değişiklikleri Deneme modunda çalıştır ve her zaman geri al"
-                onClick={() => runChanges(true)}
-                disabled={busy || count === 0}
-              >
-                ⟲ Dene
-              </button>
-              <button
-                type="button"
-                className="birincil"
-                title={lock === 'salt-okunur' ? 'Salt okunur prod: yazma kilidini açın' : 'Bekleyen değişiklikleri Transaction modunda çalıştır'}
-                onClick={() => runChanges(false)}
-                disabled={busy || count === 0 || lock === 'salt-okunur'}
-              >
-                Uygula
-              </button>
-            </div>
+            {columnForm && (
+              <KolonFormu
+                sema={tab.sema}
+                tablo={tab.tablo}
+                kolonlar={existingColumns}
+                tablodaSatirVar={tableHasRows({ satir: sayfa?.satirlar.length ?? null, filtreli: (sayfa?.filtre.where.trim() ?? '') !== '', tahmin: estimate })}
+                kullaniciTipleri={katalog?.kullaniciTipleri ?? []}
+                target={target && { connectionId: target.connection.id, database: target.database }}
+                busy={busy}
+                eylemler={(metin) => actionBar(metin, 'kolon')}
+                onClose={() => setColumnForm(false)}
+              />
+            )}
+            {table && !columnForm && (
+              <>
+                <section aria-label="SQL önizlemesi" className="sql-onizlemesi">
+                  {count === 0 ? (
+                    <p className="soluk kucuk">Bekleyen değişiklik yok. Hücreyi düzenlemek için yazmaya başlayın, F2 ya da çift tık.</p>
+                  ) : (
+                    <>
+                      <ul aria-label="Bekleyen değişiklikler" className="bekleyen-listesi kucuk">
+                        {pendingItems(table, changes).map((item) => (
+                          <li key={item.anahtar} className={failed?.satir === item.anahtar ? 'hatali' : undefined}>
+                            {item.metin}
+                            {failed?.satir === item.anahtar && <span className="ifade-hatasi"> — {failed.mesaj}</span>}
+                          </li>
+                        ))}
+                      </ul>
+                      <pre className="uretilen-sql kucuk">{script.metin}</pre>
+                    </>
+                  )}
+                </section>
+                {actionBar(count === 0 ? null : script.metin, 'bekleyen')}
+              </>
+            )}
             {run?.deneme && target && isProd(target.connection.envTag) && <DenemeProdUyarisi />}
             <KararKarti run={run} deadline={run?.evre === 'karar' ? deadline : null} onRequest={requestDecision} />
             {run?.deneme && (

@@ -1,3 +1,4 @@
+import type { IncomingMessage, ServerResponse } from 'node:http';
 import { checkServerIdentity, type PeerCertificate } from 'node:tls';
 import pg from 'pg';
 import { isProd, type Connection } from '../core/baglanti';
@@ -5,6 +6,7 @@ import { buildSslOptions, type PgSsl } from '../core/baglanti-ssl';
 import {
   PASSWORD_REQUIRED,
   classifyConnectError,
+  classifyListError,
   isPasswordRejected,
   classifyReachError,
   shouldRetryWithoutSsl,
@@ -12,6 +14,8 @@ import {
   type StepFailure,
 } from '../core/baglanti-testi';
 import type { TargetErrorResponse } from '../core/veritabani-secimi';
+import type { SettingsStore } from './ayar-deposu';
+import { json, methodNotAllowed, notFound } from './http';
 import { passwordAccount, sshSecretAccount, type Keychain } from './keychain';
 import type { SessionPasswords } from './oturum-sifreleri';
 import type { Clock } from './saat';
@@ -363,4 +367,44 @@ function classify(err: unknown, connection: Connection, database: string, { trie
   if (REACH_ERRORS.has(driverError.code ?? '')) return classifyReachError(driverError, address);
   const { adim: _step, ...failure } = classifyConnectError(driverError, { ...address, ssl: triedSsl, sslmode: connection.sslmode });
   return failure;
+}
+
+/** Hedefte sorgu başarısız oldu: sürücü hatası sınıflanır, mesaj `<ne> okunamadı: …` olur. */
+export function targetQueryError(err: unknown, what: string): TargetError {
+  const driver = toDriverError(err);
+  return new TargetError({ ...classifyListError(driver), mesaj: `${what} okunamadı: ${driver.message}` });
+}
+
+/**
+ * `POST /api/baglantilar/:id/veritabanlari/:db/<uç>` iskeleti: yol eşleşmesi, yöntem (405), kimlik
+ * ve veritabanı çözümü, bağlantı araması (404) ve hedef hatasının 502 gövdesi. `handle` gövdeyi
+ * ayrıştırır ve işi yapar; `TargetError` dışındaki hatalar yukarı gider.
+ */
+export function targetPostRoute(
+  store: SettingsStore,
+  path: RegExp,
+  handle: (req: IncomingMessage, res: ServerResponse, connection: Connection, database: string) => Promise<void>,
+) {
+  return async function route(req: IncomingMessage, res: ServerResponse, pathname: string): Promise<boolean> {
+    const match = path.exec(pathname);
+    if (!match) return false;
+    if (req.method !== 'POST') {
+      methodNotAllowed(res);
+      return true;
+    }
+    const id = decodeURIComponent(match[1]!);
+    const database = decodeURIComponent(match[2]!);
+    const connection = (await store.read()).connections.find((c) => c.id === id);
+    if (!connection) {
+      notFound(res, 'Bağlantı bulunamadı');
+      return true;
+    }
+    try {
+      await handle(req, res, connection, database);
+    } catch (err) {
+      if (!(err instanceof TargetError)) throw err;
+      json(res, 502, err.body);
+    }
+    return true;
+  };
 }

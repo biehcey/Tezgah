@@ -7,6 +7,7 @@ import pkg from '../../package.json' with { type: 'json' };
 import { SettingsFileError, createSettingsStore } from './ayar-deposu';
 import { createConnectionTestRoutes } from './baglanti-testi';
 import { createConnectionRoutes } from './baglantilar';
+import { createVolatilityRoutes } from './fonksiyon-oynakligi';
 import { createRunHistory, createRunHistoryRoutes } from './calistirma-kayitlari';
 import { createAccessPolicy } from './erisim';
 import { createPoolManager } from './havuzlar';
@@ -111,6 +112,8 @@ export async function startServer(options: ServerOptions): Promise<TezgahServer>
   const catalogRoutes = createCatalogRoutes({ store, catalogs });
   // Tablo sekmesinin sayfaları: kısa süreli client, salt okunur; Çalıştırma kaydına yazılmaz.
   const tablePageRoutes = createTablePageRoutes({ store, pools, catalogs });
+  // "+ Kolon" lint'i: fonksiyon oynaklığı, kısa süreli client.
+  const volatilityRoutes = createVolatilityRoutes({ store, pools });
   const history = createRunHistory({ configDir: options.configDir, log: options.log });
   const historyRoutes = createRunHistoryRoutes({ history, openFolder: options.openFolder ?? openFolder });
   // Her `/ws` bağlantısı kendi çalıştırmasını taşır; koparsa transaction geri alınır (ADR-0002).
@@ -160,6 +163,7 @@ export async function startServer(options: ServerOptions): Promise<TezgahServer>
     if (await databaseRoutes(req, res, url.pathname)) return;
     if (await catalogRoutes(req, res, url.pathname)) return;
     if (await tablePageRoutes(req, res, url.pathname)) return;
+    if (await volatilityRoutes(req, res, url.pathname)) return;
     if (await connectionTestRoutes(req, res, url.pathname)) return;
     if (await hostKeyRoutes(req, res, url.pathname)) return;
     if (await folderRoutes(req, res, url.pathname)) return;

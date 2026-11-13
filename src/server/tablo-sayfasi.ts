@@ -1,7 +1,5 @@
-import type { IncomingMessage, ServerResponse } from 'node:http';
 import pg from 'pg';
 import type { Connection } from '../core/baglanti';
-import { classifyListError, toDriverError } from '../core/baglanti-testi';
 import {
   FilterError,
   filterErrorPosition,
@@ -15,8 +13,8 @@ import {
   type TablePageResponse,
 } from '../core/tablo-sayfasi';
 import type { SettingsStore } from './ayar-deposu';
-import { RAW_TYPES, TargetError, type PoolManager } from './havuzlar';
-import { json, methodNotAllowed, notFound, readJson } from './http';
+import { RAW_TYPES, targetPostRoute, targetQueryError, type PoolManager } from './havuzlar';
+import { json, notFound, readJson } from './http';
 import type { CatalogCache } from './katalog';
 
 /** Sayfa kısa bir sorgu olmalı; uzarsa client bırakılır (pool'a dönmez). */
@@ -94,8 +92,7 @@ function readPage(pools: PoolManager, connection: Connection, database: string, 
       }
       // Bağlantı ya da zaman aşımı: transaction açık kalmış olabilir, client pool'a dönmez.
       discard();
-      const driver = toDriverError(err);
-      throw new TargetError({ ...classifyListError(driver), mesaj: `Tablo okunamadı: ${driver.message}` });
+      throw targetQueryError(err, 'Tablo');
     }
   });
 }
@@ -104,54 +101,30 @@ const PATH = /^\/api\/baglantilar\/([^/]+)\/veritabanlari\/([^/]+)\/tablo-sayfas
 
 /** `POST …/veritabanlari/:db/tablo-sayfasi`: Tablo sekmesinin bir sayfası. Kolonlar ve PK katalogdan. */
 export function createTablePageRoutes({ store, pools, catalogs }: { store: SettingsStore; pools: PoolManager; catalogs: CatalogCache }) {
-  return async function handle(req: IncomingMessage, res: ServerResponse, pathname: string): Promise<boolean> {
-    const match = PATH.exec(pathname);
-    if (!match) return false;
-    if (req.method !== 'POST') {
-      methodNotAllowed(res);
-      return true;
-    }
-    const id = decodeURIComponent(match[1]!);
-    const database = decodeURIComponent(match[2]!);
+  return targetPostRoute(store, PATH, async (req, res, connection, database) => {
     const request = parseTablePageRequest(await readJson(req));
-    if (!request) {
-      json(res, 400, { hata: 'Geçersiz tablo sayfası isteği' });
-      return true;
+    if (!request) return json(res, 400, { hata: 'Geçersiz tablo sayfası isteği' });
+    const catalog = await catalogs.get(connection, database);
+    const relation = catalog.iliskiler.find((r) => r.sema === request.sema && r.ad === request.tablo);
+    if (!relation) {
+      return notFound(res, `${request.sema}.${request.tablo} katalogda yok: tablo silinmiş ya da şeması Veritabanı seçiminde görünür değil.`);
     }
-    const connection = (await store.read()).connections.find((c) => c.id === id);
-    if (!connection) {
-      notFound(res, 'Bağlantı bulunamadı');
-      return true;
-    }
+    const meta = {
+      sema: relation.sema,
+      tablo: relation.ad,
+      kolonlar: relation.kolonlar.map((k) => k.ad),
+      pk: relation.pk,
+      uretilmis: relation.kolonlar.filter((k) => k.uretilmis).map((k) => k.ad),
+    };
+    let query: PageQuery;
     try {
-      const catalog = await catalogs.get(connection, database);
-      const relation = catalog.iliskiler.find((r) => r.sema === request.sema && r.ad === request.tablo);
-      if (!relation) {
-        notFound(res, `${request.sema}.${request.tablo} katalogda yok: tablo silinmiş ya da şeması Veritabanı seçiminde görünür değil.`);
-        return true;
-      }
-      const meta = {
-        sema: relation.sema,
-        tablo: relation.ad,
-        kolonlar: relation.kolonlar.map((k) => k.ad),
-        pk: relation.pk,
-        uretilmis: relation.kolonlar.filter((k) => k.uretilmis).map((k) => k.ad),
-      };
-      let query: PageQuery;
-      try {
-        query = tablePageQuery(meta, request.sonraki, request);
-      } catch (err) {
-        const body: TablePageError = { hata: (err as Error).message, ...(err instanceof FilterError && { kutu: err.kutu }) };
-        json(res, 400, body);
-        return true;
-      }
-      const outcome = await readPage(pools, connection, database, meta, request, query);
-      if (outcome.ok) json(res, 200, outcome.page);
-      else json(res, 400, outcome.error);
+      query = tablePageQuery(meta, request.sonraki, request);
     } catch (err) {
-      if (!(err instanceof TargetError)) throw err;
-      json(res, 502, err.body);
+      const body: TablePageError = { hata: (err as Error).message, ...(err instanceof FilterError && { kutu: err.kutu }) };
+      return json(res, 400, body);
     }
-    return true;
-  };
+    const outcome = await readPage(pools, connection, database, meta, request, query);
+    if (outcome.ok) json(res, 200, outcome.page);
+    else json(res, 400, outcome.error);
+  });
 }

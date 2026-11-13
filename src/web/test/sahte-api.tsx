@@ -17,6 +17,7 @@ import type { HostKeyProblem } from '../../core/ssh-tuneli';
 import { emptyTabs, type SavedTabs } from '../../core/konsol-sekmeleri';
 import type { HistoryEntry, HistoryQuery } from '../../core/gecmis-filtresi';
 import type { Catalog } from '../../core/katalog';
+import type { Volatility } from '../../core/kolon-ekle';
 import type { TablePageRequest, TablePageResponse } from '../../core/tablo-sayfasi';
 import { GridOlcumu } from '../grid/olcum';
 import { JSDOM_OLCUMU } from './grid';
@@ -48,6 +49,7 @@ export function createFakeApi(overrides: Partial<ApiClient> = {}): ApiClient {
     getCatalog: missing('getCatalog'),
     refreshCatalog: missing('refreshCatalog'),
     readTablePage: missing('readTablePage'),
+    functionVolatility: missing('functionVolatility'),
     openRunHistoryFolder: missing('openRunHistoryFolder'),
     listRunHistory: missing('listRunHistory'),
     previewImport: missing('previewImport'),
@@ -178,6 +180,10 @@ export interface FakeConnections {
   tablePageRequests: ({ hedef: string } & TablePageRequest)[];
   /** Tablo sayfasının yanıtı; verilmezse istek reddedilir. */
   tablePage: (hedef: string, request: TablePageRequest) => Promise<TablePageResponse>;
+  /** Sunucudaki fonksiyonların oynaklığı (ad → `i|s|v`); listede olmayan ad yanıtta yer almaz. */
+  volatility: Record<string, Volatility>;
+  /** Fonksiyon oynaklığı istekleri: sorulan adlar, sırasıyla. */
+  volatilityRequests: string[][];
 }
 
 /** Hiç ilişkisi olmayan katalog. */
@@ -236,6 +242,8 @@ export function createFakeConnections(
     catalogRequests: [],
     tablePageRequests: [],
     tablePage: () => Promise.reject(new Error('Sahte API: tablePage tanımlı değil')),
+    volatility: {},
+    volatilityRequests: [],
     api: undefined as unknown as ApiClient,
   };
   let next = 1;
@@ -414,6 +422,11 @@ export function createFakeConnections(
       find(id);
       state.tablePageRequests.push({ hedef: `${id}/${database}`, ...structuredClone(request) });
       return structuredClone(await state.tablePage(`${id}/${database}`, request));
+    },
+    async functionVolatility(id, _database, fonksiyonlar) {
+      find(id);
+      state.volatilityRequests.push([...fonksiyonlar]);
+      return { oynaklik: Object.fromEntries(fonksiyonlar.flatMap((f) => (Object.hasOwn(state.volatility, f) ? [[f, state.volatility[f]!]] : []))) };
     },
     async giveSessionPassword(id, { password, saveToKeychain, secret }) {
       state.requests.push({ method: 'POST', id: `${id}/oturum-sifresi${secret === 'ssh' ? ':ssh' : ''}` });

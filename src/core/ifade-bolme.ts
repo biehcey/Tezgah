@@ -17,6 +17,11 @@ export interface Statement {
   words: string[];
   /** psql `\` meta komutu (satır sonuna kadar sürer). */
   meta: boolean;
+  /**
+   * Hemen ardından `(` gelen adlar, geçiş sırasıyla (fonksiyon çağrısı adayları): çıplak ad küçük
+   * harfe katlanır, tırnaklı ad olduğu gibi kalır. `IN (`, `CAST(` gibi anahtar kelimeler de girer.
+   */
+  calls: string[];
 }
 
 const MAX_KEYWORDS = 8;
@@ -32,21 +37,28 @@ export function splitStatements(script: string): Statement[] {
   let end = -1;
   let keywords: string[] = [];
   let words: string[] = [];
+  let calls: string[] = [];
+  /** Son simge bir addı (çıplak ya da tırnaklı): ardından `(` gelirse çağrıdır. */
+  let lastName: string | null = null;
   /** Kelime dizisi bir kelime olmayan simgeyle kesildi mi. */
   let keywordsClosed = false;
 
   const finish = () => {
-    if (start !== -1) statements.push({ start, end, text: script.slice(start, end), keywords, words, meta: false });
+    if (start !== -1) statements.push({ start, end, text: script.slice(start, end), keywords, words, meta: false, calls });
     start = -1;
     end = -1;
     keywords = [];
     words = [];
+    calls = [];
+    lastName = null;
     keywordsClosed = false;
   };
-  /** `from`..`to` aralığı anlamlı bir simge; ifadeyi başlatır ya da uzatır. */
-  const token = (from: number, to: number, word?: string) => {
+  /** `from`..`to` aralığı anlamlı bir simge; ifadeyi başlatır ya da uzatır. `name`: simge bir ad. */
+  const token = (from: number, to: number, word?: string, name?: string) => {
     if (start === -1) start = from;
     end = to;
+    if (script[from] === '(' && to === from + 1 && lastName !== null) calls.push(lastName);
+    lastName = name ?? (word !== undefined ? word.toLowerCase() : null);
     if (word !== undefined) words.push(word.toUpperCase());
     if (keywordsClosed) return;
     if (word !== undefined && keywords.length < MAX_KEYWORDS) keywords.push(word.toUpperCase());
@@ -80,7 +92,7 @@ export function splitStatements(script: string): Statement[] {
       const lineEnd = nl === -1 ? n : nl;
       const metaEnd = i + script.slice(i, lineEnd).trimEnd().length;
       const text = script.slice(i, metaEnd);
-      statements.push({ start: i, end: metaEnd, text, keywords: [], words: [], meta: true });
+      statements.push({ start: i, end: metaEnd, text, keywords: [], words: [], meta: true, calls: [] });
       i = lineEnd;
     } else if (c === "'") {
       const to = skipQuoted(script, i, "'", false);
@@ -88,7 +100,7 @@ export function splitStatements(script: string): Statement[] {
       i = to;
     } else if (c === '"') {
       const to = skipQuoted(script, i, '"', false);
-      token(i, to);
+      token(i, to, undefined, script.slice(i + 1, to - 1).replaceAll('""', '"'));
       i = to;
     } else if (c === '$') {
       const tag = DOLLAR_TAG.exec(script.slice(i, i + 64))?.[0];
