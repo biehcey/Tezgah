@@ -6,7 +6,7 @@ import type { ConnectionTestResponse, TestStep } from '../../core/baglanti-testi
 import type { HostKeyProblem } from '../../core/ssh-tuneli';
 import { App } from '../App';
 import type { ConnectionTestBody } from '../api/client';
-import { editConnection } from '../test/eylemler';
+import { editConnection, fill } from '../test/eylemler';
 import { connection, createFakeConnections, renderWithApi } from '../test/sahte-api';
 
 const form = () => screen.getByRole('form', { name: /bağlantı/i });
@@ -87,17 +87,17 @@ describe('SSH tüneli bölümü', () => {
   it('kapalıyken "kapalı" özeti; açılıp anahtar dosyasıyla doldurulunca tünel ve passphrase kaydedilir', async () => {
     const { user, fake, f } = await setup();
     expect(sshToggle()).toHaveTextContent('kapalı');
-    await user.type(f.getByLabelText('Ad'), 'A');
-    await user.type(f.getByLabelText('Host'), 'db.internal');
-    await user.type(f.getByLabelText('Kullanıcı'), 'u');
+    await fill(user, f.getByLabelText('Ad'), 'A');
+    await fill(user, f.getByLabelText('Host'), 'db.internal');
+    await fill(user, f.getByLabelText('Kullanıcı'), 'u');
 
     await user.click(sshToggle());
     await user.click(sshSection().getByLabelText('SSH tüneli kullan'));
-    await user.type(sshSection().getByLabelText('SSH host'), 'bastion');
-    await user.type(sshSection().getByLabelText('SSH kullanıcısı'), 'deploy');
+    await fill(user, sshSection().getByLabelText('SSH host'), 'bastion');
+    await fill(user, sshSection().getByLabelText('SSH kullanıcısı'), 'deploy');
     expect(sshSection().getByRole('radio', { name: 'anahtar dosyası' })).toBeChecked();
-    await user.type(sshSection().getByLabelText('Anahtar dosyası'), '/home/u/.ssh/id_ed25519');
-    await user.type(sshSection().getByLabelText('Passphrase'), 'parola');
+    await fill(user, sshSection().getByLabelText('Anahtar dosyası'), '/home/u/.ssh/id_ed25519');
+    await fill(user, sshSection().getByLabelText('Passphrase'), 'parola');
     expect(sshToggle()).toHaveTextContent('deploy@bastion · anahtar');
     await user.click(f.getByRole('button', { name: 'Kaydet' }));
 

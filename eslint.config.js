@@ -20,7 +20,7 @@ export default tseslint.config(
     rules: { '@typescript-eslint/no-unused-vars': ['error', { ignoreRestSiblings: true }] },
   },
   {
-    files: ['src/server/**/*.ts', '*.config.{ts,js}'],
+    files: ['src/server/**/*.ts', 'scripts/**/*.ts', '*.config.{ts,js}'],
     languageOptions: { globals: globals.node },
   },
   {

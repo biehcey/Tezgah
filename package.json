@@ -21,7 +21,10 @@
     "start": "node dist/server/cli.js",
     "typecheck": "tsc -p tsconfig.core.json && tsc -p tsconfig.server.json && tsc -p tsconfig.web.json && tsc -p tsconfig.json",
     "lint": "eslint .",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:pg": "tsx scripts/test-pg.ts",
+    "check": "npm run typecheck && npm run lint && npm test",
+    "prepare": "git config core.hooksPath .githooks"
   },
   "dependencies": {
     "@napi-rs/keyring": "^2.1.2",
@@ -50,6 +53,7 @@
     "@types/ws": "^8.18.2",
     "@vitejs/plugin-react": "^6.2.1",
     "concurrently": "^10.0.6",
+    "embedded-postgres": "^18.6.0-beta.19",
     "eslint": "^10.14.0",
     "globals": "^17.14.0",
     "jsdom": "^29.1.1",

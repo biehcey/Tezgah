@@ -10,6 +10,15 @@ export async function editConnection(user: UserEvent, name: RegExp) {
   await user.click(screen.getByRole('menuitem', { name: 'Düzenle' }));
 }
 
+/**
+ * Alanı tek bir girişle doldurur (tıkla + yapıştır). `user.type` her tuşta tüm `App`'i yeniden
+ * render eder; uzun metinlerde test, tam takımın yükü altında zaman aşımına yaklaşır.
+ */
+export async function fill(user: UserEvent, field: HTMLElement, text: string) {
+  await user.click(field);
+  await user.paste(text);
+}
+
 /** Script editörünün CodeMirror görünümü (jsdom'da yazmak yerine doğrudan işlem gönderilir). */
 function editorView(): EditorView {
   const content = screen.getByRole('region', { name: 'Script editörü' }).querySelector('.cm-content');

@@ -1,0 +1,4 @@
+#!/bin/sh
+# Commit'ten önce tip denetimi ve lint (~20 sn). Testler `npm run check`'te; hook'u yavaşlatmasın diye burada yok.
+# `npm install` hook'u `prepare` ile kurar (git config core.hooksPath .githooks).
+npm run --silent typecheck && npm run --silent lint

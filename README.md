@@ -36,9 +36,13 @@ npm run dev        # Vite (5173) + tsx watch sunucu (5174); terminaldeki 5173 ad
 npm test           # core, server ve web testleri
 npm run typecheck
 npm run lint
+npm run check      # typecheck + lint + test
+npm run test:pg    # server testleri geçici bir gerçek Postgres'e karşı (embedded-postgres)
 npm run build      # dist/web (Vite) + dist/server (tsup)
 ```
 
+`npm install`, commit'ten önce typecheck ve lint çalıştıran `.githooks/pre-commit` hook'unu kurar.
+
 Sunucu kodu değişince `tsx watch` sunucuyu yeniden başlatır ve yeni bir erişim anahtarı üretir; terminaldeki yeni adresi açın.
 
-Gerçek Postgres'e karşı çalışan server testleri yalnızca `TEZGAH_TEST_PG_URL` tanımlıysa koşar.
+Gerçek Postgres'e karşı çalışan server testleri yalnızca `TEZGAH_TEST_PG_URL` tanımlıysa koşar; `npm run test:pg` bunu geçici bir sunucuyla kendisi yapar.
