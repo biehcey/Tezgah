@@ -1,0 +1,37 @@
+name: Release
+
+# `v*` etiketi push edilince npm'e yayınlar. Kimlik doğrulama npm trusted publishing (OIDC) ile:
+# token ya da OTP yok; npmjs.com'da tezgah-db için bu depo ve bu workflow güvenilir yayıncı olarak tanımlı olmalı.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+
+      # OIDC trusted publishing npm >= 11.5.1 ister; Node 22 ile gelen npm daha eski.
+      - run: npm install -g npm@latest
+
+      - run: npm ci
+
+      # Etiket package.json sürümüyle aynı olmalı (v0.3.0 ↔ 0.3.0).
+      - run: test "v$(node -p "require('./package.json').version")" = "$GITHUB_REF_NAME"
+
+      - run: npm run check
+      - run: npm run test:pg
+      - run: npm run build
+
+      - run: npm publish --provenance --access public

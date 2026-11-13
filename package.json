@@ -4,6 +4,10 @@
   "description": "PostgreSQL için kişisel, yerel çalışan bir veritabanı yönetim aracı",
   "type": "module",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/biehcey/tezgah-db.git"
+  },
   "bin": {
     "tezgah-db": "dist/server/cli.js"
   },

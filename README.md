@@ -56,3 +56,7 @@ npm run build      # dist/web (Vite) + dist/server (tsup)
 Sunucu kodu değişince `tsx watch` sunucuyu yeniden başlatır ve yeni bir erişim anahtarı üretir; terminaldeki yeni adresi açın.
 
 Gerçek Postgres'e karşı çalışan server testleri yalnızca `TEZGAH_TEST_PG_URL` tanımlıysa koşar; `npm run test:pg` bunu geçici bir sunucuyla kendisi yapar.
+
+## Yayın
+
+`main`'de `npm version <sürüm>` (sürüm commit'i ve `v<sürüm>` etiketi) ardından `git push --follow-tags`. Etiketi GitHub Actions'taki Release workflow'u yakalar: check, gerçek Postgres testleri ve build'den sonra npm'e provenance ile yayınlar. Kimlik doğrulama npm trusted publishing (OIDC) ile yapılır; token ya da OTP gerekmez.
