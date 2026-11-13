@@ -1,0 +1,3 @@
+# Konsol, sekmelere bölünmüş Script editörüdür
+
+SQL konsolu ayrı bir çalıştırma modeli değildir: mevcut Script ekranı sekmelere bölünür ve her sekme bugünkü editörün aynısıdır (kendi hedefi, sekme ve hedef başına Yazma kilidi, içerikten çıkan Çalıştırma modu, karar kartı, Deneme modu, ADR-0002'deki tek client ve kopmada rollback). Sekmelerin metni ve hedefi diske yazılır, açılışta geri gelir ama bağlanmaz. "Autocommit varsayılanlı, karar kartsız ayrı bir konsol ekranı" alternatifi reddedildi: Tezgah'ta iki çalıştırma modeli ve iki ayrı prod kuralı seti doğacaktı. Salt okuyan sorgularda karar kartının yarattığı sürtünme ADR-0004'teki Okuma moduyla çözülür.
