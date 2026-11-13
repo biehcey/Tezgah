@@ -4,6 +4,7 @@ import { analyzeScript, forceTransaction, type RunMode, type ScriptAnalysis } fr
 import { positionOf, splitStatements, type Statement } from '../../core/ifade-bolme';
 import { formatRemaining, startDecision, type DecisionTimer } from '../../core/karar-suresi';
 import { Degisiklikler, DenemeProdUyarisi } from './Degisiklikler';
+import { BekletmeGostergesi } from './BekletmeGostergesi';
 import { KararKarti, resultText, useCountdown } from './KararKarti';
 import {
   ROW_LIMIT_MESSAGE,
@@ -467,6 +468,7 @@ function OkumaDurumu({ run, deadline }: { run: RunView; deadline: DecisionTimer 
       ) : (
         <span>{resultText(run)}</span>
       )}
+      <BekletmeGostergesi oturumlar={run.bekletilenler} />
       {run.uyari && <span className="uyari">{run.uyari}</span>}
       {run.kayitUyarisi && <span className="uyari">⚠ {run.kayitUyarisi}</span>}
     </section>

@@ -183,6 +183,23 @@ describe('çalıştırma görünümü: Okuma modu', () => {
   });
 });
 
+describe('çalıştırma görünümü: bekletilen oturumlar', () => {
+  const blocked: ServerEvent = {
+    type: 'bekletilenler',
+    oturumlar: [{ pid: 7, kullanici: null, uygulama: 'psql', beklemeTuru: 'Lock', sorgu: null, sureSn: 3 }],
+  };
+  const decision: ServerEvent = { type: 'kararBekleniyor', commitEdilebilir: true, kalanMs: 1000 };
+
+  it('olay listeyi taşır; boş liste göstergeyi kaldırır', () => {
+    expect(play(decision, blocked).bekletilenler).toEqual([{ pid: 7, kullanici: null, uygulama: 'psql', beklemeTuru: 'Lock', sorgu: null, sureSn: 3 }]);
+    expect(play(decision, blocked, { type: 'bekletilenler', oturumlar: [] }).bekletilenler).toEqual([]);
+  });
+
+  it('transaction kapanınca liste düşer (boş liste gelmese de)', () => {
+    expect(play(decision, blocked, { type: 'bitti', sonuc: 'rollback' }).bekletilenler).toBeUndefined();
+  });
+});
+
 describe('hedef kilidi', () => {
   it('çalıştırma yokken ya da bitmişken hedef değiştirilebilir', () => {
     expect(targetLock(null)).toBeNull();

@@ -1200,6 +1200,50 @@ button.kucuk {
   gap: 8px;
 }
 
+/* "⚠ N oturumu bekletiyorsun": üzerine gelince bekletilen oturumların listesi açılır. */
+.bekletme {
+  position: relative;
+  align-self: flex-start;
+}
+
+.bekletme-sayisi {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--dikkat);
+  font-weight: 600;
+  cursor: help;
+}
+
+.bekletme-listesi {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 10;
+  min-width: 420px;
+  max-width: 640px;
+  border-collapse: collapse;
+  background: var(--zemin);
+  color: var(--metin);
+  border: 1px solid var(--cizgi);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.25);
+}
+
+.bekletme-listesi th,
+.bekletme-listesi td {
+  padding: 4px 8px;
+  text-align: left;
+  border-bottom: 1px solid var(--cizgi);
+  white-space: nowrap;
+}
+
+.bekletme-listesi .bekletme-sorgu {
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
 .karar-sonucu.deneme {
   color: var(--vurgu);
 }

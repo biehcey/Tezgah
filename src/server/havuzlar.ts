@@ -54,6 +54,13 @@ export class PoolFullError extends Error {
   }
 }
 
+/** `ifFree` istendi ama pool'un tüm client'ları kullanımda; sorgu kuyrukta beklemeden atlanır. */
+export class PoolBusyError extends Error {
+  constructor() {
+    super("Pool'un tüm client'ları kullanımda");
+  }
+}
+
 /** Hedefe bağlanılamadı ya da hedefte sorgu başarısız oldu; kullanıcıya gösterilecek neden. */
 export class TargetError extends Error {
   constructor(readonly failure: StepFailure) {
@@ -197,18 +204,20 @@ export function createPoolManager({ keychain, sessionPasswords, clock, openTunne
    * Hedefin pool'undan bir client alır, `fn` bitince geri verir. `fn` bağlantısı bozulan client'ı
    * `discard` ile işaretlerse client pool'a dönmez, kapatılır. `session`: client uzun süre tutulacak
    * (script çalıştırma); hedefte `MAX_SESSIONS` oturum açıksa beklemeden `PoolFullError` atılır.
-   * Kısa süreli sorgular (katalog, iptal) oturum sayılmaz.
+   * Kısa süreli sorgular (katalog, iptal) oturum sayılmaz. `ifFree`: pool'un tüm client'ları
+   * kullanımdaysa beklemeden `PoolBusyError` atılır (bekletme izleyicisinin tiki).
    */
   async function withClient<T>(
     connection: Connection,
     database: string,
     fn: (client: pg.PoolClient, discard: () => void) => Promise<T>,
-    { session = false }: { session?: boolean } = {},
+    { session = false, ifFree = false }: { session?: boolean; ifFree?: boolean } = {},
   ): Promise<T> {
     if (closed) throw new Error('Tezgah kapanıyor; yeni bağlantı açılmaz');
     const key = keyOf(connection.id, database);
     let entry = entries.get(key);
     if (session && entry && entry.sessions >= MAX_SESSIONS) throw new PoolFullError(entry.sessions);
+    if (ifFree && entry && entry.inUse >= MAX_CLIENTS) throw new PoolBusyError();
     if (!entry) {
       const created: Entry = {
         connectionId: connection.id,
@@ -234,9 +243,17 @@ export function createPoolManager({ keychain, sessionPasswords, clock, openTunne
         throw new TargetError(authFailure(err, connection, database, { triedSsl: false, password: poolPasswords.get(pool) }));
       }
       let discarded = false;
+      // Checkout sırasında pool'un dinleyicisi yok: sorgu sürerken bağlantı düşerse süreç çökmesin.
+      // Sorgu zaten hatayla döner; client pool'a dönmez. Oturumlar düşmeyi kendi dinleyicileriyle yazar.
+      const onError = (err: Error) => {
+        discarded = true;
+        if (!session) log(`Bağlantı düştü (${connection.name} / ${database}): ${err.message}`);
+      };
+      client.on('error', onError);
       try {
         return await fn(client, () => (discarded = true));
       } finally {
+        client.off('error', onError);
         client.release(discarded || undefined);
       }
     } finally {

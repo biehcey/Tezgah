@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { decisionStatus, formatRemaining, type DecisionPhase, type DecisionTimer } from '../../core/karar-suresi';
 import type { SessionTab } from '../../core/konsol-sekmeleri';
 import { formatSummary, type RunView } from '../../core/script-calistirma';
+import { BekletmeGostergesi } from './BekletmeGostergesi';
 
 /**
  * Transaction'ın karar kartı: çalışırken ilerleme, karar beklenirken Commit/Rollback/Uzat ve Karar
@@ -62,6 +63,7 @@ export function KararKarti({
             </span>
           </p>
         )}
+        <BekletmeGostergesi oturumlar={run.bekletilenler} />
         <div className="karar-dugmeleri">
           {run.commitEdilebilir && (
             <button type="button" className="birincil" onClick={() => onRequest('commit')} disabled={pending}>

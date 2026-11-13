@@ -4,6 +4,7 @@
  * aynı betik için verdiği sıradır.
  */
 import { ACTIVE_SQL_TRANSACTION, NON_TRANSACTIONAL_FALLBACK, READ_ONLY_SQL_TRANSACTION, type ScriptAnalysis } from './calistirma-modu';
+import type { BlockedSession } from './bekletme';
 import type { FallbackReason } from './deneme';
 import type { RowChanges, SchemaChange } from './deneme-farki';
 import { splitStatements, positionOf, type Statement } from './ifade-bolme';
@@ -152,6 +153,11 @@ export type ServerEvent =
    */
   | { type: 'okumaAcik'; kalanMs: number }
   /**
+   * Transaction açıkken (karar beklenirken ya da Okuma'da) kilitle bekletilen oturumlar; sonuç
+   * değişince gelir. Transaction kapanınca, liste boş değilse, boş liste gelir.
+   */
+  | { type: 'bekletilenler'; oturumlar: BlockedSession[] }
+  /**
    * `dahaFazla` yanıtı: sonucun sıradaki satırları. `dahaVar`: sonrasında satır var. `sinir`: sonuç
    * 100.000 satır sınırına ulaştı; devamı olsa da çekilmez.
    */
@@ -248,6 +254,8 @@ export interface RunView {
    * o andan yeniden kursun. Yetkili sayaç sunucudadır.
    */
   kararSuresi?: { kalanMs: number; surum: number };
+  /** Açık transaction'ın kilitle beklettiği oturumlar; transaction kapanınca düşer. */
+  bekletilenler?: BlockedSession[];
   sonuc?: RunResult;
   /** Yapısal hata kodu, ör. hedefte açık oturum sınırı doldu (`havuzDolu`). */
   kod?: RunFailureCode;
@@ -359,9 +367,12 @@ export function applyEvent(view: RunView, event: ServerEvent): RunView {
       return { ...view, evre: 'okuma', kararSuresi: nextTimer(view, event.kalanMs) };
     case 'uzatildi':
       return { ...view, bekleyenIstek: null, kararSuresi: nextTimer(view, event.kalanMs) };
-    case 'bitti':
+    case 'bekletilenler':
+      return { ...view, bekletilenler: event.oturumlar };
+    case 'bitti': {
+      const { bekletilenler: _b, ...rest } = view;
       return {
-        ...view,
+        ...rest,
         evre: 'bitti',
         bekleyenIstek: null,
         sonuc: event.sonuc,
@@ -373,6 +384,7 @@ export function applyEvent(view: RunView, event: ServerEvent): RunView {
           s.durum === 'sirada' || s.durum === 'calisiyor' ? { ...s, durum: 'calistirilmadi' } : s,
         ),
       };
+    }
     case 'uyari':
       // Kayıt uyarısı bir isteğin yanıtı değil; bekleyen isteğe dokunmaz.
       if (event.tur === 'kayitYazilamadi') return { ...view, kayitUyarisi: event.mesaj };

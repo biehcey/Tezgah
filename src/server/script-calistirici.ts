@@ -51,6 +51,7 @@ import {
 } from '../core/script-calistirma';
 import { beginStatement, runBlockReasons, writeLockState, type WriteLockState } from '../core/yazma-kilidi';
 import type { SettingsStore } from './ayar-deposu';
+import { watchBlocked } from './bekletme-izleyicisi';
 import type { RunHistory } from './calistirma-kayitlari';
 import { PoolFullError, RAW_TYPES, TargetError, catalogQuery, type PoolManager } from './havuzlar';
 import type { CatalogCache } from './katalog';
@@ -382,6 +383,8 @@ export function createScriptRunner({ store, pools, catalogs, clock, history, log
       /** Bağlantı, tünel koptuğu için düştü. */
       let tunnelLost = false;
       let expiry: unknown;
+      /** Bekletme izleyicisini durdurur; transaction kapanırken boş liste gönderir. */
+      let stopWatch = (): void => {};
       const markBroken = () => {
         broken = true;
         // Karar beklenirken (ya da Okuma açıkken) ölen client'ın kararı beklenmez.
@@ -422,6 +425,13 @@ export function createScriptRunner({ store, pools, catalogs, clock, history, log
         // Sunucu süreç kimliği (BackendKeyData); @types/pg'de tanımlı değil.
         const pid = (client as unknown as { processID: number }).processID;
         current.cancel = () => (cancelSent ??= cancelBackend(session, pid));
+        /** Karar beklenirken ya da Okuma açıkken: transaction'ın beklettiği oturumlar izlenir. */
+        const watch = () => {
+          stopWatch = watchBlocked(
+            { pools, clock, log },
+            { connection, database, pid, onChange: (oturumlar) => send({ type: 'bekletilenler', oturumlar }) },
+          );
+        };
 
         // Sürüm transaction'dan önce okunur: beklenmedik bir hata transaction'ı bozmasın.
         const deneme = session.deneme ? { surum: await serverVersion(client), lockTimeout: denemeLockTimeout(connection.envTag) } : null;
@@ -491,8 +501,10 @@ export function createScriptRunner({ store, pools, catalogs, clock, history, log
             current.decide = resolve;
             expiry = clock.setTimeout(() => resolve('sureDoldu'), sureMs);
             send({ type: 'okumaAcik', kalanMs: sureMs });
+            watch();
           });
           current.phase = 'bitiyor';
+          stopWatch();
           clock.clearTimeout(expiry);
           await rolledBack(decision);
           // Node zamanlayıcısı işlemezken (uyku) sunucudaki yedek zaman aşımı oturumu kapatmış olabilir.
@@ -537,8 +549,10 @@ export function createScriptRunner({ store, pools, catalogs, clock, history, log
           };
           arm(startDecision(sureMs, clock.now()));
           send({ type: 'kararBekleniyor', commitEdilebilir: !failed, kalanMs: sureMs });
+          watch();
         });
         current.phase = 'bitiyor';
+        stopWatch();
         clock.clearTimeout(expiry);
         if (decision === 'sureDoldu') expired = true;
         if (broken) return await lost();
@@ -569,6 +583,7 @@ export function createScriptRunner({ store, pools, catalogs, clock, history, log
         clean = true;
         await finish({ sonuc: 'hata', mesaj: `Commit başarısız; transaction geri alındı: ${commitError.message}` }, 'hata');
       } finally {
+        stopWatch();
         clock.clearTimeout(expiry);
         client.off('error', onError);
         // Kapanan oturumun açık transaction'ı sunucuda geri alınır.

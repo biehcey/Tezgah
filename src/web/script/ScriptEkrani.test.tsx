@@ -204,6 +204,54 @@ describe('Script ekranı: karar kartı', () => {
   });
 });
 
+describe('Script ekranı: bekletme göstergesi', () => {
+  const indicator = () => screen.queryByRole('button', { name: /oturumu bekletiyorsun/ });
+  const list = () => screen.queryByRole('table', { name: 'Bekletilen oturumlar' });
+  const blocked: ServerEvent = {
+    type: 'bekletilenler',
+    oturumlar: [
+      { pid: 77, kullanici: 'ali', uygulama: 'psql', beklemeTuru: 'Lock', sorgu: 'UPDATE t SET a = 2', sureSn: 125 },
+      { pid: 78, kullanici: null, uygulama: null, beklemeTuru: null, sorgu: null, sureSn: null },
+    ],
+  };
+
+  it('karar beklerken sayı karar kartında; üzerine gelince liste, yetkisiz alanlar "görünmüyor"', async () => {
+    const { user, run } = await startRun('UPDATE t SET a = 1');
+    run.emit({ type: 'kararBekleniyor', commitEdilebilir: true, kalanMs: 30 * DK });
+    expect(indicator()).not.toBeInTheDocument();
+
+    run.emit(blocked);
+    expect(within(decision()).getByRole('button', { name: /oturumu bekletiyorsun/ })).toHaveTextContent('⚠ 2 oturumu bekletiyorsun');
+    expect(list()).not.toBeInTheDocument();
+
+    await user.hover(indicator()!);
+    const rows = within(list()!)
+      .getAllByRole('row')
+      .map((r) => within(r).queryAllByRole('cell').map((c) => c.textContent));
+    expect(rows.filter((r) => r.length > 0)).toEqual([
+      ['77', 'ali', 'psql', 'Lock', 'UPDATE t SET a = 2', '2 dk 5 sn'],
+      ['78', 'görünmüyor', 'görünmüyor', 'görünmüyor', 'görünmüyor', 'görünmüyor'],
+    ]);
+    await user.unhover(indicator()!);
+    expect(list()).not.toBeInTheDocument();
+  });
+
+  it('boş liste ve transaction kapanması göstergeyi kaldırır', async () => {
+    const { run } = await startRun('UPDATE t SET a = 1');
+    run.emit({ type: 'kararBekleniyor', commitEdilebilir: true, kalanMs: 30 * DK }, blocked, { type: 'bekletilenler', oturumlar: [] });
+    expect(indicator()).not.toBeInTheDocument();
+    run.emit(blocked, { type: 'bitti', sonuc: 'rollback' });
+    expect(indicator()).not.toBeInTheDocument();
+  });
+
+  it('Okuma’da durum satırında görünür', async () => {
+    const { run } = await startRun('SELECT 1');
+    run.emit({ type: 'analiz', mod: 'okuma', transactionDisi: [], reddedilenler: [] }, { type: 'okumaAcik', kalanMs: 30 * DK }, blocked);
+    const status = screen.getByRole('status', { name: 'Okuma durumu' });
+    expect(within(status).getByRole('button', { name: /oturumu bekletiyorsun/ })).toHaveTextContent('⚠ 2 oturumu bekletiyorsun');
+  });
+});
+
 describe('Script ekranı: Karar süresi', () => {
   beforeEach(() => {
     // Yalnızca geri sayımın saati sahte; userEvent'in setTimeout'u gerçek kalır.
