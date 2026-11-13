@@ -18,7 +18,7 @@ const TIMEOUT_MS = 30_000;
 const literal = (value: string) => `E'${value.replaceAll('\\', '\\\\').replaceAll("'", "''")}'`;
 const inList = (values: readonly string[]) => `IN (${values.map(literal).join(', ')})`;
 
-const SCHEMAS_SQL = `SELECT nspname AS ad, (nspname = current_schemas(false)[1])::text AS varsayilan
+const SCHEMAS_SQL = `SELECT nspname AS ad, (nspname = (current_schemas(false))[1])::text AS varsayilan
   FROM pg_catalog.pg_namespace WHERE nspname !~ '^pg_(toast_)?temp_' ORDER BY nspname`;
 
 const relationsSql = (schemas: readonly string[]) => `SELECT n.nspname AS sema, c.relname AS ad, c.relkind::text AS tur,
