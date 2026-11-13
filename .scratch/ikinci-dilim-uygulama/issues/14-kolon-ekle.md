@@ -6,7 +6,7 @@ Spec: [İkinci dilim spec'i](../../ikinci-dilim/spec.md) · Kararlar: harita Q22
 
 **Blocked by:** 13
 
-**Status:** done
+**Status:** done (3c113f2)
 
 - [x] core ALTER üretici + doğrulama (boş ad/tip, var olan kolon adı). Birim testli.
 - [x] core lint: varsayılan ifadedeki fonksiyon adları lexer ile çıkarılıyor; oynaklık `v` ise "Tablo yeniden yazılır"; NOT NULL + varsayılansız + ilk sayfada satır var ise "Boş olmayan tabloda hata verecek". Engellemiyor.
