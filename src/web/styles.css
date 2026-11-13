@@ -47,6 +47,8 @@ body,
 .tezgah {
   display: grid;
   grid-template-columns: 280px 1fr;
+  /* Satır pencere yüksekliğinde kalır; uzun içerik (sonuç grid'i) sayfayı uzatmaz, kendi içinde kayar. */
+  grid-template-rows: minmax(0, 1fr);
   height: 100%;
 }
 
@@ -94,6 +96,8 @@ body,
   flex-direction: column;
   gap: 8px;
   min-width: 0;
+  min-height: 0;
+  overflow: auto;
   padding: 16px;
 }
 
