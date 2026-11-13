@@ -22,16 +22,16 @@ jobs:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
 
-      # OIDC trusted publishing npm >= 11.5.1 ister; Node 22 ile gelen npm daha eski.
-      - run: npm install -g npm@latest
-
-      - run: npm ci
-
       # Etiket package.json sürümüyle aynı olmalı (v0.3.0 ↔ 0.3.0).
       - run: test "v$(node -p "require('./package.json').version")" = "$GITHUB_REF_NAME"
 
+      # Kurulum ve testler Node 22'nin npm'iyle (CI ile aynı): yeni npm bağımlılıkların kurulum
+      # script'lerini varsayılan olarak çalıştırmıyor, embedded-postgres'in ikili bağlantıları eksik kalıyor.
+      - run: npm ci
       - run: npm run check
       - run: npm run test:pg
       - run: npm run build
 
+      # OIDC trusted publishing npm >= 11.5.1 ister; Node 22 ile gelen npm daha eski.
+      - run: npm install -g npm@latest
       - run: npm publish --provenance --access public
