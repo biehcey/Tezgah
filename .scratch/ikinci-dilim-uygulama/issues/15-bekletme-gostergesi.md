@@ -6,7 +6,7 @@ Spec: [İkinci dilim spec'i](../../ikinci-dilim/spec.md) · Kararlar: harita Q17
 
 **Blocked by:** 03
 
-**Status:** ready-for-agent
+**Status:** done (0fa9bef)
 
 - [x] server bekletme izleyicisi: transaction karar/Okuma'da açıkken 5 sn'de bir kısa süreli client ile `pg_stat_activity` + `$1 = ANY(pg_blocking_pids(pid))` (`$1` = çalıştırmanın backend pid'i); `left(query, 200)`, süre. Havuz doluysa tik atlanıyor.
 - [x] Sonuç değişince `bekletilenler{oturumlar}` olayı; transaction kapanınca izleme duruyor ve boş liste gidiyor.
