@@ -37,6 +37,8 @@ interface Props {
   onCloseHistory: () => void;
   /** Geçmişten çift tık: kaydın metni yeni sekmede, kaydın hedefiyle. */
   onOpenFromHistory: (entry: HistoryEntry) => void;
+  /** Tablo sekmesinden "Konsola aktar": metin, verilen hedefte yeni konsol sekmesinde. */
+  onOpenConsole: (hedef: TabTarget | null, metin: string) => void;
   /** Bu oturumda listeden açılan Tablo sekmeleri: ilk sayfa hemen çekilir (geri gelenler "Yükle" bekler). */
   autoLoadTabs?: ReadonlySet<string>;
 }
@@ -81,6 +83,7 @@ export function Konsol({
   historyOpen,
   onCloseHistory,
   onOpenFromHistory,
+  onOpenConsole,
   autoLoadTabs = new Set(),
 }: Props) {
   const openSessions = new Set(Object.keys(targetLocks));
@@ -165,6 +168,7 @@ export function Konsol({
                   onToggleWriteMode={() => onToggleWriteMode(tab.id)}
                   onTargetLockChange={lockChangers(tab.id)}
                   onPendingChange={pendingChangers(tab.id)}
+                  onExportToConsole={(metin) => onOpenConsole(tab.hedef, metin)}
                   hidden={tab.id !== state.active}
                 />
               );

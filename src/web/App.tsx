@@ -26,6 +26,7 @@ import {
   toggleWriteMode,
   type ConsoleState,
   type SavedTabs,
+  type TabTarget,
 } from '../core/konsol-sekmeleri';
 import { ApiError, connectionRequest, useApi } from './api/client';
 import { HizliGecis, type PaletteCommand } from './hizli-gecis/HizliGecis';
@@ -240,14 +241,18 @@ export function App() {
   const toggleTabWriteMode = useCallback((id: string) => setKonsol((k) => toggleWriteMode(k, id)), []);
   const openPalette = useCallback(() => setPaletteOpen(true), []);
   const closeHistory = useCallback(() => setHistoryOpen(false), []);
+  /** Metin verilen hedefte yeni konsol sekmesinde (geçmişten açma, Tablo sekmesinden "Konsola aktar"). */
+  const openConsoleWith = useCallback(
+    (hedef: TabTarget | null, metin: string) => setKonsol((k) => openConsoleTab(k, newTabId(), hedef, metin)),
+    [],
+  );
   /** Geçmişten açılan kayıt yeni sekmede, kaydın hedefiyle; bağlantı artık yoksa hedefsiz. */
   const openFromHistory = useCallback(
     ({ hedef, script }: HistoryEntry) => {
       const exists = connections?.some((c) => c.id === hedef.baglantiId) ?? false;
-      const tabTarget = exists ? { connectionId: hedef.baglantiId, database: hedef.veritabani, schema: null } : null;
-      setKonsol((k) => openConsoleTab(k, newTabId(), tabTarget, script));
+      openConsoleWith(exists ? { connectionId: hedef.baglantiId, database: hedef.veritabani, schema: null } : null, script);
     },
-    [connections],
+    [connections, openConsoleWith],
   );
 
   const edited = editing?.kind === 'duzenle' ? connections?.find((c) => c.id === editing.id) : undefined;
@@ -788,6 +793,7 @@ export function App() {
           historyOpen={historyOpen}
           onCloseHistory={closeHistory}
           onOpenFromHistory={openFromHistory}
+          onOpenConsole={openConsoleWith}
           autoLoadTabs={autoLoadTabs}
         />
       </main>

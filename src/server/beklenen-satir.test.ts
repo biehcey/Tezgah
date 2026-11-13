@@ -80,6 +80,32 @@ describe('script çalıştırma: beklenenSatir', () => {
     expect(await ws.waitFor('bitti')).toMatchObject({ sonuc: 'commit' });
   });
 
+  it('Deneme modunda da denetlenir: satirSayisi hatasında durulur, karar beklenmeden geri alınır', async () => {
+    const id = await createConnection();
+    // Denemede DML önizleme sarmalıyla çalışır; ilk kolon toplam satır sayısıdır.
+    let n = 0;
+    const counts = [1, 0, 1];
+    fake.resultFor = (sql) => {
+      if (!sql.startsWith('WITH tezgah_onizleme AS (UPDATE')) return undefined;
+      const count = counts[n++]!;
+      return { columns: ['count', 'id'], rows: Array.from({ length: count }, () => [String(count), '1']), command: `SELECT ${count}` };
+    };
+    ws.send({ type: 'run', target: { connectionId: id, database: 'postgres' }, script: SCRIPT, deneme: true, beklenenSatir: 1 });
+
+    expect(await ws.waitFor('error')).toMatchObject({ i: 1, tur: 'satirSayisi', mesaj: 'Satır değişmiş ya da silinmiş (0 satır etkilendi)', satir: 2 });
+    expect(await ws.waitFor('bitti')).toMatchObject({ sonuc: 'deneme' });
+    expect(ws.events.some((e) => e.type === 'kararBekleniyor')).toBe(false);
+    expect(fake.queries.filter((q) => q.includes('UPDATE'))).toHaveLength(2);
+    expect(fake.queries.at(-1)).toBe('ROLLBACK');
+    expect(fake.queries).not.toContain('COMMIT');
+
+    const dir = join(t.configDir, 'history');
+    const [file] = await readdir(dir);
+    const [record] = parseRecords(await readFile(join(dir, file!), 'utf8'));
+    expect(record).toMatchObject({ sonuc: 'deneme-rollback', basladi: { deneme: true } });
+    expect(record!.bitti!.ifadeler[1]).toMatchObject({ satirSayisi: 0, hata: { kod: null, satir: 2 } });
+  });
+
   it('beklenenSatir verilmezse satır sayısı denetlenmez', async () => {
     const id = await createConnection();
     updatesAffect(1, 0, 2);
@@ -159,6 +185,18 @@ describePg('Bekleyen değişiklik script’i, gerçek Postgres', () => {
     expect(await ws.waitFor('kararBekleniyor')).toMatchObject({ commitEdilebilir: false });
     ws.send({ type: 'rollback' });
     expect(await ws.waitFor('bitti')).toMatchObject({ sonuc: 'rollback' });
+    const { rows } = await admin.query(`SELECT ad FROM ${TABLE}`);
+    expect(rows).toEqual([{ ad: 'Ali' }]);
+  });
+
+  it('Dene: değişiklikler gösterilir, satır sayısı denetlenir, veri değişmez', async () => {
+    let changes = editCell(table, NO_CHANGES, { yuklu: ROW_1 }, 2, 'Veli');
+    changes = editCell(table, changes, { yuklu: ROW_2 }, 2, 'Zeynep');
+    await admin.query(`DELETE FROM ${TABLE} WHERE no = 2`);
+    ws.send({ type: 'run', target: { connectionId, database: real.database }, script: pendingScript(table, changes).metin, deneme: true, beklenenSatir: 1 });
+    expect(await ws.waitFor('done')).toMatchObject({ i: 0, rowCount: 1 });
+    expect(await ws.waitFor('error')).toMatchObject({ i: 1, tur: 'satirSayisi', mesaj: 'Satır değişmiş ya da silinmiş (0 satır etkilendi)' });
+    expect(await ws.waitFor('bitti')).toMatchObject({ sonuc: 'deneme' });
     const { rows } = await admin.query(`SELECT ad FROM ${TABLE}`);
     expect(rows).toEqual([{ ad: 'Ali' }]);
   });

@@ -6,6 +6,7 @@ import type { Catalog } from '../../core/katalog';
 import { TABS_VERSION, type SavedTabs } from '../../core/konsol-sekmeleri';
 import type { TablePageResponse } from '../../core/tablo-sayfasi';
 import { App } from '../App';
+import { editorScript } from '../test/eylemler';
 import { connection, createFakeConnections, createFakeScriptRuns, emptyCatalog, renderWithApi } from '../test/sahte-api';
 
 const DK = 60_000;
@@ -282,6 +283,109 @@ describe('Tablo sekmesi: Uygula', () => {
     expect(applyButton()).toBeEnabled();
     await user.click(applyButton());
     expect(runs.last()).toMatchObject({ yazmaModu: true, beklenenSatir: 1 });
+  });
+});
+
+const tryButton = () => t().getByRole('button', { name: '⟲ Dene' });
+
+describe('Tablo sekmesi: Dene', () => {
+  it('önizlemedeki SQL Deneme modunda, her ifade 1 satır beklenerek çalışır; sonuç Değişiklikler’de, bekleyenler kalır', async () => {
+    const { user, fake, runs } = await setup();
+    expect(tryButton()).toBeDisabled();
+    await editName(user, 0, 'Veli');
+    await user.click(tryButton());
+
+    expect(runs.last()).toMatchObject({
+      target: { connectionId: 'd1', database: 'postgres' },
+      script: `UPDATE "public"."users" SET "ad" = 'Veli'::text WHERE "id" = '1'::integer;`,
+      deneme: true,
+      beklenenSatir: 1,
+    });
+    expect(applyButton()).toBeDisabled();
+    expect(tryButton()).toBeDisabled();
+    expect(tableTab()).toHaveTextContent('Bekleyen değişiklikler deneniyor; bitene kadar düzenlenemez.');
+
+    runs.last().emit(
+      { type: 'started', i: 0 },
+      {
+        type: 'done',
+        i: 0,
+        rowCount: 1,
+        ms: 2,
+        komut: 'UPDATE',
+        fark: {
+          tablo: { oid: '100', ad: 'public.users' },
+          kolonlar: ['id', 'ad'],
+          anahtar: ['id'],
+          satirlar: [{ once: ['1', 'Ali'], sonra: ['1', 'Veli'] }],
+          gorulmeyen: { eklendi: 0, guncellendi: 0, silindi: 0 },
+        },
+      },
+      { type: 'bitti', sonuc: 'deneme' },
+    );
+    const changes = t().getByRole('region', { name: 'Değişiklikler' });
+    expect(within(changes).getByRole('region', { name: 'public.users' })).toHaveTextContent('~1 güncellendi');
+    expect(within(changes).getByRole('deletion')).toHaveTextContent('Ali');
+    expect(within(t().getByRole('region', { name: 'Karar' })).getByText('Deneme geri alındı; hiçbir şey kalıcı yazılmadı')).toBeInTheDocument();
+
+    // Hiçbir şey yazılmadı: sayfa yeniden çekilmez, bekleyenler yerinde.
+    expect(fake.tablePageRequests).toHaveLength(1);
+    expect(cell(0, 1)).toHaveClass('degisti');
+    expect(preview()).toHaveTextContent(`SET "ad" = 'Veli'::text`);
+    expect(applyButton()).toBeEnabled();
+    expect(tryButton()).toBeEnabled();
+  });
+
+  it('satır sayısı hatasında hatalı satır işaretlenir; Değişiklikler hatayı gösterir', async () => {
+    const { user, runs } = await setup();
+    await editName(user, 0, 'Veli');
+    await editName(user, 1, 'Zeynep');
+    await user.click(tryButton());
+    const mesaj = 'Satır değişmiş ya da silinmiş (0 satır etkilendi)';
+    runs.last().emit(
+      { type: 'done', i: 0, rowCount: 1, ms: 2, komut: 'UPDATE' },
+      { type: 'error', i: 1, sqlstate: null, mesaj, satir: 2, sutun: 1, bas: 0, bit: 1, ms: 1, tur: 'satirSayisi' },
+      { type: 'bitti', sonuc: 'deneme' },
+    );
+    expect(t().getByRole('region', { name: 'Değişiklikler' })).toHaveTextContent(`Satır 2 · ${mesaj}`);
+    const rows = t().getAllByRole('row');
+    expect(rows.filter((r) => r.getAttribute('aria-invalid') === 'true').map((r) => r.getAttribute('aria-rowindex'))).toEqual(['3']);
+    expect(t().getByRole('list', { name: 'Bekleyen değişiklikler' })).toHaveTextContent(mesaj);
+  });
+
+  it('prod 🔒 iken Dene açık, Uygula kapalı; deneme yan etki uyarısı görünür', async () => {
+    const { user, runs } = await setup({ conn: PROD });
+    await editName(user, 0, 'Veli');
+    expect(applyButton()).toBeDisabled();
+    expect(tryButton()).toBeEnabled();
+    await user.click(tryButton());
+    expect(runs.last()).toMatchObject({ deneme: true, yazmaModu: false, beklenenSatir: 1 });
+    expect(t().getByRole('note', { name: 'Deneme yan etki uyarısı' })).toBeInTheDocument();
+  });
+});
+
+describe('Tablo sekmesi: Konsola aktar', () => {
+  it('önizlemedeki SQL aynı hedefte yeni konsol sekmesinde açılır; bekleyenler Tablo sekmesinde kalır', async () => {
+    const { user, runs } = await setup();
+    const exportButton = () => t().getByRole('button', { name: 'Konsola aktar' });
+    expect(exportButton()).toBeDisabled();
+    await editName(user, 0, 'Veli');
+    await editName(user, 1, 'Zeynep');
+    const sql = preview().querySelector('pre')!.textContent;
+    await user.click(exportButton());
+
+    const tabs = within(screen.getByRole('tablist', { name: 'Konsol sekmeleri' })).getAllByRole('tab');
+    expect(tabs.map((tab) => [tab.textContent, tab.getAttribute('aria-selected')])).toEqual([
+      ['Yerel / postgres', 'false'],
+      ['users', 'false'],
+      ['Yerel / postgres', 'true'],
+    ]);
+    expect(editorScript()).toBe(sql);
+    expect(runs.runs).toHaveLength(0);
+
+    await user.click(tabs[1]!);
+    expect(cell(0, 1)).toHaveClass('degisti');
+    expect(preview().querySelector('pre')!.textContent).toBe(sql);
   });
 });
 

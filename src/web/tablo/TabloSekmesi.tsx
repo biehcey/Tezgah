@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { Connection } from '../../core/baglanti';
+import { isProd, type Connection } from '../../core/baglanti';
 import {
   NO_CHANGES,
   addRow,
@@ -23,6 +23,7 @@ import { filterCompletion, typeMap } from '../../core/katalog';
 import type { TableTab } from '../../core/konsol-sekmeleri';
 import { ROW_LIMIT_MESSAGE, applyEvent, startRunView, targetLock, type RunView } from '../../core/script-calistirma';
 import { writeLockState } from '../../core/yazma-kilidi';
+import { Degisiklikler, DenemeProdUyarisi } from '../script/Degisiklikler';
 import { KararKarti } from '../script/KararKarti';
 import { WRITE_LOCK_LABELS } from '../script/durum';
 import type { ScriptRunHandle } from '../api/client';
@@ -64,6 +65,8 @@ interface Props {
   onTargetLockChange?: (reason: string | null) => void;
   /** Bekleyen değişiklik sayısı değişti (kapatma uyarısı için); sekme kapanınca 0. */
   onPendingChange?: (count: number) => void;
+  /** "Konsola aktar": üretilen SQL aynı hedefte yeni konsol sekmesinde açılır. */
+  onExportToConsole: (metin: string) => void;
   hidden: boolean;
 }
 
@@ -109,6 +112,7 @@ function queryError(err: unknown): QueryError | null {
 const BOXES: readonly FilterBox[] = ['where', 'orderBy'];
 
 const APPLYING_REASON = 'Bekleyen değişiklikler uygulanıyor; bitene kadar düzenlenemez.';
+const TRYING_REASON = 'Bekleyen değişiklikler deneniyor; bitene kadar düzenlenemez.';
 
 /**
  * Tablo sekmesi: editörsüz, başlıkta `≈ N satır`, serbest `WHERE` / `ORDER BY` kutuları, altında
@@ -119,7 +123,8 @@ const APPLYING_REASON = 'Bekleyen değişiklikler uygulanıyor; bitene kadar dü
  * PK'lı tabloda hücreler düzenlenir, NULL yapılır, satır eklenir/silinir ve TSV yapıştırılır;
  * hepsi Bekleyen değişiklik olarak birikir, sağ sütunda
  * liste ve üretilen SQL sürekli görünür. "Uygula" o SQL'i bu sekmede mevcut Script çalıştırıcıyla
- * Transaction modunda, her ifade tam 1 satır etkileyecek şekilde çalıştırır (karar kartı).
+ * Transaction modunda, her ifade tam 1 satır etkileyecek şekilde çalıştırır (karar kartı); "Dene"
+ * aynısını Deneme modunda gösterir, "Konsola aktar" yeni konsol sekmesine taşır.
  */
 export function TabloSekmesi({
   tab,
@@ -132,6 +137,7 @@ export function TabloSekmesi({
   onToggleWriteMode,
   onTargetLockChange,
   onPendingChange,
+  onExportToConsole,
   hidden,
 }: Props) {
   const api = useApi();
@@ -323,13 +329,18 @@ export function TabloSekmesi({
    * "Uygula": önizlemedeki script bu sekmede Transaction modunda, her ifade tam 1 satır etkileyecek
    * şekilde çalışır; ek onay yok. Commit → bekleyenler temizlenir, sayfa yeniden çekilir;
    * rollback ya da hata → bekleyenler kalır.
+   *
+   * "Dene" (`deneme`): aynı script Deneme modunda, yine 1 satır beklenerek; karar sorulmaz, her şey
+   * geri alınır ve sonuç Değişiklikler'de görünür. Bekleyenler kalır. Salt okunur prod'da da açıktır.
    */
-  function applyChanges() {
-    if (!target || busy || script.metin === '' || lock === 'salt-okunur') return;
+  function runChanges(deneme: boolean) {
+    if (!target || busy || script.metin === '' || (!deneme && lock === 'salt-okunur')) return;
     const metin = script.metin;
-    setRun(startRunView(metin));
+    // Önceki çalıştırmanın soketi (bittiyse zaten kapalı) yenisinden önce kapanır.
+    handle.current?.close();
+    setRun(startRunView(metin, { deneme }));
     setDeadline(null);
-    const request = { target: { connectionId: target.connection.id, database: target.database }, script: metin, yazmaModu: writeMode, deneme: false, beklenenSatir: 1 as const };
+    const request = { target: { connectionId: target.connection.id, database: target.database }, script: metin, yazmaModu: writeMode, deneme, beklenenSatir: 1 as const };
     handle.current = api.runScript(request, (event) => {
       setRun((current) => (current ? applyEvent(current, event) : current));
       if (event.type === 'kararBekleniyor' || event.type === 'uzatildi') setDeadline(startDecision(event.kalanMs, Date.now()));
@@ -381,6 +392,7 @@ export function TabloSekmesi({
     else setChanges(result);
   };
   const editing = table !== null && !busy;
+  const busyReason = run?.deneme ? TRYING_REASON : APPLYING_REASON;
 
   /**
    * Kolon başlığı: gösterilen sonucun filtresiyle (uygulanmamış `WHERE` taslağı uygulanmaz) sıralama
@@ -464,7 +476,7 @@ export function TabloSekmesi({
                 {sayfa.tutarlilikNotu && ` · ${OFFSET_NOTE}`}
               </p>
               {editable && 'kapali' in editable && <p className="soluk kucuk">{editable.kapali}</p>}
-              {busy && table && <p className="soluk kucuk">{APPLYING_REASON}</p>}
+              {busy && table && <p className="soluk kucuk">{busyReason}</p>}
               {table && (
                 <div className="grid-araclari">
                   <button type="button" onClick={addRowAction} disabled={!editing} title="Sona yeni satır ekler; dokunulmayan kolonlar DEFAULT kalır">
@@ -490,7 +502,7 @@ export function TabloSekmesi({
                 onKolonTikla={(c) => sortBy(sayfa, sayfa.kolonlar[c]!)}
                 siralama={siralama}
                 onDuzenle={editing ? editCellAt : undefined}
-                saltOkunurNedeni={editable && 'kapali' in editable ? editable.kapali : APPLYING_REASON}
+                saltOkunurNedeni={editable && 'kapali' in editable ? editable.kapali : busyReason}
                 kolonSaltOkunur={table ? (c) => readOnlyReason(table, c) : undefined}
                 satirIsareti={rows ? (r) => rows[r] : undefined}
                 hataliSatirlar={failedRows}
@@ -538,15 +550,37 @@ export function TabloSekmesi({
               )}
               <button
                 type="button"
+                title="Bekleyen değişiklikleri yeni konsol sekmesine SQL olarak taşı; burada kalırlar"
+                onClick={() => onExportToConsole(script.metin)}
+                disabled={busy || count === 0}
+              >
+                Konsola aktar
+              </button>
+              <button
+                type="button"
+                title="Bekleyen değişiklikleri Deneme modunda çalıştır ve her zaman geri al"
+                onClick={() => runChanges(true)}
+                disabled={busy || count === 0}
+              >
+                ⟲ Dene
+              </button>
+              <button
+                type="button"
                 className="birincil"
                 title={lock === 'salt-okunur' ? 'Salt okunur prod: yazma kilidini açın' : 'Bekleyen değişiklikleri Transaction modunda çalıştır'}
-                onClick={applyChanges}
+                onClick={() => runChanges(false)}
                 disabled={busy || count === 0 || lock === 'salt-okunur'}
               >
                 Uygula
               </button>
             </div>
+            {run?.deneme && target && isProd(target.connection.envTag) && <DenemeProdUyarisi />}
             <KararKarti run={run} deadline={run?.evre === 'karar' ? deadline : null} onRequest={requestDecision} />
+            {run?.deneme && (
+              <section aria-label="Değişiklikler" className="ifade-listesi">
+                <Degisiklikler run={run} />
+              </section>
+            )}
           </aside>
         )}
       </div>
