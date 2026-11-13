@@ -340,7 +340,8 @@ describe('Script ekranı: Çalıştırma modu', () => {
     await waitFor(() => expect(runButton()).toBeDisabled());
     expect(screen.getByText(/Satır 1: Transaction'ı Tezgah yönetir/)).toBeInTheDocument();
     expect(screen.getByText(/Satır 3: psql meta komutları desteklenmez/)).toBeInTheDocument();
-    expect(gutterMarks()).toEqual({ 1: '⛔', 3: '⛔' });
+    // Editör işaretleri ayrı bir render'da gelir; düğme önce devre dışı kalabilir.
+    await waitFor(() => expect(gutterMarks()).toEqual({ 1: '⛔', 3: '⛔' }));
     expect(document.querySelectorAll('.cm-reddedilen')).toHaveLength(2);
   });
 
