@@ -18,6 +18,16 @@ Sunucu yalnızca `127.0.0.1`'de dinler. Her açılışta rastgele bir erişim an
 
 **prod salt okunurluğu bir kaza önleyicidir, güvenlik sınırı değildir.** Yanlış sekmede yanlışlıkla yazmayı önler; veritabanı kullanıcısının yetkilerini kısıtlamaz. prod'u gerçekten korumak için salt okunur yetkili bir rol kullanın.
 
+## Okuma modu
+
+Yalnızca okuma ifadelerinden (`SELECT`, `TABLE`, `VALUES`, `SHOW`, ANALYZE'sız `EXPLAIN`, DML içermeyen `WITH`) oluşan bir script, ortam etiketinden bağımsız olarak `BEGIN READ ONLY` ile çalışır ve commit/rollback sorulmaz. Transaction daha fazla satır çekilebilsin diye açık kalır; sekmede yeniden çalıştırınca, sekme kapanınca, bağlantı kopunca ya da Karar süresi dolunca geri alınır.
+
+Okuma modu ifadeye bakarak karar verir ve yanılabilir: yazan bir fonksiyonu çağıran bir `SELECT` (ör. `SELECT nextval(...)`) de okuma sayılır. Böyle bir ifadeyi Postgres `25006` hatasıyla reddeder; hiçbir şey yazılmaz ve hatanın yanındaki "Transaction modunda çalıştır" düğmesi script'i karar kartlı çalıştırır.
+
+## Tablo sekmesi
+
+Tablo sekmesi her sayfayı kısa, ayrı bir `BEGIN READ ONLY` sorgusuyla çeker ve açık transaction tutmaz. PK'lı tabloda varsayılan sıralamayla sayfalar keyset ile çekilir. PK'sız tabloda ya da kendi `ORDER BY`'ınızla sayfalar `OFFSET` ile çekilir: **sayfalar arası tutarlılık garanti değildir**; sayfalar arasında tablo değişirse satırlar atlanabilir ya da tekrar görünebilir.
+
 ## Konsol sekmeleri
 
 Konsol sekmelerinin metni ve hedefi (bağlantı, veritabanı) yapılandırma dizinindeki `konsol/sekmeler.json` dosyasına yazılır ve Tezgah açılınca geri gelir; geri gelen sekmeler hiçbir sunucuya kendiliğinden bağlanmaz. Yazma kilidi ve sonuçlar dosyaya yazılmaz. Dosya düz metindir ve script'teki sırlar maskelenmez; POSIX'te `0600` izinle yazılır.

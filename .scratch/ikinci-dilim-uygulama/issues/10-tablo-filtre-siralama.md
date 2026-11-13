@@ -6,7 +6,7 @@ Spec: [İkinci dilim spec'i](../../ikinci-dilim/spec.md) · Kararlar: harita Q13
 
 **Blocked by:** 09
 
-**Status:** done
+**Status:** done (3a53100)
 
 - [x] core: kullanıcı WHERE parantez içinde gömülüyor; kullanıcı ORDER BY varsa OFFSET'e düşülüyor; `;` sonrası boş olmayan metin reddediliyor; başlık tıklama döngüsü (artan → azalan → temiz). Birim testli.
 - [x] Filtre/sıralama çubuğu: tek satırlık CodeMirror kutuları, katalog tamamlamalı; Enter uygular.
