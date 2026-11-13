@@ -3,10 +3,10 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { startFakePostgres, type FakePostgres, type FakeResult } from './test/sahte-postgres';
 import { createFakeClock } from './test/sahte-saat';
 import { describePg, pgUrl, startTestServer, type TestServer, type TestSocket } from './test/sunucu';
+import { addFakeConnection } from './test/yardimcilar';
 
 let t: TestServer;
 let fake: FakePostgres;
-let sockets: TestSocket[];
 
 const RELATION_COLUMNS = ['sema', 'ad', 'tur', 'satir', 'kolon', 'tip', 'tip_oid', 'not_null', 'varsayilan', 'uretilmis', 'pk_sira'];
 
@@ -43,35 +43,18 @@ beforeEach(async () => {
     return undefined;
   };
   t = await startTestServer({ clock: createFakeClock() });
-  sockets = [];
 });
 afterEach(async () => {
-  for (const s of sockets) s.close();
   await t.close();
   await fake.close();
 });
 
-async function createConnection(): Promise<string> {
-  const res = await t.api('POST', '/api/baglantilar', {
-    name: 'Yerel',
-    host: '127.0.0.1',
-    port: fake.port,
-    user: 'postgres',
-    password: 'gizli',
-    sslmode: 'disable',
-  });
-  expect(res.status).toBe(201);
-  return res.body.connection.id;
-}
+const createConnection = () => addFakeConnection(t, fake.port);
 
 const catalogUrl = (id: string, database = 'postgres') => `/api/baglantilar/${id}/veritabanlari/${database}/katalog`;
 const catalogQueries = () => fake.queries.filter((q) => q.includes('pg_catalog.pg_attribute'));
 
-async function tab(): Promise<TestSocket> {
-  const ws = await t.socket();
-  sockets.push(ws);
-  return ws;
-}
+const tab = (): Promise<TestSocket> => t.socket();
 
 describe('Katalog önbelleği: içerik', () => {
   it('görünür şemaların ilişkileri kolonları, PK sırası, reltuples, tipler ve defaultSchema ile gelir', async () => {

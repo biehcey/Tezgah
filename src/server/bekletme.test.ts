@@ -5,36 +5,20 @@ import type { ServerEvent } from '../core/script-calistirma';
 import { startFakePostgres, type FakePostgres } from './test/sahte-postgres';
 import { createFakeClock, type FakeClock } from './test/sahte-saat';
 import { describePg, pgUrl, startTestServer, type TestServer, type TestSocket } from './test/sunucu';
+import { addFakeConnection, eventually, settle } from './test/yardimcilar';
 
 let t: TestServer;
 let clock: FakeClock;
-let sockets: TestSocket[];
 
 beforeEach(async () => {
   clock = createFakeClock();
   t = await startTestServer({ clock });
-  sockets = [];
 });
 afterEach(async () => {
-  for (const s of sockets) s.close();
   await t.close();
 });
 
-async function tab(): Promise<TestSocket> {
-  const ws = await t.socket();
-  sockets.push(ws);
-  return ws;
-}
-
-const settle = (ms = 100) => new Promise((resolve) => setTimeout(resolve, ms));
-
-async function eventually(check: () => boolean | Promise<boolean>) {
-  for (let i = 0; i < 200; i++) {
-    if (await check()) return;
-    await settle(25);
-  }
-  throw new Error('koşul sağlanmadı');
-}
+const tab = () => t.socket();
 
 const blockedEvents = (ws: TestSocket) => ws.events.filter((e): e is Extract<ServerEvent, { type: 'bekletilenler' }> => e.type === 'bekletilenler');
 
@@ -60,18 +44,7 @@ describe('Bekletme izleyicisi: sahte Postgres', () => {
     await fake.close();
   });
 
-  async function createConnection(): Promise<string> {
-    const res = await t.api('POST', '/api/baglantilar', {
-      name: 'Yerel',
-      host: '127.0.0.1',
-      port: fake.port,
-      user: 'postgres',
-      password: 'gizli',
-      sslmode: 'disable',
-    });
-    expect(res.status).toBe(201);
-    return res.body.connection.id;
-  }
+  const createConnection = () => addFakeConnection(t, fake.port);
 
   async function open(script: string, phase: 'kararBekleniyor' | 'okumaAcik'): Promise<TestSocket> {
     const ws = await tab();

@@ -3,6 +3,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { startFakePostgres, type FakePostgres, type FakeResult } from './test/sahte-postgres';
 import { createFakeClock } from './test/sahte-saat';
 import { describePg, pgUrl, startTestServer, type TestServer } from './test/sunucu';
+import { addFakeConnection } from './test/yardimcilar';
 
 let t: TestServer;
 let fake: FakePostgres;
@@ -43,19 +44,7 @@ afterEach(async () => {
   await fake.close();
 });
 
-async function createConnection(extra: Record<string, unknown> = {}): Promise<string> {
-  const res = await t.api('POST', '/api/baglantilar', {
-    name: 'Yerel',
-    host: '127.0.0.1',
-    port: fake.port,
-    user: 'postgres',
-    password: 'gizli',
-    sslmode: 'disable',
-    ...extra,
-  });
-  expect(res.status).toBe(201);
-  return res.body.connection.id;
-}
+const createConnection = (extra: Record<string, unknown> = {}) => addFakeConnection(t, fake.port, extra);
 
 const pageUrl = (id: string) => `/api/baglantilar/${id}/veritabanlari/postgres/tablo-sayfasi`;
 /** Tahmini satır sayısı sorgusu (yalnızca ilk sayfada). */

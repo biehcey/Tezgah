@@ -5,6 +5,7 @@ import { historyFileName, parseRecords, type RunRecord } from '../core/calistirm
 import { startFakePostgres, type FakePostgres } from './test/sahte-postgres';
 import { createFakeClock, type FakeClock } from './test/sahte-saat';
 import { startTestServer, type TestServer, type TestSocket } from './test/sunucu';
+import { addFakeConnection, settle } from './test/yardimcilar';
 
 const DK = 60_000;
 /** Sahte sunucunun her sorguya döndürdüğü satır; kayda hiç girmemeli. */
@@ -32,19 +33,7 @@ afterEach(async () => {
 
 const historyDir = () => join(t.configDir, 'history');
 
-async function createConnection(fields: Record<string, unknown> = {}): Promise<string> {
-  const res = await t.api('POST', '/api/baglantilar', {
-    name: 'Yerel',
-    host: '127.0.0.1',
-    port: fake.port,
-    user: 'postgres',
-    password: 'gizli',
-    sslmode: 'disable',
-    ...fields,
-  });
-  expect(res.status).toBe(201);
-  return res.body.connection.id;
-}
+const createConnection = (fields: Record<string, unknown> = {}) => addFakeConnection(t, fake.port, fields);
 
 const run = (connectionId: string, script: string) => ws.send({ type: 'run', target: { connectionId, database: 'postgres' }, script });
 
@@ -59,7 +48,7 @@ async function records(): Promise<RunRecord[]> {
   for (let i = 0; ; i++) {
     const found = parseRecords(await historyText().catch(() => ''));
     if ((found.length > 0 && found.every((r) => r.bitti)) || i > 100) return found;
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await settle(20);
   }
 }
 

@@ -7,6 +7,7 @@ import { NO_CHANGES, addRow, deleteRows, editCell, pendingScript, type EditableT
 import { startFakePostgres, type FakePostgres } from './test/sahte-postgres';
 import { createFakeClock } from './test/sahte-saat';
 import { describePg, pgUrl, startTestServer, type TestServer, type TestSocket } from './test/sunucu';
+import { addFakeConnection } from './test/yardimcilar';
 
 let t: TestServer;
 let ws: TestSocket;
@@ -23,17 +24,7 @@ afterEach(async () => {
   await fake.close();
 });
 
-async function createConnection(): Promise<string> {
-  const res = await t.api('POST', '/api/baglantilar', {
-    name: 'Yerel',
-    host: '127.0.0.1',
-    port: fake.port,
-    user: 'postgres',
-    password: 'gizli',
-    sslmode: 'disable',
-  });
-  return res.body.connection.id;
-}
+const createConnection = () => addFakeConnection(t, fake.port);
 
 /** `UPDATE` ifadeleri sırayla bu sayılarda satır etkiler. */
 function updatesAffect(...counts: number[]) {

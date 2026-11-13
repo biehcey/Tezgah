@@ -7,6 +7,7 @@ import type { ServerEvent } from '../core/script-calistirma';
 import { startFakePostgres, type FakePostgres } from './test/sahte-postgres';
 import { createFakeClock, type FakeClock } from './test/sahte-saat';
 import { startTestServer, type TestServer, type TestSocket } from './test/sunucu';
+import { addFakeConnection, eventually, settle } from './test/yardimcilar';
 
 const DK = 60_000;
 
@@ -27,19 +28,7 @@ afterEach(async () => {
   await fake.close();
 });
 
-async function createConnection(fields: Record<string, unknown> = {}): Promise<string> {
-  const res = await t.api('POST', '/api/baglantilar', {
-    name: 'Yerel',
-    host: '127.0.0.1',
-    port: fake.port,
-    user: 'postgres',
-    password: 'gizli',
-    sslmode: 'disable',
-    ...fields,
-  });
-  expect(res.status).toBe(201);
-  return res.body.connection.id;
-}
+const createConnection = (fields: Record<string, unknown> = {}) => addFakeConnection(t, fake.port, fields);
 
 const run = (connectionId: string, script: string, extra: Record<string, unknown> = {}) =>
   ws.send({ type: 'run', target: { connectionId, database: 'postgres' }, script, ...extra });
@@ -52,16 +41,8 @@ async function records(count = 1): Promise<RunRecord[]> {
     const texts = await Promise.all(files.map((f) => readFile(join(dir, f), 'utf8')));
     const found = parseRecords(texts.join(''));
     if ((found.length >= count && found.every((r) => r.bitti)) || i > 100) return found;
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await settle(20);
   }
-}
-
-async function eventually(check: () => boolean) {
-  for (let i = 0; i < 100; i++) {
-    if (check()) return;
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  }
-  throw new Error('koşul sağlanmadı');
 }
 
 const sequence = (events: ServerEvent[]) => events.map((e) => ('i' in e ? `${e.type}:${e.i}` : e.type));
@@ -87,7 +68,7 @@ describe('Okuma modu: sahte Postgres', () => {
     run(await createConnection(), 'SELECT 1');
     await ws.waitFor('okumaAcik');
     clock.advance(30 * DK - 1);
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await settle(100);
     expect(ws.events.some((e) => e.type === 'bitti')).toBe(false);
 
     clock.advance(1);
@@ -151,7 +132,7 @@ describe('Okuma modu: sahte Postgres', () => {
     run(await createConnection(), "SELECT nextval('s')");
     await eventually(() => rollbacks() === 1);
     ws.terminate();
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    await settle(200);
     expect(fake.queries.filter((q) => q.includes('pg_cancel_backend'))).toEqual([]);
     // Askıdaki ROLLBACK'i bırakır: oturum düşer, çalıştırma biter.
     fake.dropSessions();

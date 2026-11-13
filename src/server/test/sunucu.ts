@@ -43,7 +43,7 @@ export interface TestServer {
   origin: string;
   /** WS upgrade dener; açılırsa `open`, reddedilirse HTTP durum kodunu döndürür. */
   upgrade(path: string, headers: Record<string, string>): Promise<'open' | number>;
-  /** Yetkili `/ws` bağlantısı açar; gelen olayları sırayla toplar. */
+  /** Yetkili `/ws` bağlantısı açar; gelen olayları sırayla toplar. `close()` açık soketleri de kapatır. */
   socket(): Promise<TestSocket>;
   close(): Promise<void>;
 }
@@ -124,6 +124,7 @@ export async function startTestServer(options: Partial<ServerOptions> = {}): Pro
   const host = `127.0.0.1:${server.port}`;
   const origin = `http://${host}`;
   const cookie = `${server.cookieName}=${server.token}`;
+  const sockets: TestSocket[] = [];
 
   const request = (path: string, opts: RequestOptions = {}) =>
     new Promise<Response>((resolve, reject) => {
@@ -179,8 +180,13 @@ export async function startTestServer(options: Partial<ServerOptions> = {}): Pro
         });
         ws.on('error', reject);
       }),
-    socket: () => openSocket(server.port, { host, cookie, origin }),
+    socket: async () => {
+      const ws = await openSocket(server.port, { host, cookie, origin });
+      sockets.push(ws);
+      return ws;
+    },
     close: async () => {
+      for (const ws of sockets) ws.close();
       await server.close();
       await cleanup();
     },

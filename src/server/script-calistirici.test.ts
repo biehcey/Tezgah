@@ -6,6 +6,7 @@ import { parseRecords } from '../core/calistirma-kaydi';
 import type { ServerEvent } from '../core/script-calistirma';
 import { createFakeClock, type FakeClock } from './test/sahte-saat';
 import { describePg, pgUrl, startTestServer, type TestServer, type TestSocket } from './test/sunucu';
+import { eventually, settle } from './test/yardimcilar';
 
 /** Postgres'in yerleşik tip OID'leri. */
 const INT4 = 23;
@@ -131,17 +132,6 @@ describePg('script çalıştırma: Transaction modu, gerçek Postgres', () => {
     return rows[0]?.query;
   }
 
-  /** Sunucudan gelebilecek olayların ulaşması için kısa bir süre tanır. */
-  const settle = () => new Promise((resolve) => setTimeout(resolve, 200));
-
-  async function eventually(check: () => Promise<boolean>) {
-    for (let i = 0; i < 100; i++) {
-      if (await check()) return;
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    }
-    throw new Error('koşul sağlanmadı');
-  }
-
   it('başarı: ifadeler sırayla çalışır, karar beklenir, commit kalıcı yazar', async () => {
     run(`INSERT INTO ${TABLE} VALUES (1);\nINSERT INTO ${TABLE} VALUES (2), (3);\nSELECT id FROM ${TABLE} ORDER BY id`);
     expect(await ws.waitFor('kararBekleniyor')).toMatchObject({ commitEdilebilir: true });
@@ -229,7 +219,7 @@ describePg('script çalıştırma: Transaction modu, gerçek Postgres', () => {
       for (let k = 0; k < 500; k++) {
         const found = ws.events.slice(from).find((e) => e.type === 'satirlar' || (e.type === 'uyari' && e.tur === 'dahaFazla'));
         if (found) return found;
-        await new Promise((resolve) => setTimeout(resolve, 10));
+        await settle(10);
       }
       throw new Error('dahaFazla yanıtlanmadı');
     }
@@ -393,7 +383,7 @@ CREATE INDEX CONCURRENTLY ${INDEX} ON ${TABLE} (id)`);
       } finally {
         await admin.query('ROLLBACK');
       }
-      await settle();
+      await settle(200);
       expect(await indexValid()).toBeNull();
     });
 
@@ -471,7 +461,7 @@ DISCARD ALL`);
       run(`INSERT INTO ${TABLE} VALUES (1)`);
       await ws.waitFor('kararBekleniyor');
       clock.advance(30 * DK - 1);
-      await settle();
+      await settle(200);
       expect(ws.events.some((e) => e.type === 'bitti')).toBe(false);
 
       clock.advance(1);
@@ -493,7 +483,7 @@ DISCARD ALL`);
       expect(await waitingQuery()).toBe('SELECT 1');
 
       clock.advance(29 * DK);
-      await settle();
+      await settle(200);
       expect(ws.events.some((e) => e.type === 'bitti')).toBe(false);
       ws.send({ type: 'commit' });
       expect(await ws.waitFor('bitti')).toMatchObject({ sonuc: 'commit' });

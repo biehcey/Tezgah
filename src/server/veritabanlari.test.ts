@@ -3,6 +3,7 @@ import pg from 'pg';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createFakeClock, type FakeClock } from './test/sahte-saat';
 import { describePg, pgUrl, startTestServer, type TestServer } from './test/sunucu';
+import { eventually } from './test/yardimcilar';
 
 const IDLE_MS = 10 * 60_000;
 
@@ -102,15 +103,6 @@ describePg('veritabanı listesi ve pool yaşam döngüsü: gerçek Postgres', ()
       [database ?? null],
     );
     return rows[0]!.n;
-  }
-
-  /** Oturum kapanışı sunucuda eşzamansız görünür. */
-  async function eventually(check: () => Promise<boolean>) {
-    for (let i = 0; i < 50; i++) {
-      if (await check()) return;
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    }
-    throw new Error('koşul sağlanmadı');
   }
 
   const list = (id: string) => t.api('GET', `/api/baglantilar/${id}/veritabanlari`);

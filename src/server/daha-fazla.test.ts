@@ -4,6 +4,7 @@ import type { ServerEvent } from '../core/script-calistirma';
 import { startFakePostgres, type FakePostgres } from './test/sahte-postgres';
 import { createFakeClock } from './test/sahte-saat';
 import { startTestServer, type TestServer, type TestSocket } from './test/sunucu';
+import { settle } from './test/yardimcilar';
 
 let t: TestServer;
 let ws: TestSocket;
@@ -55,7 +56,7 @@ async function more(i = 0): Promise<ServerEvent> {
   for (let k = 0; k < 400; k++) {
     const found = ws.events.slice(from).find((e) => e.type === 'satirlar' || (e.type === 'uyari' && e.tur === 'dahaFazla'));
     if (found) return found;
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await settle(10);
   }
   throw new Error('dahaFazla yanıtlanmadı');
 }
@@ -135,7 +136,7 @@ describe('daha fazla satır: sahte Postgres', () => {
     await ws.waitFor('okumaAcik');
     fake.failOn = (sql) => (sql.startsWith('FETCH') ? { code: '22012', message: 'division by zero' } : undefined);
     expect(await more()).toMatchObject({ type: 'uyari', tur: 'dahaFazla', i: 0 });
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await settle(100);
     expect(ws.events.some((e) => e.type === 'bitti')).toBe(false);
     expect(fake.queries).not.toContain('ROLLBACK');
   });

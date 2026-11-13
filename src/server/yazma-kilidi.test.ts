@@ -6,6 +6,7 @@ import { parseRecords } from '../core/calistirma-kaydi';
 import { READ_ONLY_AUTOCOMMIT_MESSAGE } from '../core/yazma-kilidi';
 import { startFakePostgres, type FakePostgres } from './test/sahte-postgres';
 import { describePg, pgUrl, startTestServer, type TestServer, type TestSocket } from './test/sunucu';
+import { addFakeConnection } from './test/yardimcilar';
 
 let t: TestServer;
 let ws: TestSocket;
@@ -37,20 +38,8 @@ describe('prod yazma kilidi: sahte Postgres', () => {
     await fake.close();
   });
 
-  async function createConnection(fields: Record<string, unknown> = {}): Promise<string> {
-    const res = await t.api('POST', '/api/baglantilar', {
-      name: 'Canlı',
-      host: '127.0.0.1',
-      port: fake.port,
-      user: 'postgres',
-      password: 'gizli',
-      sslmode: 'disable',
-      envTag: 'prod',
-      ...fields,
-    });
-    expect(res.status).toBe(201);
-    return res.body.connection.id;
-  }
+  const createConnection = (fields: Record<string, unknown> = {}) =>
+    addFakeConnection(t, fake.port, { name: 'Canlı', envTag: 'prod', ...fields });
   const run = (id: string, script: string, yazmaModu = false) => runOn(id, 'postgres', script, yazmaModu);
 
   async function decideRollback() {

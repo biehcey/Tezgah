@@ -2,41 +2,24 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { startFakePostgres, type FakePostgres } from './test/sahte-postgres';
 import { createFakeClock } from './test/sahte-saat';
 import { startTestServer, type TestServer, type TestSocket } from './test/sunucu';
+import { addFakeConnection } from './test/yardimcilar';
 
 let t: TestServer;
 let fake: FakePostgres;
-let sockets: TestSocket[];
 
 beforeEach(async () => {
   fake = await startFakePostgres({ password: 'gizli' });
   t = await startTestServer({ clock: createFakeClock() });
-  sockets = [];
 });
 afterEach(async () => {
-  for (const s of sockets) s.close();
   await t.close();
   await fake.close();
 });
 
-async function createConnection(): Promise<string> {
-  const res = await t.api('POST', '/api/baglantilar', {
-    name: 'Yerel',
-    host: '127.0.0.1',
-    port: fake.port,
-    user: 'postgres',
-    password: 'gizli',
-    sslmode: 'disable',
-  });
-  expect(res.status).toBe(201);
-  return res.body.connection.id;
-}
+const createConnection = () => addFakeConnection(t, fake.port);
 
 /** Yeni bir sekmenin soketi (her sekme kendi çalıştırma oturumunu tutar). */
-async function tab(): Promise<TestSocket> {
-  const ws = await t.socket();
-  sockets.push(ws);
-  return ws;
-}
+const tab = (): Promise<TestSocket> => t.socket();
 
 /** Karar bekleyen (client tutan) bir çalıştırma açar. */
 async function openSession(connectionId: string): Promise<TestSocket> {
